@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.agents
+.codex
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
+
+runs/
+data/*
+!data/robot/
+!data/robot/**

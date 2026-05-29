@@ -1,0 +1,19 @@
+name: quasi_ml_cpu
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy=1.26.*
+  - scipy=1.11.*
+  - pandas=2.2.*
+  - pyarrow=16.*
+  - pyyaml=6.*
+  - tqdm=4.66.*
+  - scikit-learn=1.3.*
+  - joblib=1.2.*
+  - lightgbm
+  - pip
+  # 如需深度学习：
+  # - pytorch
+  # - cpuonly

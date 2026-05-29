@@ -1,0 +1,16 @@
+name: dante_env
+channels:
+  - defaults
+dependencies:
+  - scipy=1.10.1
+  - python=3.10
+  - pillow
+  - matplotlib=3.10.0
+  - numpy=1.23.5
+  - pytest-sugar
+  - pandas=1.5.3
+  - scikit-learn=1.5.2
+  - jupyter
+  - pytest
+  - tqdm
+prefix: /mnt/ML_projects/conda_envs/dante_env

@@ -1,0 +1,132 @@
+robot:
+  k: 3
+  D: 10
+  kD: 30
+
+kinematics:
+  theta_sign: -1.0
+
+paths:
+  lengths_csv: data/robot/generated/lengths.csv
+  holes_csv: data/robot/generated/holes.csv
+  disks_csv: data/robot/generated/disks.csv
+  material_csv: data/robot/generated/material_rods_only.csv
+  end_effector_csv: data/robot/generated/end_effector.csv
+
+physics:
+  g: 9.81
+
+friction:
+  mu_shaft: 0.15
+  r_shaft_m: 0.004
+  mu_cable: 0.10
+
+tension:
+  bounds_n: [0.0, 2000.0]
+
+cables:
+  end_disk_by_j:
+    "1": 10
+    "2": 10
+    "3": 20
+    "4": 20
+    "5": 30
+    "6": 30
+    "7": 30
+    "8": 30
+    "9": 20
+    "10": 20
+    "11": 10
+    "12": 10
+
+sampling:
+  # 5deg = 0.08726646259971647 rad
+  beta_ranges_rad:
+    beta1: [-0.08726646259971647, 0.08726646259971647]
+    beta2: [-0.08726646259971647, 0.08726646259971647]
+    beta3: [-0.08726646259971647, 0.08726646259971647]
+    beta4: [-0.08726646259971647, 0.08726646259971647]
+    beta5: [-0.08726646259971647, 0.08726646259971647]
+    beta6: [-0.08726646259971647, 0.08726646259971647]
+  xyz_ranges_m:
+    # 基于 ±5deg 前向采样包络（约 q01~q99）收紧，减少不可达目标
+    x_m: [0.93, 1.19]
+    y_m: [-0.50, 0.50]
+    z_m: [-0.48, 0.48]
+  xyz_order: neighbor_randomized
+  xyz_neighbor_buffer: 256
+  rng_seed: 20260210
+
+pso:
+  backend: tensorflow
+  tf_device: /CPU:0
+  tf_dtype: float64
+  tf_xla: false
+  n_particles: 24
+  iters: 40
+  inertia: 0.72
+  c1: 1.49
+  c2: 1.49
+  normalized_objectives: true
+  w_resid: 2.0
+  residual_cost_scale: 0.045
+  residual_cost_delta: 0.8
+  lambda_max: 0.8
+  max_tension_power: 4.0
+  w_tension_mean: 0.2
+  w_tension_soft_cap: 0.5
+  tension_soft_cap_ratio: 0.90
+  early_stop_mean_rnorm2: 1.0e-8
+  rng_seed: 20260210
+
+inverse_pso:
+  backend: tensorflow
+  tf_device: /CPU:0
+  tf_dtype: float64
+  tf_xla: false
+  n_particles: 24
+  iters: 40
+  inertia: 0.72
+  c1: 1.49
+  c2: 1.49
+  normalized_objectives: true
+  w_xyz: 1.0
+  xyz_cost_scale_m: 0.015
+  xyz_cost_delta: 0.6
+  w_beta_l2: 0.05
+  w_continuity: 1.8
+  cont_cost_scale_deg: 6.0
+  cont_cost_delta: 0.4
+  continuity_max_ratio: 0.30
+  continuity_relax_if_err_ratio: 1.2
+  continuity_relax_scale: 0.3
+  use_continuity_chain: true
+  warm_start: true
+  warm_start_particles: 8
+  warm_start_sigma: 0.08
+  n_restarts: 1
+  restart_seed_stride: 2003
+  select_w_xyz: 0.8
+  select_w_delta_theta: 2.2
+  early_stop_xyz_err_m: 0.004
+  early_stop_mean_rnorm2: 1.0e-8
+  canonical_mode: paper_minmax_tension
+  canonical_xyz_tol_m: 0.004
+  canonical_top_k: 3
+  canonical_w_xyz_tie: 0.0
+  canonical_w_delta_theta: 2.2
+  lambda_max: 0.8
+  max_tension_power: 4.0
+  w_tension_mean: 0.2
+  w_tension_soft_cap: 0.5
+  tension_soft_cap_ratio: 0.90
+
+dataset:
+  mode: inverse_joint
+  rms_rnorm_threshold: 6.0e-2
+  xyz_err_threshold_m: 0.020
+  shard_rows: 100
+  out_dir: data/accept_inverse_cont_2k_5deg
+
+parallel:
+  workers: 1

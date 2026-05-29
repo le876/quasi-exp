@@ -1,0 +1,6 @@
+name: quant_env
+channels:
+  - defaults
+dependencies:
+  - python=3.9
+prefix: /home/ubuntu/.conda/envs/quant_env

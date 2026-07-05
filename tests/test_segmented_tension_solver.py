@@ -136,3 +136,34 @@ def test_segmented_solver_is_deterministic_and_reports_section_metrics() -> None
     assert set(res1.section_nfev) == {"third", "second", "first"}
     assert np.isfinite(res1.rms_rnorm)
     assert res1.elapsed_s >= 0.0
+
+
+def test_segmented_solver_anchor_biases_solution_toward_anchor() -> None:
+    cfg = _toy_cfg()
+    model = QuasiStaticModel(cfg, _toy_inputs())
+    theta = np.linspace(-0.04, 0.05, 30, dtype=float)
+    cache = model.build_cache(theta)
+    base_cfg = {
+        "max_nfev": 20,
+        "t_ref_n": 300.0,
+        "w_ref": 0.01,
+        "w_base_norm": 0.001,
+        "feasible_rms_rnorm": 0.2,
+    }
+    anchor = np.array([850.0, 750.0, 650.0, 550.0, 450.0, 350.0, 250.0, 150.0, 900.0, 800.0, 700.0, 600.0])
+
+    unanchored = solve_tensions_segmented(model, cache, base_cfg)
+    anchored = solve_tensions_segmented(
+        model,
+        cache,
+        {
+            **base_cfg,
+            "anchor_tension_n": anchor.tolist(),
+            "w_anchor": 10.0,
+        },
+    )
+
+    assert anchored.T_base_12.shape == (12,)
+    assert np.isfinite(anchored.T_base_12).all()
+    assert anchored.rms_rnorm <= base_cfg["feasible_rms_rnorm"]
+    assert np.linalg.norm(anchored.T_base_12 - anchor) < np.linalg.norm(unanchored.T_base_12 - anchor)

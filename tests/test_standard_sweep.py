@@ -163,6 +163,45 @@ def test_standard_configs_exist_and_use_standard_sweep() -> None:
         assert segmented_cfg["segmented_tension"]["feasible_rms_rnorm"] == 6.0e-2
 
 
+def test_mixed_distal_preferred_configs_use_reduced_joint_ranges() -> None:
+    for rel_path, expected_out_dir in [
+        (
+            "configs/robot_rods_only_mixed_20k_distal_preferred_segmented_canonical.yaml",
+            "data/mixed_beta_20k_distal_preferred_segmented_canonical",
+        ),
+        (
+            "configs/robot_rods_only_mixed_100k_distal_preferred_segmented_canonical.yaml",
+            "data/mixed_beta_100k_distal_preferred_segmented_canonical",
+        ),
+        (
+            "configs/robot_rods_only_mixed_20k_distal_preferred_anchor_v1.yaml",
+            "data/mixed_beta_20k_distal_preferred_anchor_v1",
+        ),
+    ]:
+        cfg = load_config(REPO_ROOT / rel_path)
+        assert cfg["dataset"]["mode"] == "forward"
+        assert cfg["dataset"]["out_dir"] == expected_out_dir
+        assert cfg["sampling"]["strategy"] == "mixed_beta"
+        assert cfg["sampling"]["mixed_beta"]["components"] == {
+            "sobol_full": 0.40,
+            "lhs_full": 0.20,
+            "workspace_balanced": 0.20,
+            "distal_biased": 0.20,
+        }
+        ranges = cfg["sampling"]["beta_ranges_rad"]
+        for key in ["beta1", "beta2", "beta3", "beta4"]:
+            assert np.allclose(ranges[key], [np.deg2rad(-5.0), np.deg2rad(5.0)])
+        for key in ["beta5", "beta6"]:
+            assert np.allclose(ranges[key], [np.deg2rad(-10.0), np.deg2rad(10.0)])
+        assert cfg["tension_labeler"]["method"] == "segmented_canonical"
+        assert cfg["canonical_tension"]["method"] == "segmented_canonical"
+        if "anchor_canonical" in cfg:
+            assert cfg["anchor_canonical"]["component_scope"] == "same_component"
+            assert cfg["anchor_canonical"]["distance_space"] == "beta"
+            assert cfg["anchor_canonical"]["k_neighbors"] == 16
+            assert cfg["anchor_canonical"]["w_anchor"] == 10.0
+
+
 def test_sort_output_tables_by_sample_id(tmp_path: Path) -> None:
     module = _load_generate_dataset_module()
 

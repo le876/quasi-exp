@@ -24,6 +24,7 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 from quasi_exp.io import load_config, load_robot_inputs
 from quasi_exp.model.sampling import (
     beta_to_theta,
+    build_mixed_beta_tasks,
     build_standard_sweep_tasks,
     validate_generation_strategy,
 )
@@ -116,6 +117,15 @@ def _flatten_sample_rows(sample: dict) -> tuple[dict, dict]:
                 mrow[key] = int(value)
             else:
                 mrow[key] = float(value)
+    for key in ["source_component"]:
+        if key in meta:
+            mrow[key] = str(meta[key])
+    for key in ["source_component_idx"]:
+        if key in meta:
+            mrow[key] = int(meta[key])
+    for key in ["beta_group1_norm", "beta_group2_norm", "beta_group3_norm", "distal_preference_score", "radius_m"]:
+        if key in meta:
+            mrow[key] = float(meta[key])
     case_flags = meta.get("case_flag_12", [])
     for j in range(12):
         mrow[f"case_{j+1}"] = int(case_flags[j]) if j < len(case_flags) else 0
@@ -140,6 +150,21 @@ def _sample_xyz_target(rng: np.random.Generator, xyz_ranges_m: dict) -> np.ndarr
         lo, hi = xyz_ranges_m[key]
         target[axis_idx] = rng.uniform(float(lo), float(hi))
     return target
+
+
+def _workspace_xyz_from_beta_rows(beta_rows: np.ndarray, inputs: Any, theta_sign: float) -> np.ndarray:
+    beta_arr = np.asarray(beta_rows, dtype=float).reshape(-1, 6)
+    xyz = np.zeros((beta_arr.shape[0], 3), dtype=float)
+    for i, beta in enumerate(beta_arr):
+        theta_raw = beta_to_theta(beta)
+        p_xyz, _ = forward_kinematics(
+            theta_raw,
+            inputs.lengths_m,
+            inputs.p_end_local_m,
+            theta_sign=float(theta_sign),
+        )
+        xyz[i] = np.asarray(p_xyz, dtype=float).reshape(3)
+    return xyz
 
 
 def _neighbor_order(points: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -247,6 +272,7 @@ def _sample_to_forward_result(
     meta = {**label.meta, "elapsed_s": 0.0}
     if extra_meta:
         meta.update(extra_meta)
+    meta["radius_m"] = float(np.linalg.norm(p_xyz))
     sample = {
         "sample_id": int(sample_id),
         "seed": int(sample_seed),
@@ -286,14 +312,37 @@ def _run_sequential(cfg: dict, num_samples: int, out_dir: Path, max_tried: int |
     use_cont_chain = bool(inverse_pso_cfg.get("use_continuity_chain", False))
     prev_beta: np.ndarray | None = None
     sweep_cfg = cfg.get("sampling", {}).get("standard_sweep", {})
-    max_retries_per_candidate = max(1, int(sweep_cfg.get("max_retries_per_candidate", 5)))
+    mixed_cfg = cfg.get("sampling", {}).get("mixed_beta", {})
+    max_retries_per_candidate = max(
+        1,
+        int(
+            mixed_cfg.get(
+                "max_retries_per_candidate",
+                sweep_cfg.get("max_retries_per_candidate", 5),
+            )
+        ),
+    )
     sweep_tasks: list[dict[str, Any]] = []
     sweep_plan = None
+    mixed_tasks: list[dict[str, Any]] = []
+    mixed_plan = None
     if strategy == "standard_sweep":
         sweep_tasks, sweep_plan = build_standard_sweep_tasks(
             beta_ranges_rad=beta_ranges,
             num_samples=num_samples,
             axis_order=sweep_cfg.get("axis_order"),
+        )
+    if strategy == "mixed_beta":
+        mixed_tasks, mixed_plan = build_mixed_beta_tasks(
+            beta_ranges_rad=beta_ranges,
+            num_samples=num_samples,
+            mixed_cfg=mixed_cfg,
+            rng_seed=int(cfg["sampling"]["rng_seed"]),
+            workspace_xyz_fn=lambda beta_rows: _workspace_xyz_from_beta_rows(
+                beta_rows,
+                inputs,
+                model.theta_sign,
+            ),
         )
 
     rows: list[dict] = []
@@ -308,12 +357,30 @@ def _run_sequential(cfg: dict, num_samples: int, out_dir: Path, max_tried: int |
 
     with tqdm(total=num_samples, desc="accepted") as pbar:
         last_log = time.time()
-        if strategy == "standard_sweep":
-            for task in sweep_tasks:
+        if strategy in {"standard_sweep", "mixed_beta"}:
+            planned_tasks = sweep_tasks if strategy == "standard_sweep" else mixed_tasks
+            for task in planned_tasks:
                 accepted_before = accepted
                 for retry_idx in range(max_retries_per_candidate):
                     tried += 1
                     pso_seed = base_pso_seed + int(task["seed"]) + retry_idx
+                    extra_meta = {"retry_count": retry_idx}
+                    for key in [
+                        "scan_axis",
+                        "scan_axis_idx",
+                        "scan_sign",
+                        "scan_level",
+                        "scan_angle_rad",
+                        "scan_angle_deg",
+                        "source_component",
+                        "source_component_idx",
+                        "beta_group1_norm",
+                        "beta_group2_norm",
+                        "beta_group3_norm",
+                        "distal_preference_score",
+                    ]:
+                        if key in task:
+                            extra_meta[key] = task[key]
                     ok, sample = _sample_to_forward_result(
                         beta=np.asarray(task["beta6_rad"], dtype=float).reshape(6),
                         sample_id=int(task["sample_id"]),
@@ -323,15 +390,7 @@ def _run_sequential(cfg: dict, num_samples: int, out_dir: Path, max_tried: int |
                         inputs=inputs,
                         pso_cfg=pso_cfg,
                         rms_thresh=rms_thresh,
-                        extra_meta={
-                            "scan_axis": task["scan_axis"],
-                            "scan_axis_idx": task["scan_axis_idx"],
-                            "scan_sign": task["scan_sign"],
-                            "scan_level": task["scan_level"],
-                            "scan_angle_rad": task["scan_angle_rad"],
-                            "scan_angle_deg": task["scan_angle_deg"],
-                            "retry_count": retry_idx,
-                        },
+                        extra_meta=extra_meta,
                     )
                     if not ok:
                         continue
@@ -348,8 +407,9 @@ def _run_sequential(cfg: dict, num_samples: int, out_dir: Path, max_tried: int |
                     break
                 if accepted == accepted_before:
                     raise SystemExit(
-                        "standard_sweep candidate failed after retries: "
-                        f"sample_id={task['sample_id']} axis={task['scan_axis']} level={task['scan_level']} "
+                        f"{strategy} candidate failed after retries: "
+                        f"sample_id={task['sample_id']} component={task.get('source_component', task.get('scan_axis', ''))} "
+                        f"level={task.get('scan_level', '')} "
                         f"max_retries_per_candidate={max_retries_per_candidate}"
                     )
                 if time.time() - last_log > 10.0:
@@ -473,6 +533,17 @@ def _run_sequential(cfg: dict, num_samples: int, out_dir: Path, max_tried: int |
                 "total_retries": tried - accepted,
             }
         )
+    if mixed_plan is not None:
+        report.update(
+            {
+                "axis_ranges_deg": {
+                    axis: [float(np.rad2deg(lo)), float(np.rad2deg(hi))]
+                    for axis, (lo, hi) in mixed_plan.axis_ranges_rad.items()
+                },
+                "component_counts": mixed_plan.component_counts,
+                "total_retries": tried - accepted,
+            }
+        )
     (out_dir / "dataset_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -502,16 +573,42 @@ def _run_workers(
     pso_cfg = cfg["pso"]
     base_pso_seed = int(pso_cfg.get("rng_seed", 0))
     sweep_cfg = cfg.get("sampling", {}).get("standard_sweep", {})
-    max_retries_per_candidate = max(1, int(sweep_cfg.get("max_retries_per_candidate", 5)))
+    mixed_cfg = cfg.get("sampling", {}).get("mixed_beta", {})
+    max_retries_per_candidate = max(
+        1,
+        int(
+            mixed_cfg.get(
+                "max_retries_per_candidate",
+                sweep_cfg.get("max_retries_per_candidate", 5),
+            )
+        ),
+    )
     sweep_tasks: list[dict[str, Any]] = []
     sweep_plan = None
-    if strategy == "standard_sweep":
+    mixed_tasks: list[dict[str, Any]] = []
+    mixed_plan = None
+    if strategy in {"standard_sweep", "mixed_beta"}:
         if resume:
-            raise SystemExit("sampling.strategy=standard_sweep does not support --resume")
+            raise SystemExit(f"sampling.strategy={strategy} does not support --resume")
+    if strategy == "standard_sweep":
         sweep_tasks, sweep_plan = build_standard_sweep_tasks(
             beta_ranges_rad=beta_ranges,
             num_samples=num_samples,
             axis_order=sweep_cfg.get("axis_order"),
+        )
+    if strategy == "mixed_beta":
+        inputs_for_workspace = load_robot_inputs(cfg)
+        theta_sign_for_workspace = float(cfg.get("kinematics", {}).get("theta_sign", -1.0))
+        mixed_tasks, mixed_plan = build_mixed_beta_tasks(
+            beta_ranges_rad=beta_ranges,
+            num_samples=num_samples,
+            mixed_cfg=mixed_cfg,
+            rng_seed=int(cfg["sampling"]["rng_seed"]),
+            workspace_xyz_fn=lambda beta_rows: _workspace_xyz_from_beta_rows(
+                beta_rows,
+                inputs_for_workspace,
+                theta_sign_for_workspace,
+            ),
         )
 
     # resume: 统计已有 shards
@@ -527,8 +624,8 @@ def _run_workers(
     mrows: list[dict] = []
     tried = 0
     next_random_sample_id = accepted
-    next_standard_task_idx = 0
-    pending_standard: dict[int, dict[str, Any]] = {}
+    next_planned_task_idx = 0
+    pending_planned: dict[int, dict[str, Any]] = {}
 
     cmd = [sys.executable, "scripts/worker_generate_sample.py", "--config", config_path]
     wprocs = start_workers(cmd, workers)
@@ -568,15 +665,16 @@ def _run_workers(
 
             # 发任务
             while in_flight < max_in_flight:
-                if strategy == "standard_sweep":
-                    if next_standard_task_idx >= len(sweep_tasks):
+                if strategy in {"standard_sweep", "mixed_beta"}:
+                    planned_tasks = sweep_tasks if strategy == "standard_sweep" else mixed_tasks
+                    if next_planned_task_idx >= len(planned_tasks):
                         break
-                    task = dict(sweep_tasks[next_standard_task_idx])
+                    task = dict(planned_tasks[next_planned_task_idx])
                     task["retry_count"] = 0
                     task["pso_seed"] = base_pso_seed + int(task["seed"])
-                    submit_task(wprocs[next_standard_task_idx % workers], task)
-                    pending_standard[int(task["sample_id"])] = task
-                    next_standard_task_idx += 1
+                    submit_task(wprocs[next_planned_task_idx % workers], task)
+                    pending_planned[int(task["sample_id"])] = task
+                    next_planned_task_idx += 1
                     tried += 1
                     in_flight += 1
                     continue
@@ -604,17 +702,18 @@ def _run_workers(
             if res is None:
                 continue
             in_flight -= 1
-            if strategy == "standard_sweep":
+            if strategy in {"standard_sweep", "mixed_beta"}:
                 sample_id = int(res.get("sample_id", -1))
-                task = pending_standard.pop(sample_id, None)
+                task = pending_planned.pop(sample_id, None)
                 if task is None:
-                    raise SystemExit(f"Unknown standard_sweep result sample_id={sample_id}: {res}")
+                    raise SystemExit(f"Unknown {strategy} result sample_id={sample_id}: {res}")
                 if not res.get("ok", False):
                     retry_count = int(task.get("retry_count", 0))
                     if retry_count + 1 >= max_retries_per_candidate:
                         raise SystemExit(
-                            "standard_sweep candidate failed after retries: "
-                            f"sample_id={sample_id} axis={task.get('scan_axis')} level={task.get('scan_level')} "
+                            f"{strategy} candidate failed after retries: "
+                            f"sample_id={sample_id} component={task.get('source_component', task.get('scan_axis'))} "
+                            f"level={task.get('scan_level', '')} "
                             f"max_retries_per_candidate={max_retries_per_candidate} "
                             f"error={res.get('error', 'quality_gate_failed')}"
                         )
@@ -622,7 +721,7 @@ def _run_workers(
                     retry_task["retry_count"] = retry_count + 1
                     retry_task["pso_seed"] = base_pso_seed + int(retry_task["seed"]) + retry_task["retry_count"]
                     submit_task(wprocs[(sample_id + retry_count + 1) % workers], retry_task)
-                    pending_standard[sample_id] = retry_task
+                    pending_planned[sample_id] = retry_task
                     tried += 1
                     in_flight += 1
                     continue
@@ -669,6 +768,17 @@ def _run_workers(
                 "per_axis_rows": sweep_plan.per_axis_rows,
                 "per_axis_positive_levels": sweep_plan.per_axis_positive_levels,
                 "per_axis_step_deg": sweep_plan.per_axis_step_deg,
+                "total_retries": tried - accepted,
+            }
+        )
+    if mixed_plan is not None:
+        report.update(
+            {
+                "axis_ranges_deg": {
+                    axis: [float(np.rad2deg(lo)), float(np.rad2deg(hi))]
+                    for axis, (lo, hi) in mixed_plan.axis_ranges_rad.items()
+                },
+                "component_counts": mixed_plan.component_counts,
                 "total_retries": tried - accepted,
             }
         )

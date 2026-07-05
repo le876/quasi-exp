@@ -130,12 +130,19 @@ def solve_tensions_segmented(
     residual_weight = float(cfg.get("residual_weight", 1.0))
     w_ref = max(0.0, float(cfg.get("w_ref", 0.02)))
     w_base_norm = max(0.0, float(cfg.get("w_base_norm", 0.005)))
+    w_anchor = max(0.0, float(cfg.get("w_anchor", 0.0)))
     feasible_rms = float(cfg.get("feasible_rms_rnorm", 0.06))
     t_ref = float(cfg.get("t_ref_n", 0.4 * t_max))
     t_ref = float(np.clip(t_ref, t_min, t_max))
+    anchor_raw = cfg.get("anchor_tension_n")
+    T_anchor = None
+    if anchor_raw is not None:
+        T_anchor = np.clip(np.asarray(anchor_raw, dtype=float).reshape(12), t_min, t_max)
+        if not np.isfinite(T_anchor).all():
+            raise ValueError("segmented_tension.anchor_tension_n must be finite")
 
     unit = unit_transmission_factors(model, cache)
-    T_base = np.ones(12, dtype=float) * t_ref
+    T_base = T_anchor.copy() if T_anchor is not None else np.ones(12, dtype=float) * t_ref
     T_base = np.clip(T_base, t_min, t_max)
 
     section_rms: dict[str, float] = {}
@@ -156,6 +163,9 @@ def solve_tensions_segmented(
         upper = np.asarray(t_max * factors, dtype=float)
         x0 = np.clip(T_base[cables] * factors, lower, upper)
         x_ref = np.clip(t_ref * factors, lower, upper)
+        x_anchor = None
+        if T_anchor is not None:
+            x_anchor = np.clip(T_anchor[cables] * factors, lower, upper)
         x_denom = np.maximum(np.abs(t_max * factors), 1.0)
         base_denom = max(abs(t_max), 1.0)
 
@@ -174,6 +184,8 @@ def solve_tensions_segmented(
                 parts.append(np.sqrt(w_ref) * ((np.asarray(x, dtype=float) - x_ref) / x_denom))
             if w_base_norm > 0.0:
                 parts.append(np.sqrt(w_base_norm) * (candidate[cables] / base_denom))
+            if w_anchor > 0.0 and x_anchor is not None:
+                parts.append(np.sqrt(w_anchor) * ((np.asarray(x, dtype=float) - x_anchor) / x_denom))
             return np.concatenate(parts)
 
         opt = least_squares(

@@ -249,6 +249,7 @@ def _canonicalize_beta_from_candidates(
     inputs,
     target_xyz_m: np.ndarray,
     candidate_betas: np.ndarray,
+    beta_ranges_rad: dict[str, Any],
     inverse_pso_cfg: dict[str, Any],
     tension_pso_cfg: dict[str, Any],
     rng_seed: int,
@@ -330,6 +331,13 @@ def _canonicalize_beta_from_candidates(
             best_score = total_score
             best_idx = int(idx)
 
+    best_idx = _select_joint_preferred_candidate(
+        candidates=candidates,
+        xyz_errs=xyz_errs,
+        inverse_pso_cfg=inverse_pso_cfg,
+        beta_ranges_rad=beta_ranges_rad,
+        default_index=best_idx,
+    )
     return candidates[best_idx].copy()
 
 
@@ -349,11 +357,124 @@ def _beta_bounds(beta_ranges_rad: dict[str, Any]) -> np.ndarray:
     return bounds
 
 
+def _joint_preference_cfg(inverse_pso_cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = inverse_pso_cfg.get("joint_preference", {})
+    if not isinstance(cfg, dict):
+        return {}
+    if not bool(cfg.get("enabled", False)):
+        return {}
+    mode = str(cfg.get("mode", "prefer_distal")).strip().lower()
+    if mode != "prefer_distal":
+        return {}
+    return cfg
+
+
+def _joint_indices(cfg: dict[str, Any]) -> tuple[list[int], list[int], list[int]]:
+    raw = cfg.get(
+        "beta_indices_by_joint",
+        {"joint1": [0, 1], "joint2": [2, 3], "joint3": [4, 5]},
+    )
+    if not isinstance(raw, dict):
+        raw = {"joint1": [0, 1], "joint2": [2, 3], "joint3": [4, 5]}
+
+    def coerce(key: str, default: list[int]) -> list[int]:
+        try:
+            out = [int(v) for v in raw.get(key, default)]
+        except Exception:  # noqa: BLE001
+            out = list(default)
+        if len(out) != 2 or any(v < 0 or v > 5 for v in out):
+            out = list(default)
+        return out
+
+    return coerce("joint1", [0, 1]), coerce("joint2", [2, 3]), coerce("joint3", [4, 5])
+
+
+def _joint_limit_scale(
+    cfg: dict[str, Any],
+    beta_ranges_rad: dict[str, Any],
+    idx1: list[int],
+    idx2: list[int],
+    idx3: list[int],
+) -> np.ndarray:
+    bounds = _beta_bounds(beta_ranges_rad)
+    scale = np.maximum(np.maximum(np.abs(bounds[:, 0]), np.abs(bounds[:, 1])), 1e-12)
+    raw_limits = cfg.get("joint_limit_deg", {})
+    if isinstance(raw_limits, dict):
+        for key, idx in [("joint1", idx1), ("joint2", idx2), ("joint3", idx3)]:
+            if key not in raw_limits:
+                continue
+            try:
+                vals = [float(v) for v in raw_limits[key]]
+            except Exception:  # noqa: BLE001
+                continue
+            if len(vals) != len(idx):
+                continue
+            vals_rad = np.deg2rad(np.asarray(vals, dtype=float))
+            for local_i, beta_i in enumerate(idx):
+                if np.isfinite(vals_rad[local_i]) and vals_rad[local_i] > 0.0:
+                    scale[beta_i] = float(vals_rad[local_i])
+    return np.maximum(scale, 1e-12)
+
+
+def _joint_preference_score(beta: np.ndarray, inverse_pso_cfg: dict[str, Any], beta_ranges_rad: dict[str, Any]) -> float:
+    cfg = _joint_preference_cfg(inverse_pso_cfg)
+    if not cfg:
+        return 0.0
+    b = np.asarray(beta, dtype=float).reshape(6)
+    idx1, idx2, idx3 = _joint_indices(cfg)
+    scale = _joint_limit_scale(cfg, beta_ranges_rad, idx1, idx2, idx3)
+    g1 = float(np.sqrt(np.mean(np.square(b[idx1] / scale[idx1]))))
+    g2 = float(np.sqrt(np.mean(np.square(b[idx2] / scale[idx2]))))
+    g3 = float(np.sqrt(np.mean(np.square(b[idx3] / scale[idx3]))))
+    proximal_weight = float(cfg.get("proximal_weight", 1.0))
+    middle_weight = float(cfg.get("middle_weight", 1.0))
+    distal_reward = float(cfg.get("distal_reward", 1.25))
+    return float(proximal_weight * g1**2 + middle_weight * g2**2 - distal_reward * g3**2)
+
+
+def _select_joint_preferred_candidate(
+    candidates: np.ndarray,
+    xyz_errs: np.ndarray,
+    inverse_pso_cfg: dict[str, Any],
+    beta_ranges_rad: dict[str, Any],
+    default_index: int,
+) -> int:
+    cfg = _joint_preference_cfg(inverse_pso_cfg)
+    if not cfg:
+        return int(default_index)
+
+    C = np.asarray(candidates, dtype=float).reshape(-1, 6)
+    errs = np.asarray(xyz_errs, dtype=float).reshape(-1)
+    if C.shape[0] == 0 or errs.shape[0] != C.shape[0]:
+        return int(default_index)
+
+    default_index = int(np.clip(default_index, 0, C.shape[0] - 1))
+    xyz_tol_m = float(cfg.get("xyz_tol_m", 0.004))
+    if (not np.isfinite(xyz_tol_m)) or xyz_tol_m < 0.0:
+        xyz_tol_m = 0.004
+    default_err = float(errs[default_index])
+    if not np.isfinite(default_err):
+        default_err = float(np.nanmin(errs)) if np.isfinite(errs).any() else 0.0
+    eligible = np.where(errs <= default_err + xyz_tol_m)[0]
+    if eligible.size == 0:
+        return int(default_index)
+
+    best = int(default_index)
+    best_score = _joint_preference_score(C[best], inverse_pso_cfg, beta_ranges_rad)
+    for idx in eligible.tolist():
+        score = _joint_preference_score(C[int(idx)], inverse_pso_cfg, beta_ranges_rad)
+        if (score < best_score) or (np.isclose(score, best_score) and errs[int(idx)] < errs[best]):
+            best = int(idx)
+            best_score = float(score)
+    return int(best)
+
+
 def _select_best_restart_result(
     results: list[InverseJointPsoResult],
     model,
     inverse_pso_cfg: dict[str, Any],
     tension_pso_cfg: dict[str, Any],
+    beta_ranges_rad: dict[str, Any],
     continuity_ref_beta: np.ndarray | None,
 ) -> InverseJointPsoResult:
     if len(results) == 1:
@@ -383,6 +504,14 @@ def _select_best_restart_result(
         if score < best_score:
             best_score = score
             best_idx = idx
+    pref_idx = _select_joint_preferred_candidate(
+        candidates=np.vstack([r.beta6_rad.reshape(1, 6) for r in results]),
+        xyz_errs=np.asarray([float(r.xyz_err_m) for r in results], dtype=float),
+        inverse_pso_cfg=inverse_pso_cfg,
+        beta_ranges_rad=beta_ranges_rad,
+        default_index=best_idx,
+    )
+    best_idx = int(pref_idx)
     return results[best_idx]
 
 
@@ -551,6 +680,7 @@ def _solve_inverse_joint_pso_single(
             inputs=inputs,
             target_xyz_m=target,
             candidate_betas=cand,
+            beta_ranges_rad=beta_ranges_rad,
             inverse_pso_cfg=inverse_pso_cfg,
             tension_pso_cfg=tension_pso_cfg,
             rng_seed=int(rng_seed),
@@ -597,8 +727,11 @@ def solve_inverse_joint_pso(
         model=model,
         inverse_pso_cfg=inverse_pso_cfg,
         tension_pso_cfg=tension_pso_cfg,
+        beta_ranges_rad=beta_ranges_rad,
         continuity_ref_beta=continuity_ref_beta,
     )
+    if _joint_preference_cfg(inverse_pso_cfg):
+        return selected
     if not bool(inverse_pso_cfg.get("theta1_priority_enable", False)):
         return selected
 

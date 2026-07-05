@@ -468,8 +468,11 @@ def main():
         "--split",
         type=str,
         default="iid",
-        choices=["iid", "radius"],
-        help="Dataset split strategy: iid=random; radius=hold out largest ||p|| as val/test.",
+        choices=["iid", "radius", "beta_block", "angular_sector"],
+        help=(
+            "Dataset split strategy: iid=random; radius=largest ||p|| holdout; "
+            "beta_block=largest reduced angle block; angular_sector=workspace direction sector holdout."
+        ),
     )
     ap.add_argument("--split-file", type=str, default=None, help="NPZ with train_idx/val_idx/test_idx (fixed split for comparable trials).")
     ap.add_argument("--save-split-file", type=str, default=None, help="Where to save the generated split NPZ (only when --split-file not provided).")
@@ -569,6 +572,12 @@ def main():
         default=800,
         help="GPR训练子采样上限（极耗时；建议<=800，并且通常只作为小数据基线）",
     )
+    ap.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=0,
+        help="Optional generic training subsample cap for heavy model comparison jobs (0 disables).",
+    )
 
     args = ap.parse_args()
     _ensure_dir(args.out_dir)
@@ -598,7 +607,7 @@ def main():
     theta = df[theta_cols].to_numpy(dtype=float)
     tension = df[tension_cols].to_numpy(dtype=float)
 
-    from splits import split_iid, split_radius_holdout
+    from splits import split_angular_sector_holdout, split_beta_block_holdout, split_iid, split_radius_holdout
 
     if args.split_file:
         train_idx, val_idx, test_idx = _load_split_npz(args.split_file)
@@ -610,8 +619,21 @@ def main():
                 val_size=args.val_size,
                 test_size=args.test_size,
             )
-        else:
+        elif args.split == "radius":
             train_idx, val_idx, test_idx = split_radius_holdout(
+                X_raw,
+                val_size=args.val_size,
+                test_size=args.test_size,
+            )
+        elif args.split == "beta_block":
+            beta6_like = theta[:, [0, 1, 10, 11, 20, 21]]
+            train_idx, val_idx, test_idx = split_beta_block_holdout(
+                beta6_like,
+                val_size=args.val_size,
+                test_size=args.test_size,
+            )
+        else:
+            train_idx, val_idx, test_idx = split_angular_sector_holdout(
                 X_raw,
                 val_size=args.val_size,
                 test_size=args.test_size,
@@ -774,7 +796,7 @@ def main():
             model = _apply_overrides(model, effective_overrides)
 
         # heavy models: subsample training
-        max_train = None
+        max_train = int(args.max_train_rows) if int(args.max_train_rows) > 0 else None
         if key.startswith("svr"):
             max_train = args.svr_max_train
         if key.startswith("gpr"):

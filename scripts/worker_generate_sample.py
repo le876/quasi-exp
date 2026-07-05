@@ -59,7 +59,21 @@ def main() -> None:
             sample_seed = int(task.get("seed", 0))
             pso_seed = int(task.get("pso_seed", base_pso_seed + sample_seed))
             extra_meta = {}
-            for key in ["scan_axis", "scan_axis_idx", "scan_sign", "scan_level", "scan_angle_rad", "scan_angle_deg", "retry_count"]:
+            for key in [
+                "scan_axis",
+                "scan_axis_idx",
+                "scan_sign",
+                "scan_level",
+                "scan_angle_rad",
+                "scan_angle_deg",
+                "retry_count",
+                "source_component",
+                "source_component_idx",
+                "beta_group1_norm",
+                "beta_group2_norm",
+                "beta_group3_norm",
+                "distal_preference_score",
+            ]:
                 if key in task:
                     extra_meta[key] = task[key]
             if mode == "forward":
@@ -97,6 +111,7 @@ def main() -> None:
                     "meta": {
                         **label.meta,
                         "elapsed_s": float(time.time() - t0),
+                        "radius_m": float(np.linalg.norm(p_xyz)),
                         **extra_meta,
                     },
                 }

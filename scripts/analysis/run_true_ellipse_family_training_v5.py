@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 
 import run_true_ellipse_beta6_training_v4 as v4  # noqa: E402
-from true_ellipse_family_v5_utils import parse_float_csv  # noqa: E402
+from true_ellipse_family_v5_utils import dataframe_to_markdown, parse_float_csv  # noqa: E402
 
 
 DEFAULT_DATASET = REPO_ROOT / "runs" / "true_ellipse_family_expansion_v5" / "05_dataset" / "true_ellipse_family_tubes_v5.parquet"
@@ -940,7 +940,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         "",
         "## Radius status",
         "",
-        status.to_markdown(index=False),
+        dataframe_to_markdown(status),
         "",
         "The primary and stretch claims require a materialized robust trajectory, strict support computed only from the non-centerline training partition, and a 4/5-seed model gate. The two goals are reported independently.",
         "",

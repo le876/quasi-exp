@@ -100,6 +100,19 @@ def test_v5_model_grid_contains_v4_baseline_and_controlled_parameter_variants() 
     assert len({config.hidden_layers for config in configs}) >= 2
 
 
+def test_training_markdown_rendering_does_not_require_pandas_tabulate(monkeypatch) -> None:
+    mod = _load_module()
+
+    def unexpected_optional_dependency(*_args, **_kwargs):
+        raise AssertionError("pandas.to_markdown must not be called")
+
+    monkeypatch.setattr(pd.DataFrame, "to_markdown", unexpected_optional_dependency)
+    rendered = mod.dataframe_to_markdown(pd.DataFrame({"radius_mm": [87.5], "gate_pass": [False]}))
+
+    assert "| radius_mm | gate_pass |" in rendered
+    assert "| 87.5 | False |" in rendered
+
+
 def test_goal_report_requires_true_holdout_generalization_and_strict_training_support() -> None:
     mod = _load_module()
     status = pd.DataFrame(

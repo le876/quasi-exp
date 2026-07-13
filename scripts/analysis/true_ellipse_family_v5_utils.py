@@ -24,6 +24,28 @@ class FamilyParameters:
     phase_z_rad: float
 
 
+def dataframe_to_markdown(table: pd.DataFrame) -> str:
+    """Render a compact Markdown table without pandas' optional tabulate dependency."""
+    if table.empty:
+        return "_empty_"
+
+    def cell(value: Any) -> str:
+        if value is None or (isinstance(value, (float, np.floating)) and np.isnan(value)):
+            return ""
+        return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+    headers = [cell(column) for column in table.columns]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _column in headers) + " |",
+    ]
+    lines.extend(
+        "| " + " | ".join(cell(value) for value in row) + " |"
+        for row in table.itertuples(index=False, name=None)
+    )
+    return "\n".join(lines)
+
+
 def parse_float_csv(value: str | Iterable[float]) -> list[float]:
     if isinstance(value, str):
         return [float(part.strip()) for part in value.split(",") if part.strip()]

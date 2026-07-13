@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 
 from true_ellipse_family_v5_utils import (  # noqa: E402
     connected_radius_max,
+    dataframe_to_markdown,
     parse_float_csv,
     score_family_candidates,
     should_retry_pointwise,
@@ -57,28 +58,6 @@ def _json_default(value: Any) -> Any:
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-
-
-def dataframe_to_markdown(table: pd.DataFrame) -> str:
-    """Render a compact Markdown table without pandas' optional tabulate dependency."""
-    if table.empty:
-        return "_empty_"
-
-    def cell(value: Any) -> str:
-        if value is None or (isinstance(value, (float, np.floating)) and np.isnan(value)):
-            return ""
-        return str(value).replace("|", "\\|").replace("\n", "<br>")
-
-    headers = [cell(column) for column in table.columns]
-    lines = [
-        "| " + " | ".join(headers) + " |",
-        "| " + " | ".join("---" for _column in headers) + " |",
-    ]
-    lines.extend(
-        "| " + " | ".join(cell(value) for value in row) + " |"
-        for row in table.itertuples(index=False, name=None)
-    )
-    return "\n".join(lines)
 
 
 def parse_phases(value: str | Iterable[str]) -> list[str]:

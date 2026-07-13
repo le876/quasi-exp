@@ -991,6 +991,7 @@ def optimize_cyclic_trajectory(
     stages: Sequence[Mapping[str, float | str]] | None = None,
     max_nfev: int = 40,
     compute_conditioning: bool = True,
+    stop_on_centerline_gate: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     frame = _trajectory_targets_frame(targets)
     target_xyz = frame[TARGET_XYZ_COLS].to_numpy(dtype=float)
@@ -1069,6 +1070,8 @@ def optimize_cyclic_trajectory(
         )
         stage_report.update(evaluate_centerline_gates(stage_report))
         stage_outputs.append((name, solution_frame, stage_report, beta.copy()))
+        if bool(stop_on_centerline_gate) and bool(stage_report["centerline_gate_pass"]):
+            break
 
     centerline_pass = [item for item in stage_outputs if item[2].get("centerline_gate_pass", False)]
     tracking_pass = [item for item in stage_outputs if item[2].get("branch_gate_pass", False)]

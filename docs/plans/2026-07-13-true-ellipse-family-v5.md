@@ -119,3 +119,18 @@ V5 的主目标是把当前 V4 的 `81.25 mm strict support-backed` 半径提升
 7. `combined`：support 与模型同时失败。
 
 任何失败都保留失败半径、family、per-angle/per-seed 指标和最后一个通过的 connected radius。
+
+## 6. 执行状态（2026-07-14 已完成）
+
+本计划已按正式默认协议执行完毕，并在项目声明的 Python 3.11 数值栈中淘汰旧缓存后完整复核：
+
+- formal expansion protocol gate：`True`；
+- 87.5 mm pointwise：`5/5` family 通过；100 mm pointwise：`2/5` family 通过；
+- 全部 5 条代表 family 已完成 360 点 branch 验证；87.5/100 mm 均在 branch 阶段失败；
+- `v3_selected_s1008` 的 75/80/82.5/85 mm branch 与完整 360×25 tube 连续通过，trajectory-only 上限为 `85 mm`；
+- 正式单-family 数据集为 36,000 行、4 个半径，formal dataset gate：`True`；
+- formal family coverage gate：`True`，pointwise 实选 5 个唯一 family，branch 选中并完整执行同一组 5 个唯一 family；
+- formal training protocol gate：`True`，固定 85 mm validation、完整 24-config 网格、5 个唯一 seed 与 V4 baseline；formal training audit 的 36 项检查只因 `primary_radius_materialized=false` 阻断，24-config/5-seed 训练未启动；
+- 最终判定：87.5 mm strict=`False`，100 mm strict=`False`，V4 `81.25 mm` strict checkpoint 保持不变。
+
+实现同时加入 expansion/training 正式协议 gate、实际 5-family 覆盖 gate、全阶段输入/策略指纹、训练半径泄漏防护，以及 formal dataset parquet/manifest/robot config/pointwise/branch 证据的 path+SHA-256+360×25 完整性绑定；缩减 smoke/pilot、少于 5 条 family、截断 screen、替换 validation 或不完整训练网格可以用于诊断，但不能形成 strict 阳性。完整数值和产物指纹见 `docs/TrueEllipseFamilyGeneralizationV5实验记录.md` 与 `docs/checkpoints/2026-07-14-true-ellipse-v5.md`。

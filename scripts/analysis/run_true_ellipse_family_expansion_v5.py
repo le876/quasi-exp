@@ -23,10 +23,13 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 from true_ellipse_family_v5_utils import (  # noqa: E402
     connected_radius_max,
     dataframe_to_markdown,
+    file_sha256,
+    formal_family_coverage_report,
     parse_float_csv,
     score_family_candidates,
     should_retry_pointwise,
     sobol_family_perturbations,
+    stable_fingerprint,
 )
 import true_ellipse_atlas_utils as atlas  # noqa: E402
 from quasi_exp.io import load_config, load_robot_inputs  # noqa: E402
@@ -38,7 +41,14 @@ DEFAULT_V2 = REPO_ROOT / "runs" / "true_ellipse_reachability_atlas_v2"
 DEFAULT_V3 = REPO_ROOT / "runs" / "true_ellipse_branch_lifting_v3"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_priority_grid_third_joint_first_v1.yaml"
 ALL_PHASES = ["audit", "search", "pointwise", "branch", "tube", "dataset", "summary"]
-BRANCH_SELECTION_STRATEGY_VERSION = 2
+BRANCH_SELECTION_STRATEGY_VERSION = 3
+BRANCH_REPEATABILITY_STRATEGY_VERSION = 2
+FORMAL_TUBE_OFFSETS_MM = (-5.0, -2.5, 0.0, 2.5, 5.0)
+FORMAL_RADIUS_ANCHORS_MM = (75.0, 80.0, 82.5, 85.0, 87.5, 90.0, 92.5, 95.0, 97.5, 100.0)
+SEARCH_STRATEGY_VERSION = 2
+POINTWISE_STRATEGY_VERSION = 2
+TUBE_STRATEGY_VERSION = 2
+DATASET_STRATEGY_VERSION = 5
 
 
 def _json_default(value: Any) -> Any:
@@ -71,6 +81,119 @@ def parse_phases(value: str | Iterable[str]) -> list[str]:
     if unknown:
         raise ValueError(f"unsupported V5 phases: {unknown}")
     return phases
+
+
+def validate_formal_tube_offsets(value: str | Iterable[float]) -> list[float]:
+    offsets = parse_float_csv(value)
+    expected = np.asarray(FORMAL_TUBE_OFFSETS_MM, dtype=float)
+    actual = np.asarray(sorted(offsets), dtype=float)
+    if len(offsets) != len(expected) or len(set(offsets)) != len(expected) or not np.allclose(
+        actual,
+        expected,
+        atol=1.0e-12,
+        rtol=0.0,
+    ):
+        raise ValueError(f"formal tube offsets are fixed at {list(FORMAL_TUBE_OFFSETS_MM)} mm")
+    return list(FORMAL_TUBE_OFFSETS_MM)
+
+
+def formal_expansion_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
+    def floats(name: str) -> list[float]:
+        try:
+            return parse_float_csv(getattr(args, name))
+        except (AttributeError, TypeError, ValueError):
+            return []
+
+    def integers(name: str) -> list[int]:
+        try:
+            return _parse_int_csv(getattr(args, name))
+        except (AttributeError, TypeError, ValueError):
+            return []
+
+    offsets = floats("tube_offsets_mm")
+    checks = {
+        "primary_radius_87p5": np.isclose(float(getattr(args, "primary_radius_mm", np.nan)), 87.5),
+        "stretch_radius_100": np.isclose(float(getattr(args, "stretch_radius_mm", np.nan)), 100.0),
+        "formal_radius_anchors": bool(
+            len(floats("radius_anchors_mm")) == len(FORMAL_RADIUS_ANCHORS_MM)
+            and np.allclose(floats("radius_anchors_mm"), FORMAL_RADIUS_ANCHORS_MM, atol=1.0e-12, rtol=0.0)
+        ),
+        "sobol_samples_2048": int(getattr(args, "family_sobol_samples", -1)) == 2048,
+        "pointwise_seed_budgets_16_32_64": integers("pointwise_seed_budgets") == [16, 32, 64],
+        "five_pointwise_families": int(getattr(args, "max_pointwise_families", -1)) == 5,
+        "five_branch_families": int(getattr(args, "max_branch_families", -1)) == 5,
+        "coarse_points_72": int(getattr(args, "coarse_points", -1)) == 72,
+        "final_points_360": int(getattr(args, "final_points", -1)) == 360,
+        "max_ik_nfev_200": int(getattr(args, "max_ik_nfev", -1)) == 200,
+        "max_opt_nfev_40": int(getattr(args, "max_opt_nfev", -1)) == 40,
+        "formal_seed_20260713": int(getattr(args, "seed", -1)) == 20260713,
+        "formal_tube_offsets": bool(
+            len(offsets) == len(FORMAL_TUBE_OFFSETS_MM)
+            and len(set(offsets)) == len(FORMAL_TUBE_OFFSETS_MM)
+            and np.allclose(sorted(offsets), FORMAL_TUBE_OFFSETS_MM, atol=1.0e-12, rtol=0.0)
+        ),
+    }
+    normalized_checks = {name: bool(value) for name, value in checks.items()}
+    protocol = {
+        "primary_radius_mm": float(getattr(args, "primary_radius_mm", np.nan)),
+        "stretch_radius_mm": float(getattr(args, "stretch_radius_mm", np.nan)),
+        "radius_anchors_mm": floats("radius_anchors_mm"),
+        "family_sobol_samples": int(getattr(args, "family_sobol_samples", -1)),
+        "pointwise_seed_budgets": integers("pointwise_seed_budgets"),
+        "max_pointwise_families": int(getattr(args, "max_pointwise_families", -1)),
+        "max_branch_families": int(getattr(args, "max_branch_families", -1)),
+        "coarse_points": int(getattr(args, "coarse_points", -1)),
+        "final_points": int(getattr(args, "final_points", -1)),
+        "max_ik_nfev": int(getattr(args, "max_ik_nfev", -1)),
+        "max_opt_nfev": int(getattr(args, "max_opt_nfev", -1)),
+        "seed": int(getattr(args, "seed", -1)),
+        "tube_offsets_mm": offsets,
+    }
+    return {
+        "formal_expansion_protocol_gate_pass": bool(all(normalized_checks.values())),
+        "checks": normalized_checks,
+        "protocol": protocol,
+        "protocol_fingerprint": stable_fingerprint(protocol),
+    }
+
+
+def phase_cache_is_compatible(
+    report: Mapping[str, Any],
+    *,
+    strategy_version: int,
+    task_fingerprint: str,
+) -> bool:
+    return bool(
+        int(report.get("strategy_version", -1)) == int(strategy_version)
+        and str(report.get("task_fingerprint", "")) == str(task_fingerprint)
+    )
+
+
+def _phase_manifest(
+    directory: Path,
+    *,
+    strategy_version: int,
+    task_fingerprint: str,
+    skip_existing: bool,
+) -> bool:
+    path = Path(directory) / "phase_manifest.json"
+    cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    reusable = bool(
+        skip_existing
+        and phase_cache_is_compatible(
+            cached,
+            strategy_version=int(strategy_version),
+            task_fingerprint=str(task_fingerprint),
+        )
+    )
+    write_json(
+        path,
+        {
+            "strategy_version": int(strategy_version),
+            "task_fingerprint": str(task_fingerprint),
+        },
+    )
+    return reusable
 
 
 def summarize_pointwise_candidates(candidates: pd.DataFrame, *, target_count: int) -> dict[str, Any]:
@@ -267,6 +390,7 @@ def run_worker_task(task_path: Path) -> None:
             Path(task["report_path"]),
             {
                 "task_id": str(task["task_id"]),
+                "task_fingerprint": str(task.get("task_fingerprint", "")),
                 "target_count": int(len(task["items"])),
                 "candidate_rows": int(len(candidates)),
                 "output_path": str(output_path),
@@ -292,6 +416,7 @@ def run_worker_task(task_path: Path) -> None:
             Path(task["report_path"]),
             {
                 "task_id": str(task["task_id"]),
+                "task_fingerprint": str(task.get("task_fingerprint", "")),
                 "offset_id": str(task["offset_id"]),
                 "rows": int(len(curve)),
                 "success_ratio": float(curve["tube_success"].mean()),
@@ -404,8 +529,19 @@ def solve_pointwise_targets_subprocess(
         output_path = directory / f"{task_id}.parquet"
         report_path = directory / f"{task_id}_report.json"
         output_paths.append(output_path)
+        task_fingerprint = stable_fingerprint(
+            {
+                "kind": "pointwise_chunk",
+                "strategy_version": POINTWISE_STRATEGY_VERSION,
+                "robot_config": _file_hash_or_missing(robot_config),
+                "max_nfev": int(max_nfev),
+                "items": chunk,
+            }
+        )
         if bool(skip_existing) and output_path.exists() and report_path.exists():
-            continue
+            cached = json.loads(report_path.read_text(encoding="utf-8"))
+            if str(cached.get("task_fingerprint", "")) == task_fingerprint:
+                continue
         write_json(
             task_path,
             {
@@ -414,6 +550,7 @@ def solve_pointwise_targets_subprocess(
                 "robot_config": str(robot_config),
                 "max_nfev": int(max_nfev),
                 "items": chunk,
+                "task_fingerprint": task_fingerprint,
                 "output_path": str(output_path),
                 "report_path": str(report_path),
             },
@@ -491,6 +628,45 @@ def _source_paths(args: argparse.Namespace) -> dict[str, Path]:
     }
 
 
+def _input_hashes(paths: Mapping[str, Path]) -> dict[str, str]:
+    return {name: file_sha256(path) for name, path in sorted(paths.items())}
+
+
+def _file_hash_or_missing(path: str | Path) -> str:
+    source = Path(path)
+    return file_sha256(source) if source.exists() else "missing"
+
+
+def _arg_path(args: argparse.Namespace, name: str, default: Path) -> Path:
+    return Path(getattr(args, name, default))
+
+
+def search_task_fingerprint(args: argparse.Namespace) -> str:
+    paths = _source_paths(args)
+    payload = {
+        "phase": "search",
+        "strategy_version": SEARCH_STRATEGY_VERSION,
+        "protocol": formal_expansion_protocol_report(args)["protocol"],
+        "inputs": _input_hashes(paths),
+    }
+    return stable_fingerprint(payload)
+
+
+def ensure_search_report(args: argparse.Namespace) -> dict[str, Any]:
+    report_path = Path(args.out_dir) / "01_family_search" / "search_report.json"
+    if all(path.exists() for path in _source_paths(args).values()):
+        expected = search_task_fingerprint(args)
+        if report_path.exists():
+            cached = json.loads(report_path.read_text(encoding="utf-8"))
+            if phase_cache_is_compatible(
+                cached,
+                strategy_version=SEARCH_STRATEGY_VERSION,
+                task_fingerprint=expected,
+            ):
+                return cached
+    return phase_search(args)
+
+
 def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "00_audit"
     paths = _source_paths(args)
@@ -530,11 +706,18 @@ def phase_search(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "01_family_search"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "search_report.json"
-    if bool(getattr(args, "skip_existing", False)) and report_path.exists():
-        return json.loads(report_path.read_text(encoding="utf-8"))
     paths = _source_paths(args)
     if not all(path.exists() for path in paths.values()):
         phase_audit(args)
+    task_fingerprint = search_task_fingerprint(args)
+    if bool(getattr(args, "skip_existing", False)) and report_path.exists():
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=SEARCH_STRATEGY_VERSION,
+            task_fingerprint=task_fingerprint,
+        ):
+            return cached
     centerline = pd.read_parquet(paths["v3_centerline"])
     v2_candidates = pd.read_csv(paths["v2_candidates"])
     seeds = family_seeds_from_sources(centerline, v2_candidates, stretch_radius_mm=float(args.stretch_radius_mm))
@@ -569,6 +752,9 @@ def phase_search(args: argparse.Namespace) -> dict[str, Any]:
     stretch_ranking.to_csv(out / "stretch_family_ranking.csv", index=False)
     stretch_detail.to_parquet(out / "stretch_support_by_radius.parquet", index=False, compression="zstd")
     report = {
+        "strategy_version": SEARCH_STRATEGY_VERSION,
+        "task_fingerprint": task_fingerprint,
+        **formal_expansion_protocol_report(args),
         "source_seed_count": int(len(seeds)),
         "candidate_count": int(len(candidates)),
         "primary_anchors_mm": primary_anchors,
@@ -897,15 +1083,86 @@ def branch_conflict_report(
     }
 
 
+def pointwise_task_fingerprint(args: argparse.Namespace, search_report: Mapping[str, Any]) -> str:
+    search_dir = Path(args.out_dir) / "01_family_search"
+    source_paths = _source_paths(args)
+    inputs = {
+        "search_task_fingerprint": str(search_report.get("task_fingerprint", "")),
+        "primary_ranking": file_sha256(search_dir / "primary_family_ranking.csv"),
+        "stretch_ranking": file_sha256(search_dir / "stretch_family_ranking.csv"),
+        "family_seeds": file_sha256(search_dir / "family_seeds.csv"),
+        "reachability_pool": file_sha256(source_paths["reachability_pool"]),
+        "v3_centerline": file_sha256(source_paths["v3_centerline"]),
+        "robot_config": file_sha256(Path(args.robot_config)),
+    }
+    return stable_fingerprint(
+        {
+            "phase": "pointwise",
+            "strategy_version": POINTWISE_STRATEGY_VERSION,
+            "protocol": formal_expansion_protocol_report(args)["protocol"],
+            "inputs": inputs,
+        }
+    )
+
+
+def ensure_pointwise_report(args: argparse.Namespace) -> dict[str, Any]:
+    report_path = Path(args.out_dir) / "02_pointwise" / "pointwise_report.json"
+    pointwise_dir = report_path.parent
+    protocol = formal_expansion_protocol_report(args)
+    summary_path = pointwise_dir / "pointwise_radius_summary.csv"
+    selected_path = pointwise_dir / "selected_families.csv"
+    if (
+        not protocol["formal_expansion_protocol_gate_pass"]
+        and summary_path.exists()
+        and selected_path.exists()
+        and not report_path.exists()
+    ):
+        return {
+            "strategy_version": POINTWISE_STRATEGY_VERSION,
+            "task_fingerprint": stable_fingerprint(
+                {
+                    "phase": "pointwise_diagnostic_fixture",
+                    "summary": file_sha256(summary_path),
+                    "selected": file_sha256(selected_path),
+                }
+            ),
+            **protocol,
+            "diagnostic_fixture": True,
+        }
+    search_report = ensure_search_report(args)
+    expected = pointwise_task_fingerprint(args, search_report)
+    if report_path.exists():
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=POINTWISE_STRATEGY_VERSION,
+            task_fingerprint=expected,
+        ):
+            return cached
+    return phase_pointwise(args)
+
+
 def phase_pointwise(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "02_pointwise"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "pointwise_report.json"
-    if bool(args.skip_existing) and report_path.exists():
-        return json.loads(report_path.read_text(encoding="utf-8"))
     search_dir = Path(args.out_dir) / "01_family_search"
-    if not (search_dir / "search_report.json").exists():
-        phase_search(args)
+    search_report = ensure_search_report(args)
+    task_fingerprint = pointwise_task_fingerprint(args, search_report)
+    if bool(args.skip_existing) and report_path.exists():
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=POINTWISE_STRATEGY_VERSION,
+            task_fingerprint=task_fingerprint,
+        ):
+            return cached
+    allow_partial_cache = _phase_manifest(
+        out,
+        strategy_version=POINTWISE_STRATEGY_VERSION,
+        task_fingerprint=task_fingerprint,
+        skip_existing=bool(args.skip_existing),
+    )
     primary_ranking = pd.read_csv(search_dir / "primary_family_ranking.csv")
     stretch_ranking = pd.read_csv(search_dir / "stretch_family_ranking.csv")
     seeds = pd.read_csv(search_dir / "family_seeds.csv")
@@ -963,7 +1220,7 @@ def phase_pointwise(args: argparse.Namespace) -> dict[str, Any]:
                     max_nfev=int(args.max_ik_nfev),
                     workers=int(args.workers),
                     work_dir=radius_dir / f"workers_budget_{int(budget)}",
-                    skip_existing=bool(args.skip_existing),
+                    skip_existing=allow_partial_cache,
                     parent_path=parent_path,
                 )
                 candidates["requested_seed_budget"] = int(budget)
@@ -1003,6 +1260,9 @@ def phase_pointwise(args: argparse.Namespace) -> dict[str, Any]:
     primary_families = families_at(float(args.primary_radius_mm))
     stretch_families = families_at(float(args.stretch_radius_mm))
     report = {
+        "strategy_version": POINTWISE_STRATEGY_VERSION,
+        "task_fingerprint": task_fingerprint,
+        **formal_expansion_protocol_report(args),
         "selected_family_count": int(len(selected)),
         "primary_radius_mm": float(args.primary_radius_mm),
         "stretch_radius_mm": float(args.stretch_radius_mm),
@@ -1040,28 +1300,118 @@ def _save_path_with_report(path: pd.DataFrame, report: Mapping[str, Any], *, dir
     write_json(directory / f"{name}.json", dict(report))
 
 
+def branch_task_fingerprint(args: argparse.Namespace, pointwise_report: Mapping[str, Any]) -> str:
+    root = Path(args.out_dir)
+    pointwise_dir = root / "02_pointwise"
+    search_dir = root / "01_family_search"
+    return stable_fingerprint(
+        {
+            "phase": "branch",
+            "strategy_version": BRANCH_SELECTION_STRATEGY_VERSION,
+            "repeatability_strategy_version": BRANCH_REPEATABILITY_STRATEGY_VERSION,
+            "protocol": formal_expansion_protocol_report(args)["protocol"],
+            "pointwise_task_fingerprint": str(pointwise_report.get("task_fingerprint", "")),
+            "inputs": {
+                "pointwise_summary": _file_hash_or_missing(pointwise_dir / "pointwise_radius_summary.csv"),
+                "selected_families": _file_hash_or_missing(pointwise_dir / "selected_families.csv"),
+                "primary_ranking": _file_hash_or_missing(search_dir / "primary_family_ranking.csv"),
+                "stretch_ranking": _file_hash_or_missing(search_dir / "stretch_family_ranking.csv"),
+                "robot_config": _file_hash_or_missing(_arg_path(args, "robot_config", DEFAULT_CONFIG)),
+            },
+        }
+    )
+
+
+def ensure_branch_report(args: argparse.Namespace) -> dict[str, Any]:
+    report_path = Path(args.out_dir) / "03_branch" / "branch_report.json"
+    summary_path = report_path.parent / "branch_radius_summary.csv"
+    protocol = formal_expansion_protocol_report(args)
+    if (
+        not protocol["formal_expansion_protocol_gate_pass"]
+        and summary_path.exists()
+        and not report_path.exists()
+    ):
+        return {
+            "strategy_version": BRANCH_SELECTION_STRATEGY_VERSION,
+            "task_fingerprint": stable_fingerprint(
+                {"phase": "branch_diagnostic_fixture", "summary": file_sha256(summary_path)}
+            ),
+            **protocol,
+            "diagnostic_fixture": True,
+        }
+    pointwise_report = ensure_pointwise_report(args)
+    expected = branch_task_fingerprint(args, pointwise_report)
+    if report_path.exists():
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=BRANCH_SELECTION_STRATEGY_VERSION,
+            task_fingerprint=expected,
+        ):
+            return cached
+    return phase_branch(args)
+
+
+def branch_radius_task_fingerprint(
+    *,
+    phase_task_fingerprint: str,
+    candidate_id: str,
+    radius_mm: float,
+    pointwise_path: Path,
+    parent_centerline_fingerprint: str,
+) -> str:
+    return stable_fingerprint(
+        {
+            "phase_task_fingerprint": str(phase_task_fingerprint),
+            "candidate_id": str(candidate_id),
+            "radius_mm": float(radius_mm),
+            "pointwise_path": file_sha256(pointwise_path),
+            "parent_centerline_fingerprint": str(parent_centerline_fingerprint),
+        }
+    )
+
+
+def branch_radius_cache_is_compatible(
+    report: Mapping[str, Any],
+    *,
+    task_fingerprint: str | None = None,
+) -> bool:
+    selected_path = str(report.get("selected_path", ""))
+    repeatability_compatible = bool(
+        selected_path in {"forward", "reverse"}
+        or int(report.get("repeatability_strategy_version", 0)) == BRANCH_REPEATABILITY_STRATEGY_VERSION
+    )
+    fingerprint_compatible = bool(
+        task_fingerprint is None or str(report.get("task_fingerprint", "")) == str(task_fingerprint)
+    )
+    return bool(repeatability_compatible and fingerprint_compatible)
+
+
 def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "03_branch"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "branch_report.json"
+    pointwise_report = ensure_pointwise_report(args)
+    task_fingerprint = branch_task_fingerprint(args, pointwise_report)
     if bool(args.skip_existing) and report_path.exists():
         cached_top = json.loads(report_path.read_text(encoding="utf-8"))
-        requested_anchors = [
-            radius
-            for radius in parse_float_csv(args.radius_anchors_mm)
-            if radius <= float(args.stretch_radius_mm) + 1.0e-9
-        ]
-        if (
-            cached_top.get("radius_anchors_mm") == requested_anchors
-            and cached_top.get("selection_strategy_version") == BRANCH_SELECTION_STRATEGY_VERSION
-            and cached_top.get("max_branch_families") == int(args.max_branch_families)
+        if phase_cache_is_compatible(
+            cached_top,
+            strategy_version=BRANCH_SELECTION_STRATEGY_VERSION,
+            task_fingerprint=task_fingerprint,
         ):
             return cached_top
+    allow_partial_cache = _phase_manifest(
+        out,
+        strategy_version=BRANCH_SELECTION_STRATEGY_VERSION,
+        task_fingerprint=task_fingerprint,
+        skip_existing=bool(args.skip_existing),
+    )
     pointwise_dir = Path(args.out_dir) / "02_pointwise"
     summary_path = pointwise_dir / "pointwise_radius_summary.csv"
     selected_path = pointwise_dir / "selected_families.csv"
     if not summary_path.exists() or not selected_path.exists():
-        phase_pointwise(args)
+        raise FileNotFoundError("pointwise phase did not materialize the branch inputs")
     pointwise_summary = pd.read_csv(summary_path)
     selected = pd.read_csv(selected_path)
     search_dir = Path(args.out_dir) / "01_family_search"
@@ -1084,6 +1434,9 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
     pd.DataFrame({"candidate_id": selected_ids}).to_csv(out / "selected_branch_families.csv", index=False)
     if not selected_ids:
         report = {
+            "strategy_version": BRANCH_SELECTION_STRATEGY_VERSION,
+            "task_fingerprint": task_fingerprint,
+            **formal_expansion_protocol_report(args),
             "selected_family_count": 0,
             "primary_branch_gate_pass": False,
             "stretch_branch_gate_pass": False,
@@ -1111,6 +1464,7 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
         family = family_from_mapping(family_match.iloc[0])
         connected = True
         parent_centerline: pd.DataFrame | None = None
+        parent_centerline_fingerprint = "none"
         candidate_passing_radii: list[float] = []
         for radius_mm in anchors:
             radius_slug = _radius_slug(radius_mm)
@@ -1139,22 +1493,33 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                 connected = False
                 continue
 
-            cached_report_path = radius_dir / "branch_radius_report.json"
-            cached_centerline_path = radius_dir / "selected_centerline_360.parquet"
-            if bool(args.skip_existing) and cached_report_path.exists():
-                cached = json.loads(cached_report_path.read_text(encoding="utf-8"))
-                passed = bool(cached.get("branch_robustness_gate_pass", False) and cached_centerline_path.exists())
-                summary_rows.append({**cached, "executed": True, "reason": "cached_pass" if passed else "cached_failed"})
-                connected = passed
-                if passed:
-                    parent_centerline = pd.read_parquet(cached_centerline_path)
-                    centerline_paths[(candidate_id, float(radius_mm))] = str(cached_centerline_path)
-                    candidate_passing_radii.append(float(radius_mm))
-                continue
-
             pointwise_path = pointwise_dir / candidate_id / radius_slug / "best_pointwise_path.parquet"
             if not pointwise_path.exists():
                 raise FileNotFoundError(f"missing pointwise path for {candidate_id}@{radius_mm:g}: {pointwise_path}")
+            radius_task_fingerprint = branch_radius_task_fingerprint(
+                phase_task_fingerprint=task_fingerprint,
+                candidate_id=candidate_id,
+                radius_mm=float(radius_mm),
+                pointwise_path=pointwise_path,
+                parent_centerline_fingerprint=parent_centerline_fingerprint,
+            )
+            cached_report_path = radius_dir / "branch_radius_report.json"
+            cached_centerline_path = radius_dir / "selected_centerline_360.parquet"
+            if allow_partial_cache and cached_report_path.exists():
+                cached = json.loads(cached_report_path.read_text(encoding="utf-8"))
+                if branch_radius_cache_is_compatible(cached, task_fingerprint=radius_task_fingerprint):
+                    passed = bool(cached.get("branch_robustness_gate_pass", False) and cached_centerline_path.exists())
+                    summary_rows.append(
+                        {**cached, "executed": True, "reason": "cached_pass" if passed else "cached_failed"}
+                    )
+                    connected = passed
+                    if passed:
+                        parent_centerline = pd.read_parquet(cached_centerline_path)
+                        parent_centerline_fingerprint = file_sha256(cached_centerline_path)
+                        centerline_paths[(candidate_id, float(radius_mm))] = str(cached_centerline_path)
+                        candidate_passing_radii.append(float(radius_mm))
+                    continue
+
             path72 = pd.read_parquet(pointwise_path).sort_values("angle_idx").reset_index(drop=True)
             if parent_centerline is None:
                 targets72 = generate_family_targets(family, radius_mm=float(radius_mm), n_points=int(args.coarse_points))
@@ -1257,6 +1622,7 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
 
             selected_direction = min(continuation_reports, key=lambda name: _centerline_report_key(continuation_reports[name]))
             optimized_candidates: list[tuple[str, pd.DataFrame, dict[str, Any]]] = []
+            optimization_initials: dict[str, np.ndarray] = {}
             continuation_already_passes = any(
                 bool(report.get("centerline_gate_pass", False)) for report in continuation_reports.values()
             )
@@ -1269,9 +1635,11 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                         ("radial_parent", parent_centerline.sort_values("angle_idx")[atlas.BETA_COLS].to_numpy(dtype=float))
                     )
                 for source_name, initial_beta in optimization_inputs:
+                    optimized_name = f"optimized_{source_name}"
+                    optimization_initials[optimized_name] = np.asarray(initial_beta, dtype=float).copy()
                     optimized, raw = atlas.optimize_cyclic_trajectory(
                         targets=targets360,
-                        initial_beta=initial_beta,
+                        initial_beta=optimization_initials[optimized_name].copy(),
                         bounds=bounds,
                         lengths_m=lengths_m,
                         p_end_local_m=p_end_local_m,
@@ -1281,11 +1649,11 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                     )
                     augmented = _augmented_centerline_report(
                         raw,
-                        source=f"optimized_{source_name}",
+                        source=optimized_name,
                         resolution_points=int(len(optimized)),
                     )
-                    optimized_candidates.append((source_name, optimized, augmented))
-                    _save_path_with_report(optimized, augmented, directory=radius_dir, name=f"optimized_{source_name}_360")
+                    optimized_candidates.append((optimized_name, optimized, augmented))
+                    _save_path_with_report(optimized, augmented, directory=radius_dir, name=f"{optimized_name}_360")
 
             path_candidates: list[tuple[str, pd.DataFrame, dict[str, Any]]] = [
                 (name, continuation_paths[name], continuation_reports[name]) for name in ("forward", "reverse")
@@ -1296,9 +1664,10 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                 key=lambda item: _centerline_report_key(item[2]),
             )
             if bool(forward_reverse.get("reproducible", False)):
-                if selected_direction in repeat_paths:
-                    repeat_path = repeat_paths[selected_direction]
-                else:
+                if selected_name in continuation_paths and selected_name in repeat_paths:
+                    repeat_path = repeat_paths[selected_name]
+                    repeat_algorithm = f"continuation_{selected_name}"
+                elif selected_name in continuation_paths:
                     repeat_path, _repeat_raw = atlas.continuation_lift(
                         targets=targets360,
                         start_beta=start_beta,
@@ -1306,17 +1675,44 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                         lengths_m=lengths_m,
                         p_end_local_m=p_end_local_m,
                         theta_sign=theta_sign,
-                        direction=selected_direction,
+                        direction=selected_name,
                         method="warm",
                         lambda_center=1.0e-3,
                         lambda_limit=0.0,
                         max_nfev=int(args.max_ik_nfev),
                     )
+                    repeat_algorithm = f"continuation_{selected_name}"
+                elif selected_name in optimization_initials:
+                    repeat_path, repeat_raw = atlas.optimize_cyclic_trajectory(
+                        targets=targets360,
+                        initial_beta=optimization_initials[selected_name].copy(),
+                        bounds=bounds,
+                        lengths_m=lengths_m,
+                        p_end_local_m=p_end_local_m,
+                        theta_sign=theta_sign,
+                        max_nfev=int(args.max_opt_nfev),
+                        stop_on_centerline_gate=True,
+                    )
+                    repeat_report = _augmented_centerline_report(
+                        repeat_raw,
+                        source=f"{selected_name}_repeat",
+                        resolution_points=int(len(repeat_path)),
+                    )
+                    _save_path_with_report(
+                        repeat_path,
+                        repeat_report,
+                        directory=radius_dir,
+                        name=f"{selected_name}_repeat_360",
+                    )
+                    repeat_algorithm = selected_name
+                else:
+                    raise AssertionError(f"selected branch path has no repeatable algorithm: {selected_name}")
                 repeatability = atlas.branch_reproducibility_report(
-                    continuation_paths[selected_direction],
+                    selected_centerline,
                     repeat_path,
                     threshold_deg=1.0e-6,
                 )
+                repeatability["algorithm"] = repeat_algorithm
             else:
                 repeatability = {
                     "rows": 0,
@@ -1334,8 +1730,10 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
                     "candidate_id": candidate_id,
                     "family_id": family.family_id,
                     "radius_mm": float(radius_mm),
+                    "task_fingerprint": radius_task_fingerprint,
                     "selected_path": selected_name,
                     "selected_continuation_direction": selected_direction,
+                    "repeatability_strategy_version": BRANCH_REPEATABILITY_STRATEGY_VERSION,
                     "start_source": start_source,
                     "forward_reverse": forward_reverse,
                     "deterministic_repeatability": repeatability,
@@ -1345,6 +1743,7 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
             if passed:
                 selected_centerline.to_parquet(cached_centerline_path, index=False, compression="zstd")
                 parent_centerline = selected_centerline
+                parent_centerline_fingerprint = file_sha256(cached_centerline_path)
                 centerline_paths[(candidate_id, float(radius_mm))] = str(cached_centerline_path)
                 candidate_passing_radii.append(float(radius_mm))
             write_json(cached_report_path, robust_report)
@@ -1362,11 +1761,17 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
             primary_radius_mm=float(args.primary_radius_mm),
             stretch_radius_mm=float(args.stretch_radius_mm),
         ):
-            dual_goal_family = candidate_id
-            break
+            if dual_goal_family is None:
+                dual_goal_family = candidate_id
 
     summary = pd.DataFrame(summary_rows)
     summary.to_csv(out / "branch_radius_summary.csv", index=False)
+    all_selected_families_executed = executed_candidate_ids == selected_ids
+    if not all_selected_families_executed:
+        raise AssertionError(
+            f"formal branch validation did not execute every selected family: "
+            f"selected={selected_ids}, executed={executed_candidate_ids}"
+        )
 
     def passing_at(radius_mm: float) -> list[str]:
         if summary.empty:
@@ -1382,11 +1787,15 @@ def phase_branch(args: argparse.Namespace) -> dict[str, Any]:
     primary_families = passing_at(float(args.primary_radius_mm))
     stretch_families = passing_at(float(args.stretch_radius_mm))
     report = {
+        "strategy_version": BRANCH_SELECTION_STRATEGY_VERSION,
+        "task_fingerprint": task_fingerprint,
+        **formal_expansion_protocol_report(args),
         "selection_strategy_version": BRANCH_SELECTION_STRATEGY_VERSION,
         "max_branch_families": int(args.max_branch_families),
         "selected_family_count": int(len(selected_ids)),
         "selected_families": selected_ids,
         "executed_families": executed_candidate_ids,
+        "all_selected_families_executed": all_selected_families_executed,
         "dual_goal_family": dual_goal_family,
         "primary_radius_mm": float(args.primary_radius_mm),
         "stretch_radius_mm": float(args.stretch_radius_mm),
@@ -1408,19 +1817,127 @@ def _offset_file_id(pair: tuple[float, float]) -> str:
     return f"n1_{pair[0]:g}_n2_{pair[1]:g}".replace("-", "m").replace(".", "p")
 
 
+def tube_task_fingerprint(args: argparse.Namespace, branch_report: Mapping[str, Any]) -> str:
+    branch_dir = Path(args.out_dir) / "03_branch"
+    summary_path = branch_dir / "branch_radius_summary.csv"
+    centerlines: dict[str, str] = {}
+    if summary_path.exists():
+        summary = pd.read_csv(summary_path)
+        if "branch_robustness_gate_pass" in summary:
+            passing = summary[summary["branch_robustness_gate_pass"].fillna(False).astype(bool)]
+            for _idx, row in passing.iterrows():
+                candidate_id = str(row["candidate_id"])
+                radius_mm = float(row["radius_mm"])
+                path = branch_dir / candidate_id / _radius_slug(radius_mm) / "selected_centerline_360.parquet"
+                centerlines[f"{candidate_id}@{radius_mm:g}"] = _file_hash_or_missing(path)
+    return stable_fingerprint(
+        {
+            "phase": "tube",
+            "strategy_version": TUBE_STRATEGY_VERSION,
+            "protocol": formal_expansion_protocol_report(args)["protocol"],
+            "branch_task_fingerprint": str(branch_report.get("task_fingerprint", "")),
+            "inputs": {
+                "branch_summary": _file_hash_or_missing(summary_path),
+                "centerlines": centerlines,
+                "robot_config": _file_hash_or_missing(_arg_path(args, "robot_config", DEFAULT_CONFIG)),
+            },
+        }
+    )
+
+
+def ensure_tube_report(args: argparse.Namespace) -> dict[str, Any]:
+    report_path = Path(args.out_dir) / "04_tube" / "tube_report.json"
+    summary_path = report_path.parent / "tube_radius_summary.csv"
+    protocol = formal_expansion_protocol_report(args)
+    if (
+        not protocol["formal_expansion_protocol_gate_pass"]
+        and summary_path.exists()
+        and not report_path.exists()
+    ):
+        return {
+            "strategy_version": TUBE_STRATEGY_VERSION,
+            "task_fingerprint": stable_fingerprint(
+                {"phase": "tube_diagnostic_fixture", "summary": file_sha256(summary_path)}
+            ),
+            **protocol,
+            "diagnostic_fixture": True,
+        }
+    branch_report = ensure_branch_report(args)
+    expected = tube_task_fingerprint(args, branch_report)
+    if report_path.exists():
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=TUBE_STRATEGY_VERSION,
+            task_fingerprint=expected,
+        ):
+            return cached
+    return phase_tube(args)
+
+
+def tube_radius_task_fingerprint(
+    *,
+    phase_task_fingerprint: str,
+    candidate_id: str,
+    radius_mm: float,
+    centerline_path: Path,
+) -> str:
+    return stable_fingerprint(
+        {
+            "phase_task_fingerprint": str(phase_task_fingerprint),
+            "candidate_id": str(candidate_id),
+            "radius_mm": float(radius_mm),
+            "centerline": file_sha256(centerline_path),
+        }
+    )
+
+
+def tube_curve_task_fingerprint(
+    *,
+    radius_task_fingerprint: str,
+    pair: tuple[float, float],
+    parent_pair: tuple[float, float],
+    parent_curve_path: Path,
+    max_nfev: int,
+) -> str:
+    return stable_fingerprint(
+        {
+            "radius_task_fingerprint": str(radius_task_fingerprint),
+            "pair": [float(pair[0]), float(pair[1])],
+            "parent_pair": [float(parent_pair[0]), float(parent_pair[1])],
+            "parent_curve": file_sha256(parent_curve_path),
+            "max_nfev": int(max_nfev),
+        }
+    )
+
+
 def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "04_tube"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "tube_report.json"
+    offsets = validate_formal_tube_offsets(args.tube_offsets_mm)
+    branch_report = ensure_branch_report(args)
+    task_fingerprint = tube_task_fingerprint(args, branch_report)
     if bool(args.skip_existing) and report_path.exists():
-        return json.loads(report_path.read_text(encoding="utf-8"))
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        if phase_cache_is_compatible(
+            cached,
+            strategy_version=TUBE_STRATEGY_VERSION,
+            task_fingerprint=task_fingerprint,
+        ):
+            return cached
+    allow_partial_cache = _phase_manifest(
+        out,
+        strategy_version=TUBE_STRATEGY_VERSION,
+        task_fingerprint=task_fingerprint,
+        skip_existing=bool(args.skip_existing),
+    )
     branch_dir = Path(args.out_dir) / "03_branch"
     branch_summary_path = branch_dir / "branch_radius_summary.csv"
     if not branch_summary_path.exists():
-        phase_branch(args)
+        raise FileNotFoundError("branch phase did not materialize the tube inputs")
     branch_summary = pd.read_csv(branch_summary_path)
     lengths_m, p_end_local_m, theta_sign = _load_robot(args)
-    offsets = parse_float_csv(args.tube_offsets_mm)
     offset_pairs = [(float(left), float(right)) for left in offsets for right in offsets]
     offset_pairs.sort(key=lambda pair: (math.hypot(pair[0], pair[1]), math.atan2(pair[1], pair[0])))
     center_pair = (0.0, 0.0)
@@ -1453,17 +1970,24 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                 continue
             quality_path = radius_dir / "tube_quality_report.json"
             tube_small_path = radius_dir / "tube_small.parquet"
-            if bool(args.skip_existing) and quality_path.exists():
-                cached = json.loads(quality_path.read_text(encoding="utf-8"))
-                passed = bool(cached.get("tube_gate_pass", False) and tube_small_path.exists())
-                summary_rows.append({**cached, "executed": True, "reason": "cached_pass" if passed else "cached_failed"})
-                connected = passed
-                if passed:
-                    tube_paths[(candidate_id, radius_mm)] = str(tube_small_path)
-                continue
             centerline_path = branch_dir / candidate_id / _radius_slug(radius_mm) / "selected_centerline_360.parquet"
             if not centerline_path.exists():
                 raise FileNotFoundError(f"missing robust centerline for tube: {centerline_path}")
+            radius_task_fingerprint = tube_radius_task_fingerprint(
+                phase_task_fingerprint=task_fingerprint,
+                candidate_id=candidate_id,
+                radius_mm=radius_mm,
+                centerline_path=centerline_path,
+            )
+            if allow_partial_cache and quality_path.exists():
+                cached = json.loads(quality_path.read_text(encoding="utf-8"))
+                if str(cached.get("task_fingerprint", "")) == radius_task_fingerprint:
+                    passed = bool(cached.get("tube_gate_pass", False) and tube_small_path.exists())
+                    summary_rows.append({**cached, "executed": True, "reason": "cached_pass" if passed else "cached_failed"})
+                    connected = passed
+                    if passed:
+                        tube_paths[(candidate_id, radius_mm)] = str(tube_small_path)
+                    continue
             centerline = pd.read_parquet(centerline_path).sort_values("angle_idx").reset_index(drop=True)
             tube_targets = atlas.make_normal_tube_targets(centerline, offsets_mm=offsets)
             tube_targets.to_parquet(radius_dir / "tube_targets.parquet", index=False, compression="zstd")
@@ -1537,10 +2061,20 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                         np.isclose(tube_targets["delta_n1_mm"].to_numpy(dtype=float), pair[0])
                         & np.isclose(tube_targets["delta_n2_mm"].to_numpy(dtype=float), pair[1])
                     ].sort_values("angle_idx").reset_index(drop=True)
-                    if bool(args.skip_existing) and curve_path.exists():
-                        solved_curves[pair] = pd.read_parquet(curve_path)
-                        solved_curve_paths[pair] = curve_path
-                        continue
+                    curve_report_path = curve_path.with_suffix(".json")
+                    curve_task_fingerprint = tube_curve_task_fingerprint(
+                        radius_task_fingerprint=radius_task_fingerprint,
+                        pair=pair,
+                        parent_pair=parent_pair,
+                        parent_curve_path=solved_curve_paths[parent_pair],
+                        max_nfev=int(args.max_ik_nfev),
+                    )
+                    if allow_partial_cache and curve_path.exists() and curve_report_path.exists():
+                        cached_curve = json.loads(curve_report_path.read_text(encoding="utf-8"))
+                        if str(cached_curve.get("task_fingerprint", "")) == curve_task_fingerprint:
+                            solved_curves[pair] = pd.read_parquet(curve_path)
+                            solved_curve_paths[pair] = curve_path
+                            continue
                     jobs.append((pair, parent_pair, curve_targets, curve_path))
 
                 def solve_job(job: tuple[tuple[float, float], tuple[float, float], pd.DataFrame, Path]) -> tuple[tuple[float, float], pd.DataFrame, Path]:
@@ -1563,6 +2097,13 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                         task_paths: list[Path] = []
                         for pair, parent_pair, curve_targets, curve_path in jobs:
                             file_id = _offset_file_id(pair)
+                            curve_task_fingerprint = tube_curve_task_fingerprint(
+                                radius_task_fingerprint=radius_task_fingerprint,
+                                pair=pair,
+                                parent_pair=parent_pair,
+                                parent_curve_path=solved_curve_paths[parent_pair],
+                                max_nfev=int(args.max_ik_nfev),
+                            )
                             targets_path = curve_targets_dir / f"{file_id}.parquet"
                             curve_targets.to_parquet(targets_path, index=False, compression="zstd")
                             task_path = worker_tasks_dir / f"{file_id}.json"
@@ -1579,6 +2120,7 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                                     "max_nfev": int(args.max_ik_nfev),
                                     "parent_offset_id": f"n1_{parent_pair[0]:g}_n2_{parent_pair[1]:g}",
                                     "offset_id": f"n1_{pair[0]:g}_n2_{pair[1]:g}",
+                                    "task_fingerprint": curve_task_fingerprint,
                                     "output_path": str(curve_path),
                                     "report_path": str(curve_path.with_suffix(".json")),
                                 },
@@ -1596,10 +2138,23 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                             solved_jobs = list(executor.map(solve_job, jobs))
                     for pair, curve, curve_path in solved_jobs:
                         if not use_subprocess_tube:
+                            parent_pair = next(
+                                parent
+                                for job_pair, parent, _curve_targets, job_path in jobs
+                                if job_pair == pair and job_path == curve_path
+                            )
+                            curve_task_fingerprint = tube_curve_task_fingerprint(
+                                radius_task_fingerprint=radius_task_fingerprint,
+                                pair=pair,
+                                parent_pair=parent_pair,
+                                parent_curve_path=solved_curve_paths[parent_pair],
+                                max_nfev=int(args.max_ik_nfev),
+                            )
                             curve.to_parquet(curve_path, index=False, compression="zstd")
                             write_json(
                                 curve_path.with_suffix(".json"),
                                 {
+                                    "task_fingerprint": curve_task_fingerprint,
                                     "offset_id": f"n1_{pair[0]:g}_n2_{pair[1]:g}",
                                     "rows": int(len(curve)),
                                     "success_ratio": float(curve["tube_success"].mean()),
@@ -1620,6 +2175,7 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
                 multi_branch_threshold_deg=3.0,
             )
             quality: dict[str, Any] = {
+                "task_fingerprint": radius_task_fingerprint,
                 "candidate_id": candidate_id,
                 "family_id": str(branch_row.get("family_id", candidate_id)),
                 "radius_mm": radius_mm,
@@ -1663,6 +2219,9 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
     primary_families = passing_at(float(args.primary_radius_mm))
     stretch_families = passing_at(float(args.stretch_radius_mm))
     report = {
+        "strategy_version": TUBE_STRATEGY_VERSION,
+        "task_fingerprint": task_fingerprint,
+        **formal_expansion_protocol_report(args),
         "primary_radius_mm": float(args.primary_radius_mm),
         "stretch_radius_mm": float(args.stretch_radius_mm),
         "primary_passing_families": primary_families,
@@ -1676,21 +2235,181 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
     return report
 
 
+def _formal_family_coverage_from_artifacts(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Path], dict[str, Any]]:
+    root = Path(args.out_dir)
+    paths = {
+        "pointwise_report": root / "02_pointwise" / "pointwise_report.json",
+        "pointwise_selection": root / "02_pointwise" / "selected_families.csv",
+        "branch_report": root / "03_branch" / "branch_report.json",
+    }
+    pointwise_report = (
+        json.loads(paths["pointwise_report"].read_text(encoding="utf-8"))
+        if paths["pointwise_report"].is_file()
+        else {}
+    )
+    branch_report = (
+        json.loads(paths["branch_report"].read_text(encoding="utf-8"))
+        if paths["branch_report"].is_file()
+        else {}
+    )
+    pointwise_selected_ids: list[str] = []
+    if paths["pointwise_selection"].is_file():
+        pointwise_selection = pd.read_csv(paths["pointwise_selection"])
+        if "candidate_id" in pointwise_selection:
+            pointwise_selected_ids = pointwise_selection["candidate_id"].astype(str).tolist()
+    coverage = formal_family_coverage_report(
+        pointwise_report,
+        branch_report,
+        pointwise_selected_families=pointwise_selected_ids,
+    )
+    return paths, coverage
+
+
+def _formal_family_coverage_fields(
+    paths: Mapping[str, Path],
+    coverage: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "formal_family_coverage_gate_pass": bool(
+            coverage.get("formal_family_coverage_gate_pass", False)
+        ),
+        "formal_family_coverage_checks": dict(coverage.get("checks", {})),
+        "formal_family_coverage": dict(coverage.get("evidence", {})),
+        "formal_family_coverage_fingerprint": str(
+            coverage.get("formal_family_coverage_fingerprint", "")
+        ),
+    }
+    for name, path in paths.items():
+        payload[f"{name}_path"] = str(path.resolve())
+        payload[f"{name}_sha256"] = file_sha256(path) if path.is_file() else None
+        payload[f"{name}_bytes"] = int(path.stat().st_size) if path.is_file() else 0
+    return payload
+
+
+def formal_dataset_claims_allowed(
+    args: argparse.Namespace,
+    *,
+    dataset_gate: bool,
+    tube_report: Mapping[str, Any],
+    family_coverage_report: Mapping[str, Any],
+    artifact_binding_complete: bool,
+) -> bool:
+    return bool(
+        dataset_gate
+        and formal_expansion_protocol_report(args)["formal_expansion_protocol_gate_pass"]
+        and tube_report.get("formal_expansion_protocol_gate_pass", False)
+        and family_coverage_report.get("formal_family_coverage_gate_pass", False)
+        and artifact_binding_complete
+    )
+
+
+def dataset_task_fingerprint(args: argparse.Namespace, tube_report: Mapping[str, Any]) -> str:
+    tube_dir = Path(args.out_dir) / "04_tube"
+    summary_path = tube_dir / "tube_radius_summary.csv"
+    family_coverage_paths, family_coverage = _formal_family_coverage_from_artifacts(args)
+    tube_inputs: dict[str, str] = {}
+    if summary_path.exists():
+        summary = pd.read_csv(summary_path)
+        if "tube_gate_pass" in summary:
+            passing = summary[summary["tube_gate_pass"].fillna(False).astype(bool)]
+            for _idx, row in passing.iterrows():
+                candidate_id = str(row["candidate_id"])
+                radius_mm = float(row["radius_mm"])
+                path = tube_dir / candidate_id / _radius_slug(radius_mm) / "tube_small.parquet"
+                tube_inputs[f"{candidate_id}@{radius_mm:g}"] = _file_hash_or_missing(path)
+    return stable_fingerprint(
+        {
+            "phase": "dataset",
+            "strategy_version": DATASET_STRATEGY_VERSION,
+            "protocol": formal_expansion_protocol_report(args)["protocol"],
+            "tube_task_fingerprint": str(tube_report.get("task_fingerprint", "")),
+            "inputs": {
+                "tube_summary": _file_hash_or_missing(summary_path),
+                "passing_tubes": tube_inputs,
+                "robot_config": _file_hash_or_missing(_arg_path(args, "robot_config", DEFAULT_CONFIG)),
+                **{
+                    name: _file_hash_or_missing(path)
+                    for name, path in family_coverage_paths.items()
+                },
+            },
+            "formal_family_coverage_fingerprint": family_coverage[
+                "formal_family_coverage_fingerprint"
+            ],
+        }
+    )
+
+
 def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "05_dataset"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "dataset_report.json"
     final_dataset_path = out / "true_ellipse_family_tubes_v5.parquet"
+    manifest_path = out / "trajectory_manifest.csv"
+    robot_config_path = _arg_path(args, "robot_config", DEFAULT_CONFIG).resolve()
+    tube_report = ensure_tube_report(args)
+    family_coverage_paths, family_coverage = _formal_family_coverage_from_artifacts(args)
+    family_coverage_fields = _formal_family_coverage_fields(
+        family_coverage_paths,
+        family_coverage,
+    )
+    task_fingerprint = dataset_task_fingerprint(args, tube_report)
     if bool(args.skip_existing) and report_path.exists():
-        return json.loads(report_path.read_text(encoding="utf-8"))
+        cached = json.loads(report_path.read_text(encoding="utf-8"))
+        dataset_cache_matches = bool(
+            cached.get("dataset_gate_pass", False)
+            and final_dataset_path.exists()
+            and str(cached.get("dataset_path", "")) == str(final_dataset_path.resolve())
+            and str(cached.get("dataset_sha256", "")) == file_sha256(final_dataset_path)
+        )
+        manifest_cache_matches = bool(
+            manifest_path.exists()
+            and str(cached.get("manifest_path", "")) == str(manifest_path.resolve())
+            and str(cached.get("manifest_sha256", "")) == file_sha256(manifest_path)
+        )
+        robot_config_cache_matches = bool(
+            robot_config_path.is_file()
+            and str(cached.get("robot_config_path", "")) == str(robot_config_path)
+            and str(cached.get("robot_config_sha256", "")) == file_sha256(robot_config_path)
+        )
+        family_coverage_cache_matches = bool(
+            str(cached.get("formal_family_coverage_fingerprint", ""))
+            == str(family_coverage["formal_family_coverage_fingerprint"])
+            and bool(cached.get("formal_family_coverage_gate_pass", False))
+            == bool(family_coverage["formal_family_coverage_gate_pass"])
+            and all(
+                path.is_file()
+                and str(cached.get(f"{name}_path", "")) == str(path.resolve())
+                and str(cached.get(f"{name}_sha256", "")) == file_sha256(path)
+                for name, path in family_coverage_paths.items()
+            )
+        )
+        if (
+            phase_cache_is_compatible(
+                cached,
+                strategy_version=DATASET_STRATEGY_VERSION,
+                task_fingerprint=task_fingerprint,
+            )
+            and dataset_cache_matches
+            and manifest_cache_matches
+            and robot_config_cache_matches
+            and family_coverage_cache_matches
+        ):
+            return cached
     tube_dir = Path(args.out_dir) / "04_tube"
     tube_summary_path = tube_dir / "tube_radius_summary.csv"
     if not tube_summary_path.exists():
-        phase_tube(args)
+        raise FileNotFoundError("tube phase did not materialize the dataset inputs")
     tube_summary = pd.read_csv(tube_summary_path)
     passing = tube_summary[tube_summary["tube_gate_pass"].fillna(False).astype(bool)].copy()
     if passing.empty:
         report = {
+            "strategy_version": DATASET_STRATEGY_VERSION,
+            "task_fingerprint": task_fingerprint,
+            **formal_expansion_protocol_report(args),
+            **family_coverage_fields,
+            "formal_dataset_gate_pass": False,
             "dataset_gate_pass": False,
             "trajectory_count": 0,
             "reason": "no_tube_passed",
@@ -1843,7 +2562,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         dataset = diagnostic_union[diagnostic_union["family_id"].astype(str).eq(selected_family_id)].copy()
         conflicts = family_conflicts[selected_family_id]
     manifest["selected_for_dataset"] = manifest["family_id"].astype(str).eq(selected_family_id)
-    manifest.to_csv(out / "trajectory_manifest.csv", index=False)
+    manifest.to_csv(manifest_path, index=False)
     unique_sample_ids = bool(len(dataset) and dataset["sample_id"].is_unique)
     selected_manifest = manifest[manifest["selected_for_dataset"]]
     all_complete = bool(len(selected_manifest) and selected_manifest["trajectory_complete"].all())
@@ -1854,7 +2573,32 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     diagnostic_union.to_parquet(out / "dataset_attempt.parquet", index=False, compression="zstd")
     if dataset_gate:
         dataset.to_parquet(final_dataset_path, index=False, compression="zstd")
+    dataset_sha256 = file_sha256(final_dataset_path) if dataset_gate else None
+    manifest_sha256 = file_sha256(manifest_path)
+    robot_config_sha256 = file_sha256(robot_config_path) if robot_config_path.is_file() else None
+    family_coverage_binding_complete = bool(
+        all(path.is_file() for path in family_coverage_paths.values())
+        and all(family_coverage_fields.get(f"{name}_sha256") for name in family_coverage_paths)
+    )
+    artifact_binding_complete = bool(
+        dataset_gate
+        and dataset_sha256
+        and manifest_sha256
+        and robot_config_sha256
+        and family_coverage_binding_complete
+    )
     report = {
+        "strategy_version": DATASET_STRATEGY_VERSION,
+        "task_fingerprint": task_fingerprint,
+        **formal_expansion_protocol_report(args),
+        **family_coverage_fields,
+        "formal_dataset_gate_pass": formal_dataset_claims_allowed(
+            args,
+            dataset_gate=dataset_gate,
+            tube_report=tube_report,
+            family_coverage_report=family_coverage,
+            artifact_binding_complete=artifact_binding_complete,
+        ),
         "dataset_gate_pass": dataset_gate,
         "rows": int(len(dataset)),
         "trajectory_count": trajectory_count,
@@ -1873,9 +2617,17 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "minimum_unique_radius_count": 3,
         "branch_conflict": conflicts,
         "global_branch_conflict": global_conflicts,
-        "dataset_path": str(final_dataset_path) if dataset_gate else None,
+        "dataset_path": str(final_dataset_path.resolve()) if dataset_gate else None,
+        "dataset_sha256": dataset_sha256,
+        "dataset_bytes": int(final_dataset_path.stat().st_size) if dataset_gate else 0,
         "attempt_path": str(out / "dataset_attempt.parquet"),
-        "manifest_path": str(out / "trajectory_manifest.csv"),
+        "manifest_path": str(manifest_path.resolve()),
+        "manifest_sha256": manifest_sha256,
+        "manifest_bytes": int(manifest_path.stat().st_size),
+        "robot_config_path": str(robot_config_path),
+        "robot_config_sha256": robot_config_sha256,
+        "robot_config_bytes": int(robot_config_path.stat().st_size) if robot_config_path.is_file() else 0,
+        "artifact_binding_complete": artifact_binding_complete,
         "family_selection_path": str(out / "family_selection.csv"),
     }
     write_json(report_path, report)
@@ -1957,6 +2709,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
     stretch_row = _radius_row(status, float(args.stretch_radius_mm))
     dataset_report = json.loads(dataset_report_path.read_text(encoding="utf-8"))
     report = {
+        **formal_expansion_protocol_report(args),
         "primary_radius_mm": float(args.primary_radius_mm),
         "stretch_radius_mm": float(args.stretch_radius_mm),
         "primary_trajectory_materialized": bool(
@@ -1967,6 +2720,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "connected_trajectory_rmax_mm": trajectory_rmax,
         "dataset_gate_pass": bool(dataset_report.get("dataset_gate_pass", False)),
+        "formal_dataset_gate_pass": bool(dataset_report.get("formal_dataset_gate_pass", False)),
         "model_training_executed": False,
         "primary_strict_support_claimed": False,
         "stretch_strict_support_claimed": False,
@@ -1983,6 +2737,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         f"- Primary robust tube materialized: `{report['primary_trajectory_materialized']}`.",
         f"- Stretch robust tube materialized: `{report['stretch_trajectory_materialized']}`.",
         f"- Multi-trajectory dataset gate: `{report['dataset_gate_pass']}`.",
+        f"- Formal expansion/dataset gate: `{report['formal_expansion_protocol_gate_pass']}/{report['formal_dataset_gate_pass']}`.",
         "- This expansion stage does not claim strict model support; that claim is produced only by the V5 training/generalization runner.",
         "",
         "## Radius stage status",
@@ -2085,6 +2840,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "mode": "true_ellipse_family_expansion_v5",
         "phases": phases,
         "out_dir": str(args.out_dir),
+        **formal_expansion_protocol_report(args),
         "results": results,
     }
     write_json(Path(args.out_dir) / "run_report.json", payload)

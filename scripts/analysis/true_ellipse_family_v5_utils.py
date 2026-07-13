@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import numpy as np
@@ -12,6 +16,97 @@ from scipy.stats import qmc
 
 
 TARGET_XYZ_COLS = ["x_target_m", "y_target_m", "z_target_m"]
+
+
+def _fingerprint_json_default(value: Any) -> Any:
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"not fingerprint-serializable: {type(value)!r}")
+
+
+def stable_fingerprint(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_fingerprint_json_default,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=256)
+def _file_sha256_cached(path_text: str, size: int, mtime_ns: int) -> str:
+    del size, mtime_ns
+    digest = hashlib.sha256()
+    with Path(path_text).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_sha256(path: str | Path) -> str:
+    source = Path(path).resolve()
+    stat = source.stat()
+    return _file_sha256_cached(str(source), int(stat.st_size), int(stat.st_mtime_ns))
+
+
+def formal_family_coverage_report(
+    pointwise_report: Mapping[str, Any],
+    branch_report: Mapping[str, Any],
+    *,
+    pointwise_selected_families: Iterable[str],
+    expected_family_count: int = 5,
+) -> dict[str, Any]:
+    """Authenticate actual formal family selection and branch execution coverage."""
+
+    expected = int(expected_family_count)
+    pointwise_ids = [str(value) for value in pointwise_selected_families]
+    branch_selected_ids = [str(value) for value in branch_report.get("selected_families", [])]
+    branch_executed_ids = [str(value) for value in branch_report.get("executed_families", [])]
+    pointwise_reported_count = int(pointwise_report.get("selected_family_count", -1))
+    branch_reported_count = int(branch_report.get("selected_family_count", -1))
+    checks = {
+        "pointwise_reported_count_exact_five": pointwise_reported_count == expected,
+        "pointwise_selected_exact_five_unique": len(pointwise_ids) == expected
+        and len(set(pointwise_ids)) == expected,
+        "branch_reported_count_exact_five": branch_reported_count == expected,
+        "branch_selected_exact_five_unique": len(branch_selected_ids) == expected
+        and len(set(branch_selected_ids)) == expected,
+        "branch_executed_exact_five_unique": len(branch_executed_ids) == expected
+        and len(set(branch_executed_ids)) == expected,
+        "branch_all_selected_families_executed": bool(
+            branch_report.get("all_selected_families_executed", False)
+        ),
+        "branch_selection_matches_pointwise": set(branch_selected_ids) == set(pointwise_ids),
+        "branch_execution_matches_selection": set(branch_executed_ids) == set(branch_selected_ids),
+    }
+    normalized_checks = {name: bool(value) for name, value in checks.items()}
+    evidence = {
+        "expected_family_count": expected,
+        "pointwise_reported_selected_family_count": pointwise_reported_count,
+        "pointwise_selected_families": pointwise_ids,
+        "branch_reported_selected_family_count": branch_reported_count,
+        "branch_selected_families": branch_selected_ids,
+        "branch_executed_families": branch_executed_ids,
+        "branch_all_selected_families_executed": bool(
+            branch_report.get("all_selected_families_executed", False)
+        ),
+    }
+    return {
+        "formal_family_coverage_gate_pass": bool(all(normalized_checks.values())),
+        "checks": normalized_checks,
+        "evidence": evidence,
+        "formal_family_coverage_fingerprint": stable_fingerprint(evidence),
+    }
 
 
 @dataclass(frozen=True)

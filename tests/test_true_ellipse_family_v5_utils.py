@@ -90,6 +90,51 @@ def test_support_gate_and_connected_radius_do_not_skip_a_failed_anchor() -> None
     assert mod.connected_radius_max(status, gate_col="strict_gate_pass", anchor_mm=75.0) == 80.0
 
 
+def test_formal_family_coverage_requires_exact_actual_five_family_execution() -> None:
+    mod = _load_module()
+    family_ids = [f"family-{index}" for index in range(5)]
+    pointwise = {"selected_family_count": 5}
+    branch = {
+        "selected_family_count": 5,
+        "selected_families": family_ids,
+        "executed_families": family_ids,
+        "all_selected_families_executed": True,
+    }
+
+    complete = mod.formal_family_coverage_report(
+        pointwise,
+        branch,
+        pointwise_selected_families=family_ids,
+    )
+    reduced = mod.formal_family_coverage_report(
+        {"selected_family_count": 4},
+        {
+            "selected_family_count": 4,
+            "selected_families": family_ids[:4],
+            "executed_families": family_ids[:4],
+            "all_selected_families_executed": True,
+        },
+        pointwise_selected_families=family_ids[:4],
+    )
+    duplicate = mod.formal_family_coverage_report(
+        pointwise,
+        {
+            "selected_family_count": 5,
+            "selected_families": [*family_ids[:4], family_ids[3]],
+            "executed_families": family_ids,
+            "all_selected_families_executed": True,
+        },
+        pointwise_selected_families=family_ids,
+    )
+
+    assert complete["formal_family_coverage_gate_pass"] is True
+    assert reduced["formal_family_coverage_gate_pass"] is False
+    assert reduced["checks"]["pointwise_selected_exact_five_unique"] is False
+    assert reduced["checks"]["branch_selected_exact_five_unique"] is False
+    assert duplicate["formal_family_coverage_gate_pass"] is False
+    assert duplicate["checks"]["branch_selected_exact_five_unique"] is False
+
+
 def test_pointwise_recovery_is_limited_to_small_contiguous_failures() -> None:
     mod = _load_module()
     failed_angles = [14, 15, 16, 17, 18, 19, 20]

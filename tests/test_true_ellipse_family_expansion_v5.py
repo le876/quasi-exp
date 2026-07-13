@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,49 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _write_branch_fixture(mod, out: Path, *, candidate_ids: list[str], radii_mm: tuple[float, ...]) -> None:
+    pointwise = out / "02_pointwise"
+    pointwise.mkdir(parents=True)
+    families = []
+    summary = []
+    for rank, candidate_id in enumerate(candidate_ids):
+        families.append(
+            {
+                "candidate_id": candidate_id,
+                "family_id": candidate_id,
+                "center_x_m": 1.0 + 0.01 * rank,
+                "center_y_m": 0.0,
+                "center_z_m": 0.0,
+                "phase_y_rad": 1.0,
+                "phase_z_rad": 2.0,
+            }
+        )
+        for radius_mm in radii_mm:
+            summary.append(
+                {
+                    "candidate_id": candidate_id,
+                    "family_id": candidate_id,
+                    "radius_mm": radius_mm,
+                    "executed": True,
+                    "pointwise_gate_pass": True,
+                    "residual_p95_mm": 0.1 + 0.01 * rank,
+                }
+            )
+            radius_dir = pointwise / candidate_id / mod._radius_slug(radius_mm)
+            radius_dir.mkdir(parents=True)
+            path = pd.DataFrame(
+                {
+                    "angle_idx": np.arange(4),
+                    "angle_rad": np.linspace(0.0, 2.0 * math.pi, 4, endpoint=False),
+                }
+            )
+            for column in mod.atlas.BETA_COLS:
+                path[column] = 0.0
+            path.to_parquet(radius_dir / "best_pointwise_path.parquet", index=False)
+    pd.DataFrame(families).to_csv(pointwise / "selected_families.csv", index=False)
+    pd.DataFrame(summary).to_csv(pointwise / "pointwise_radius_summary.csv", index=False)
 
 
 def test_pointwise_summary_uses_best_candidate_per_angle_and_requires_every_target() -> None:
@@ -95,6 +139,69 @@ def test_cli_defaults_cover_full_v5_pipeline() -> None:
     assert args.radius_anchors_mm == "75,80,82.5,85,87.5,90,92.5,95,97.5,100"
     assert args.max_branch_families == 5
     assert mod.parse_phases("all") == ["audit", "search", "pointwise", "branch", "tube", "dataset", "summary"]
+
+
+def test_formal_expansion_protocol_rejects_reduced_debug_configuration() -> None:
+    mod = _load_module()
+
+    formal = mod.formal_expansion_protocol_report(mod.parse_args([]))
+    reduced = mod.formal_expansion_protocol_report(
+        mod.parse_args(["--max-pointwise-families", "1", "--max-branch-families", "1", "--final-points", "8"])
+    )
+
+    assert formal["formal_expansion_protocol_gate_pass"] is True
+    assert reduced["formal_expansion_protocol_gate_pass"] is False
+    assert reduced["checks"]["five_pointwise_families"] is False
+    assert reduced["checks"]["five_branch_families"] is False
+    assert reduced["checks"]["final_points_360"] is False
+
+
+def test_formal_dataset_claim_requires_actual_five_family_coverage() -> None:
+    mod = _load_module()
+    args = mod.parse_args([])
+    family_ids = [f"family-{index}" for index in range(5)]
+    complete = {
+        "formal_family_coverage_gate_pass": True,
+        "evidence": {
+            "pointwise_selected_families": family_ids,
+            "branch_selected_families": family_ids,
+            "branch_executed_families": family_ids,
+        },
+    }
+    reduced = {
+        "formal_family_coverage_gate_pass": False,
+        "evidence": {
+            "pointwise_selected_families": family_ids[:4],
+            "branch_selected_families": family_ids[:4],
+            "branch_executed_families": family_ids[:4],
+        },
+    }
+    tube_report = {"formal_expansion_protocol_gate_pass": True}
+
+    assert mod.formal_dataset_claims_allowed(
+        args,
+        dataset_gate=True,
+        tube_report=tube_report,
+        family_coverage_report=complete,
+        artifact_binding_complete=True,
+    ) is True
+    assert mod.formal_dataset_claims_allowed(
+        args,
+        dataset_gate=True,
+        tube_report=tube_report,
+        family_coverage_report=reduced,
+        artifact_binding_complete=True,
+    ) is False
+
+
+def test_phase_cache_requires_matching_strategy_and_task_fingerprint() -> None:
+    mod = _load_module()
+
+    report = {"strategy_version": 3, "task_fingerprint": "abc"}
+    assert mod.phase_cache_is_compatible(report, strategy_version=3, task_fingerprint="abc") is True
+    assert mod.phase_cache_is_compatible(report, strategy_version=2, task_fingerprint="abc") is False
+    assert mod.phase_cache_is_compatible(report, strategy_version=3, task_fingerprint="different") is False
+    assert mod.phase_cache_is_compatible({}, strategy_version=3, task_fingerprint="abc") is False
 
 
 def test_family_seeds_include_selected_v3_and_deduplicated_e100_geometry() -> None:
@@ -443,6 +550,16 @@ def test_branch_robustness_gate_requires_centerline_forward_reverse_and_repeatab
     assert failed["branch_robustness_gate_pass"] is False
 
 
+def test_branch_radius_cache_rejects_legacy_optimized_repeatability() -> None:
+    mod = _load_module()
+
+    assert mod.branch_radius_cache_is_compatible({"selected_path": "forward"}) is True
+    assert mod.branch_radius_cache_is_compatible({"selected_path": "optimized_radial_parent"}) is False
+    assert mod.branch_radius_cache_is_compatible(
+        {"selected_path": "optimized_radial_parent", "repeatability_strategy_version": 2}
+    ) is True
+
+
 def test_tube_gate_uses_v3_hard_thresholds_without_relaxation() -> None:
     mod = _load_module()
     metrics = {
@@ -609,6 +726,139 @@ def test_phase_branch_writes_only_a_robust_centerline(tmp_path: Path, monkeypatc
     assert (out / "03_branch" / "c1" / "r075p00" / "selected_centerline_360.parquet").exists()
 
 
+def test_phase_branch_repeats_the_selected_optimized_algorithm(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    out = tmp_path / "v5"
+    _write_branch_fixture(mod, out, candidate_ids=["c1"], radii_mm=(75.0,))
+    passing = {
+        "residual_p95_mm": 0.1,
+        "residual_max_mm": 0.2,
+        "delta_beta_p95_deg": 0.1,
+        "delta_beta_max_deg": 0.2,
+        "delta2_beta_p95_deg": 0.01,
+        "seam_beta_rms_deg": 0.1,
+        "sigma3_p05_m": 0.01,
+        "kappa_p95": 10.0,
+    }
+    failing = {**passing, "residual_p95_mm": 9.0, "residual_max_mm": 9.0}
+    final_optimize_calls = []
+    final_initial_means = []
+    comparisons = []
+
+    def solved_frame(targets, value=0.0):
+        frame = targets.copy().reset_index(drop=True)
+        for column in mod.atlas.BETA_COLS:
+            frame[column] = value
+        for target_col, xyz_col in zip(mod.atlas.TARGET_XYZ_COLS, mod.atlas.XYZ_COLS):
+            frame[xyz_col] = frame[target_col]
+        return frame
+
+    def fake_optimize(*, targets, initial_beta, **_kwargs):
+        if len(targets) == 8:
+            final_optimize_calls.append(1)
+            final_initial_means.append(float(np.asarray(initial_beta).mean()))
+            np.asarray(initial_beta)[:] = 9.0
+            return solved_frame(targets, value=0.123), dict(passing)
+        return solved_frame(targets), dict(passing)
+
+    def fake_continuation(*, targets, **_kwargs):
+        return solved_frame(targets), dict(failing)
+
+    def fake_reproducibility(left, right, **_kwargs):
+        comparisons.append(
+            (
+                float(left[mod.atlas.BETA_COLS].to_numpy().mean()),
+                float(right[mod.atlas.BETA_COLS].to_numpy().mean()),
+            )
+        )
+        return {"branch_diff_p95_deg": 0.0, "reproducible": True}
+
+    monkeypatch.setattr(mod, "_load_robot", lambda _args: (np.ones(31), np.ones(4), -1.0))
+    monkeypatch.setattr(mod.atlas, "optimize_cyclic_trajectory", fake_optimize)
+    monkeypatch.setattr(mod.atlas, "continuation_lift", fake_continuation)
+    monkeypatch.setattr(mod.atlas, "branch_reproducibility_report", fake_reproducibility)
+    args = SimpleNamespace(
+        out_dir=out,
+        radius_anchors_mm="75",
+        primary_radius_mm=75.0,
+        stretch_radius_mm=100.0,
+        max_branch_families=1,
+        coarse_points=4,
+        final_points=8,
+        max_opt_nfev=2,
+        max_ik_nfev=2,
+        skip_existing=False,
+    )
+
+    mod.phase_branch(args)
+
+    summary = pd.read_csv(out / "03_branch" / "branch_radius_summary.csv")
+    assert len(final_optimize_calls) == 2
+    assert np.allclose(final_initial_means, (0.0, 0.0))
+    assert summary.iloc[0]["selected_path"].startswith("optimized_")
+    assert np.allclose(comparisons[-1], (0.123, 0.123))
+
+
+def test_phase_branch_executes_all_selected_families_even_after_dual_goal_hit(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    out = tmp_path / "v5"
+    _write_branch_fixture(mod, out, candidate_ids=["c1", "c2"], radii_mm=(75.0,))
+    passing = {
+        "residual_p95_mm": 0.1,
+        "residual_max_mm": 0.2,
+        "delta_beta_p95_deg": 0.1,
+        "delta_beta_max_deg": 0.2,
+        "delta2_beta_p95_deg": 0.01,
+        "seam_beta_rms_deg": 0.1,
+        "sigma3_p05_m": 0.01,
+        "kappa_p95": 10.0,
+    }
+
+    def solved_frame(targets, initial_beta=None, **_kwargs):
+        frame = targets.copy().reset_index(drop=True)
+        beta = np.zeros((len(frame), 6), dtype=float) if initial_beta is None else np.asarray(initial_beta, dtype=float)
+        for idx, column in enumerate(mod.atlas.BETA_COLS):
+            frame[column] = beta[:, idx]
+        for target_col, xyz_col in zip(mod.atlas.TARGET_XYZ_COLS, mod.atlas.XYZ_COLS):
+            frame[xyz_col] = frame[target_col]
+        return frame
+
+    monkeypatch.setattr(mod, "_load_robot", lambda _args: (np.ones(31), np.ones(4), -1.0))
+    monkeypatch.setattr(
+        mod.atlas,
+        "optimize_cyclic_trajectory",
+        lambda *, targets, initial_beta, **_kwargs: (solved_frame(targets, initial_beta), dict(passing)),
+    )
+    monkeypatch.setattr(
+        mod.atlas,
+        "continuation_lift",
+        lambda *, targets, **_kwargs: (solved_frame(targets), dict(passing)),
+    )
+    monkeypatch.setattr(
+        mod.atlas,
+        "branch_reproducibility_report",
+        lambda *_args, **_kwargs: {"branch_diff_p95_deg": 0.0, "reproducible": True},
+    )
+    args = SimpleNamespace(
+        out_dir=out,
+        radius_anchors_mm="75",
+        primary_radius_mm=75.0,
+        stretch_radius_mm=75.0,
+        max_branch_families=2,
+        coarse_points=4,
+        final_points=8,
+        max_opt_nfev=2,
+        max_ik_nfev=2,
+        skip_existing=False,
+    )
+
+    report = mod.phase_branch(args)
+
+    assert report["dual_goal_family"] == "c1"
+    assert report["executed_families"] == ["c1", "c2"]
+    assert report["all_selected_families_executed"] is True
+
+
 def test_cyclic_optimizer_can_stop_after_first_fully_passing_stage() -> None:
     mod = _load_module()
     args = mod.parse_args([])
@@ -773,6 +1023,75 @@ def test_phase_tube_materializes_formal_5x5_grid_only_after_branch_gate(tmp_path
     assert tube["tube_offset_id"].nunique() == 25
 
 
+def test_formal_tube_offsets_reject_an_alternative_5x5_grid() -> None:
+    mod = _load_module()
+
+    assert mod.validate_formal_tube_offsets("-5,-2.5,0,2.5,5") == [-5.0, -2.5, 0.0, 2.5, 5.0]
+    with pytest.raises(ValueError, match="fixed"):
+        mod.validate_formal_tube_offsets("-4,-2,0,2,4")
+
+
+def test_phase_tube_validates_offsets_before_returning_a_cached_report(tmp_path: Path) -> None:
+    mod = _load_module()
+    report_path = tmp_path / "04_tube" / "tube_report.json"
+    mod.write_json(report_path, {"primary_tube_gate_pass": True})
+    args = SimpleNamespace(
+        out_dir=tmp_path,
+        tube_offsets_mm="-4,-2,0,2,4",
+        skip_existing=True,
+    )
+
+    with pytest.raises(ValueError, match="fixed"):
+        mod.phase_tube(args)
+
+
+def test_phase_tube_rejects_a_cached_report_without_matching_input_fingerprint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    tube_dir = tmp_path / "04_tube"
+    mod.write_json(tube_dir / "tube_report.json", {"primary_tube_gate_pass": True})
+    branch_dir = tmp_path / "03_branch"
+    branch_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "candidate_id": "c1",
+                "family_id": "c1",
+                "radius_mm": 75.0,
+                "branch_robustness_gate_pass": False,
+                "executed": True,
+            }
+        ]
+    ).to_csv(branch_dir / "branch_radius_summary.csv", index=False)
+    mod.write_json(
+        branch_dir / "branch_report.json",
+        {
+            "strategy_version": mod.BRANCH_SELECTION_STRATEGY_VERSION,
+            "task_fingerprint": "branch-fingerprint",
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "ensure_branch_report",
+        lambda _args: {
+            "strategy_version": mod.BRANCH_SELECTION_STRATEGY_VERSION,
+            "task_fingerprint": "branch-fingerprint",
+        },
+    )
+    monkeypatch.setattr(mod, "tube_task_fingerprint", lambda *_args, **_kwargs: "current-tube-fingerprint")
+    monkeypatch.setattr(mod, "_load_robot", lambda _args: (_ for _ in ()).throw(RuntimeError("cache rejected")))
+    args = SimpleNamespace(
+        out_dir=tmp_path,
+        tube_offsets_mm="-5,-2.5,0,2.5,5",
+        skip_existing=True,
+    )
+
+    with pytest.raises(RuntimeError, match="cache rejected"):
+        mod.phase_tube(args)
+
+
 def test_branch_conflict_report_detects_one_to_many_beta_mapping_in_2mm_voxel() -> None:
     mod = _load_module()
     frame = pd.DataFrame(
@@ -862,8 +1181,11 @@ def test_phase_dataset_selects_one_conflict_free_family_from_cross_family_diagno
         }
     )
     pd.DataFrame(rows).to_csv(tube_dir / "tube_radius_summary.csv", index=False)
+    robot_config_path = out / "robot.yaml"
+    robot_config_path.write_text("kinematics:\n  theta_sign: -1\n", encoding="utf-8")
     args = SimpleNamespace(
         out_dir=out,
+        robot_config=robot_config_path,
         final_points=4,
         primary_radius_mm=87.5,
         stretch_radius_mm=100.0,
@@ -877,10 +1199,29 @@ def test_phase_dataset_selects_one_conflict_free_family_from_cross_family_diagno
     assert report["all_tube_trajectory_count"] == 4
     assert report["selected_family_id"] == "c1"
     assert report["global_branch_conflict"]["branch_conflict_gate_pass"] is False
-    dataset = pd.read_parquet(out / "05_dataset" / "true_ellipse_family_tubes_v5.parquet")
+    dataset_path = out / "05_dataset" / "true_ellipse_family_tubes_v5.parquet"
+    manifest_path = out / "05_dataset" / "trajectory_manifest.csv"
+    assert report["dataset_path"] == str(dataset_path.resolve())
+    assert report["dataset_sha256"] == mod.file_sha256(dataset_path)
+    assert report["manifest_path"] == str(manifest_path.resolve())
+    assert report["manifest_sha256"] == mod.file_sha256(manifest_path)
+    assert report["robot_config_path"] == str(robot_config_path.resolve())
+    assert report["robot_config_sha256"] == mod.file_sha256(robot_config_path)
+    dataset = pd.read_parquet(dataset_path)
     assert len(dataset) == 3 * 4 * 25
     assert dataset["trajectory_id"].nunique() == 3
     assert dataset["family_id"].unique().tolist() == ["c1"]
+
+    dataset_path.write_bytes(b"tampered-dataset")
+    args.skip_existing = True
+    recovered = mod.phase_dataset(args)
+    assert recovered["dataset_sha256"] == mod.file_sha256(dataset_path)
+    pd.read_parquet(dataset_path)
+
+    manifest_path.write_text("tampered-manifest\n", encoding="utf-8")
+    recovered = mod.phase_dataset(args)
+    assert recovered["manifest_sha256"] == mod.file_sha256(manifest_path)
+    assert len(pd.read_csv(manifest_path)) == 4
 
 
 def test_expansion_radius_status_requires_same_family_to_pass_all_stages() -> None:

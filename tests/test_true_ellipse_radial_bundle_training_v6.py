@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +84,7 @@ def test_formal_seed_gate_requires_four_of_exactly_five_test_runs() -> None:
     assert mod.aggregate_formal_seed_gate(four_pass.iloc[:4])["stable_gate_pass"] is False
 
 
-def test_formal_model_gate_requires_both_validation_and_untouched_100mm_test() -> None:
+def test_formal_model_gate_requires_both_validation_and_heldout_100mm_test() -> None:
     mod = _load_module()
 
     assert mod.formal_model_gate_pass(
@@ -96,6 +97,26 @@ def test_formal_model_gate_requires_both_validation_and_untouched_100mm_test() -
         validation_gate={"stable_gate_pass": False},
         test_gate={"stable_gate_pass": True},
     ) is False
+
+
+def test_only_formal_preset_may_evaluate_the_registered_100mm_test() -> None:
+    mod = _load_module()
+    formal = mod.final_evaluation_specs(mod.parse_args([]))
+    smoke = mod.final_evaluation_specs(mod.parse_args(["--preset", "smoke"]))
+    pilot = mod.final_evaluation_specs(mod.parse_args(["--preset", "pilot"]))
+
+    assert [spec["label"] for spec in formal] == ["validation_92p5", "test_100"]
+    assert [spec["label"] for spec in smoke] == ["validation_92p5"]
+    assert [spec["label"] for spec in pilot] == ["validation_92p5"]
+
+
+def test_registered_holdout_radii_cannot_be_overridden_from_the_cli() -> None:
+    mod = _load_module()
+
+    with pytest.raises(SystemExit):
+        mod.parse_args(["--validation-radius-mm", "90"])
+    with pytest.raises(SystemExit):
+        mod.parse_args(["--test-radius-mm", "99"])
     assert mod.formal_model_gate_pass(
         formal_claims_allowed=True,
         validation_gate={"stable_gate_pass": True},

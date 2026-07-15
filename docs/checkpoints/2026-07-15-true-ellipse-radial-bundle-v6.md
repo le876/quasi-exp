@@ -47,7 +47,7 @@ docs/checkpoints/2026-07-15-true-ellipse-radial-bundle-v6.md
 | normal tube | 十条 360×25 tube 全部物化；100 mm 初始 beta P95=`1.019249°`，保留失败产物后用 10 条 outer-shell joint correction 降至 `0.937835°`；success=`0.991222`、P95/max=`0.129934/2.483489 mm`、conflict ratio=0 | formal tube pass |
 | dataset | 90,000 行/10 trajectories/10 radii/1 family；sample ID 唯一；conflict voxels=0；最大 voxel beta RMS=`0.972208°` | formal dataset pass |
 | split/support | 92.5 mm validation、100 mm test；训练为其余 8 个整半径的 69,120 条非中心线样本；trajectory/radius leakage=0；100 mm NN P95/max=`1.488390/1.626673 mm`、count P10=`871.8` | whole-radius split 与 training-only support pass |
-| model | formal 24-config screen 锁定 `mlp_beta6_large_poly_heavy_relu_a1em04`；92.5 mm validation=`1/5`，100 mm untouched test=`0/5`；所有失败 seed 的唯一失败字段是 beta3/beta4 bound violation | `formal_model_gate_pass=false`，strict static-model 半径保持 V4 `81.25 mm` |
+| model | formal 24-config screen 锁定 `mlp_beta6_large_poly_heavy_relu_a1em04`；92.5 mm validation=`1/5`，100 mm held-out-from-fitting/formal-selection evaluation=`0/5`；所有失败 seed 的唯一失败字段是 beta3/beta4 bound violation | `formal_model_gate_pass=false`，strict static-model 半径保持 V4 `81.25 mm` |
 
 ## 关键方法边界
 
@@ -58,7 +58,7 @@ docs/checkpoints/2026-07-15-true-ellipse-radial-bundle-v6.md
 5. 100 mm tube 的 outer-shell fallback 处理完整 `n2=±5` 曲线，不删除 70°–110° 困难区间，也不改变 5×5 网格。
 6. 92.5/100 mm 的中心线与 offsets 全部从训练隔离；support 还额外排除训练半径中心线。
 7. 模型只能读取 XYZ；radius、angle、family、branch 与 split 仅用于审计。
-8. 100 mm test 在 24-config validation screen 完成并锁定配置前不得参与排序。
+8. 100 mm 不得参与拟合或 24-config validation 排序；审查后进一步禁止 smoke/pilot 读取注册 test。
 
 ## 100 mm 关键证据
 
@@ -110,12 +110,13 @@ pytest 8.2.2
 
 ## 验证状态
 
-- V6 定向测试：`28 passed`；
+- V6 定向测试：`31 passed`；
 - Python 编译与两个 CLI `--help`：通过；
 - 正式 radial/tube/dataset：通过；
 - smoke training：exit 0；
 - formal training：exit 0，validation/test=`1/5,0/5`，正式模型 gate 关闭；
 - hash-compatible formal training 复跑：`0.52 s`，选型、task fingerprint 与 5-seed 结论不变；
+- 审查后 smoke 全链：exit 0，`test_100_evaluated=false`，holdout predictions 只有 `validation_92p5.parquet`；
 - dataset/summary 重生：通过，dataset SHA-256 不变；
 - 全仓回归：`296 passed`；
 - 提交边界双轴审查：待完成。
@@ -138,10 +139,10 @@ formal training 根目录为 `runs/true_ellipse_radial_bundle_training_v6/`：
 | audit | `00_audit/audit_report.json` | `e226f9cd822ab8cd179162162dd94946cfd7eb28f9954bfaa9b19149b7e66962` |
 | split | `01_split/split_assignment.parquet` | `1923facd987ac0c421db3623db42616c008628005d57500ca12c8f1f41b64791` |
 | screen | `02_model_screen/selection_report.json` | `3f7ce4ce97907aed3c865d2ef68b2200d4e18767d25531b8b5659072d6db7361` |
-| final | `03_final_models/final_training_report.json` | `c93325395125ebe37a08cb898fc3cc65df8a9673a21f9bb1c38f1331785bef6d` |
+| final | `03_final_models/final_training_report.json` | `edb32a94d4f9e734f8ab60d14cfe0a565ff3e5ea9586133780aacf25f4865914` |
 | validation | `03_final_models/validation_92p5_metrics_all_seeds.csv` | `0523a3a8f3592f139584fd9b905a7959939a32e3921765a6fe60b16ef369550e` |
 | test | `03_final_models/test_100_metrics_all_seeds.csv` | `760e8e5c9c2eda01ad6076d71e4a946ab6166fd3bbd0b06aa27a011ae763cb31` |
-| summary | `04_summary/final_report.json` | `10683bf53dd75c3b80ab782f7d442f5b0501537ef4603aac6d35e3cf6c32c831` |
+| summary | `04_summary/final_report.json` | `aa7732f03c30ed9bc5922734357c2db71e7aca850ea08d741eae68d448aea724` |
 
 > [!warning] 冻结结论边界
-> V6 已严格证明 100 mm robust branch/tube/dataset/support 可以生成，但没有证明当前无约束静态模型在 100 mm 严格通过。事后忽略 bound gate 或裁剪输出都会得到 5/5 的诊断性反事实，但不得改写 `formal_model_gate_pass=false`。
+> V6 已严格证明 100 mm robust branch/tube/dataset/support 可以生成，但没有证明当前无约束静态模型在 100 mm 严格通过。初版 smoke 曾在 formal 前读取 100 mm，故不再声称 untouched；100 mm 仍确认未进入拟合或 formal 选型。事后忽略 bound gate 或裁剪输出都会得到 5/5 的诊断性反事实，但不得改写 `formal_model_gate_pass=false`。

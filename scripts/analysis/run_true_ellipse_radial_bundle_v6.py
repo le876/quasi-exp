@@ -222,7 +222,13 @@ def annotate_tube_rows(
     radial_predictor_type: str,
     branch_hash: str,
 ) -> pd.DataFrame:
-    required = {"angle_idx", "tube_offset_id", *v6.atlas.TARGET_XYZ_COLS, *v6.atlas.BETA_COLS}
+    required = {
+        "angle_idx",
+        "tube_offset_id",
+        "is_centerline",
+        *v6.atlas.TARGET_XYZ_COLS,
+        *v6.atlas.BETA_COLS,
+    }
     missing = sorted(required - set(tube.columns))
     if missing:
         raise ValueError(f"V6 tube annotation missing columns: {missing}")
@@ -1836,6 +1842,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "parent_radius_mm",
         "angle_idx",
         "tube_offset_id",
+        "is_centerline",
         "solver_strategy_version",
         "radial_predictor_type",
         "branch_hash",

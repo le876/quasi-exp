@@ -492,14 +492,19 @@ def assign_whole_radius_splits(
 
 
 def training_only_support_pool(dataset_with_split: pd.DataFrame) -> pd.DataFrame:
-    if "split" not in dataset_with_split:
-        raise ValueError("training-only support requires a materialized split column")
+    required = {"split", "radius_mm", "is_centerline"}
+    missing = sorted(required - set(dataset_with_split.columns))
+    if missing:
+        raise ValueError(f"training-only support missing required columns: {missing}")
+    if not pd.api.types.is_bool_dtype(dataset_with_split["is_centerline"].dtype):
+        raise ValueError("training-only support requires a boolean is_centerline column")
     mask = dataset_with_split["split"].astype(str).eq("train")
-    if "is_centerline" in dataset_with_split:
-        mask &= ~dataset_with_split["is_centerline"].astype(bool)
+    mask &= ~dataset_with_split["is_centerline"].to_numpy(dtype=bool)
     training = dataset_with_split[mask].copy()
     if training.empty:
         raise ValueError("training-only support pool is empty")
+    if training["is_centerline"].any():
+        raise AssertionError("training-only support retained centerline rows")
     if np.any(np.isclose(training["radius_mm"].to_numpy(dtype=float), VALIDATION_RADIUS_MM, atol=1.0e-8)):
         raise ValueError("validation radius leaked into the training-only support pool")
     if np.any(np.isclose(training["radius_mm"].to_numpy(dtype=float), TEST_RADIUS_MM, atol=1.0e-8)):

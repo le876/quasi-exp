@@ -18,7 +18,7 @@ V6 针对 V5 已经证明“100 mm 逐点可达、但 360 点 canonical branch �
 4. 十个正式半径的 360×25 tube 全部通过原 V3/V5 gate；
 5. 单 family 90,000 行数据集无 branch conflict，92.5/100 mm 整半径分别作为 validation/test；
 6. support 只从训练半径的非中心线样本计算，100 mm strict support 通过；
-7. 完整 24 配置只使用 92.5 mm validation 选型，锁定后五个 seed 在未触碰的 100 mm test 上至少 4/5 通过。
+7. 完整 24 配置只使用 92.5 mm validation 选型，锁定后五个 seed 才评估 100 mm；smoke/pilot 不得读取注册 test。
 
 上游任何 gate 失败时，模型结果不能产生 strict 阳性。
 
@@ -144,7 +144,9 @@ training-only support 在全部十个审计半径均通过。100 mm 的 NN P95/�
 
 ## 8. 模型训练协议与结果
 
-smoke 端到端已通过执行验收：audit、split、2-config screen、1-seed final 与 summary 均 exit 0。30 iterations 的 smoke 模型不用于质量结论。
+初版 smoke 端到端通过了 audit、split、2-config screen、1-seed final 与 summary，30 iterations 的 smoke 模型不用于质量结论。提交边界审查发现，初版 smoke 在 formal screen 冻结前也写出了 `test_100.parquet`；它没有进入 formal 排名，但已破坏“100 mm 从未被打开”的最强语义。因此本文撤回 untouched 措辞，只保留“100 mm 未用于拟合或 24-config formal 选型”这一可验证事实。
+
+审查修复后，`smoke/pilot` 的 final evaluation spec 只包含 `validation_92p5`，不再创建或读取 `test_100`；validation/test 半径也改为不可由 CLI 覆盖的注册常量。
 
 正式训练按以下不可变协议完成：
 
@@ -168,7 +170,7 @@ screen beta  P95 = 0.079875 deg
 screen bound violations = 0
 ```
 
-配置锁定后才首次读取 100 mm test。五个 final seed 的正式结果为：
+formal final worker 只在配置锁定后才读取 100 mm；但由于上述旧 smoke 暴露，这份评估应称为“held out from fitting/formal selection”，不再称 untouched。五个 final seed 的正式结果为：
 
 | seed | validation EE P95/max (mm) | validation beta P95 (deg) | validation bound violations | validation gate | test EE P95/max (mm) | test beta P95 (deg) | test bound violations | test gate |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -226,6 +228,13 @@ screen bound violations = 0
 6. **P2：只有 single-chart 内点化失败才升级 multi-chart。** 如果所有候选 family 在 100 mm 都必须贴界，或强制余量后出现 >3° conflict voxel，再引入多图、gating 或分支分类；不把 branch ID 直接泄漏给当前静态回归器。
 
 V6 的 100 mm test 已经用于上述诊断，下一轮修复不能再把同一份结果称为 untouched test。V7 应在改代码之前锁定新的 100 mm challenge：最少使用同几何的半相位网格 `angle=(k+0.5)°`；更强的验证是再锁定一条未参与 V7 family/margin 选型的第二个 100 mm family。
+
+### 9.1 提交边界审查修复
+
+- non-formal preset 无法访问 100 mm test，formal task fingerprint 显式绑定 evaluation spec；
+- validation/test 半径不再暴露为伪可配置 CLI 参数，避免报告名与实际半径矛盾；
+- `is_centerline` 成为 tube annotation、dataset formal metadata 和 training-only support 的强制布尔字段；缺列或字符串伪布尔值均 fail closed；
+- 修复后正式 24+5 worker 全部 hash-compatible 复用，validation/test=`1/5,0/5` 和 strict 阴性不变。
 
 ## 10. 运行环境
 

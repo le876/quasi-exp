@@ -227,6 +227,7 @@ def test_whole_radius_split_and_support_pool_have_no_heldout_leakage() -> None:
                         "radius_mm": radius_mm,
                         "angle_idx": angle_idx,
                         "tube_offset_id": offset_id,
+                        "is_centerline": offset_id == "center",
                         "x_target_m": radius_mm / 1000.0,
                         "y_target_m": float(angle_idx),
                         "z_target_m": 0.0,
@@ -243,6 +244,23 @@ def test_whole_radius_split_and_support_pool_have_no_heldout_leakage() -> None:
     assert 92.5 not in set(support_pool["radius_mm"])
     assert 100.0 not in set(support_pool["radius_mm"])
     assert set(support_pool["split"]) == {"train"}
+    assert not support_pool["is_centerline"].any()
+
+
+def test_training_only_support_fails_closed_without_a_boolean_centerline_flag() -> None:
+    mod = _load_module()
+    valid = pd.DataFrame(
+        {
+            "split": ["train", "train"],
+            "radius_mm": [75.0, 75.0],
+            "is_centerline": [False, True],
+        }
+    )
+
+    with pytest.raises(ValueError, match="is_centerline"):
+        mod.training_only_support_pool(valid.drop(columns="is_centerline"))
+    with pytest.raises(ValueError, match="boolean"):
+        mod.training_only_support_pool(valid.assign(is_centerline=["false", "true"]))
 
 
 def test_radial_cache_fingerprint_binds_parent_content_family_radius_schedule_config_and_version(

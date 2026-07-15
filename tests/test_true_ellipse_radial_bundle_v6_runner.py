@@ -100,6 +100,7 @@ def test_tube_annotation_materializes_v6_provenance_and_unique_sample_ids() -> N
             row = {
                 "angle_idx": angle_idx,
                 "tube_offset_id": offset_id,
+                "is_centerline": offset_id == "n1_0_n2_0",
                 "x_target_m": float(angle_idx),
                 "y_target_m": 0.0,
                 "z_target_m": 0.0,

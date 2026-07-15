@@ -231,6 +231,26 @@ def formal_model_gate_pass(
     )
 
 
+def final_evaluation_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Keep the registered 100 mm test inaccessible to non-formal diagnostics."""
+    specs = [
+        {
+            "label": "validation_92p5",
+            "split": "validation",
+            "radius_mm": float(args.validation_radius_mm),
+        }
+    ]
+    if str(args.preset) == "formal":
+        specs.append(
+            {
+                "label": "test_100",
+                "split": "test",
+                "radius_mm": float(args.test_radius_mm),
+            }
+        )
+    return specs
+
+
 def upstream_training_authorized(dataset_report: Mapping[str, Any]) -> bool:
     return bool(
         dataset_report.get("formal_dataset_gate_pass", False)
@@ -583,6 +603,7 @@ def _final_task_fingerprint(args: argparse.Namespace, selection: Mapping[str, An
             "seeds": _resolved_seeds(args),
             "validation_radius_mm": float(args.validation_radius_mm),
             "test_radius_mm": float(args.test_radius_mm),
+            "evaluation_specs": final_evaluation_specs(args),
             "max_iter": int(preset_settings(str(args.preset))["max_iter"]),
             "dataset_sha256": file_sha256(args.tube_dataset),
             "assignment_sha256": file_sha256(
@@ -614,18 +635,7 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
             prediction_dir=out / "holdout_predictions" / f"seed_{seed}",
             angle_stride=1,
             max_iter=max_iter,
-            evaluation_specs=[
-                {
-                    "label": "validation_92p5",
-                    "split": "validation",
-                    "radius_mm": float(args.validation_radius_mm),
-                },
-                {
-                    "label": "test_100",
-                    "split": "test",
-                    "radius_mm": float(args.test_radius_mm),
-                },
-            ],
+            evaluation_specs=final_evaluation_specs(args),
         )
         for seed in seeds
     ]
@@ -636,7 +646,12 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
         skip_existing=bool(args.skip_existing),
     )
     validation = v5._flatten_evaluation_results(results, label="validation_92p5")
-    test = v5._flatten_evaluation_results(results, label="test_100")
+    test_evaluated = str(args.preset) == "formal"
+    test = (
+        v5._flatten_evaluation_results(results, label="test_100")
+        if test_evaluated
+        else validation.iloc[0:0].copy()
+    )
     validation.to_csv(out / "validation_92p5_metrics_all_seeds.csv", index=False)
     test.to_csv(out / "test_100_metrics_all_seeds.csv", index=False)
     validation_gate = aggregate_formal_seed_gate(validation)
@@ -658,6 +673,7 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
         "seeds": seeds,
         "validation_92p5_gate": validation_gate,
         "test_100_gate": test_gate,
+        "test_100_evaluated": test_evaluated,
         "formal_claims_allowed": formal_claims,
         "formal_model_gate_pass": formal_model_gate_pass(
             formal_claims_allowed=formal_claims,
@@ -711,8 +727,13 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         f"- Upstream formal dataset gate: `{audit['formal_claims_allowed']}`.",
         f"- Training rows (non-centerline only): `{split['training_rows']}`.",
         f"- Validation radius: `{float(args.validation_radius_mm):g} mm` (never used for fitting or selection outside validation).",
-        f"- Test radius: `{float(args.test_radius_mm):g} mm` (used only after model selection).",
+        (
+            f"- Test radius: `{float(args.test_radius_mm):g} mm` (formal-only, used after model selection)."
+            if training.get("test_100_evaluated", False)
+            else f"- Test radius: `{float(args.test_radius_mm):g} mm` was not evaluated by this non-formal run."
+        ),
         f"- Selected configuration: `{selection['selected_config_id']}`.",
+        f"- 100 mm test evaluated: `{training.get('test_100_evaluated', False)}`.",
         f"- 100 mm stable seed gate: `{training['test_100_gate']['stable_gate_pass']}` ({training['test_100_gate']['passed_seed_count']}/{training['test_100_gate']['total_seed_count']}).",
         f"- Formal model claim: `{training['formal_model_gate_pass']}`.",
         "",
@@ -720,13 +741,16 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         "",
         dataframe_to_markdown(validation),
         "",
-        "## Final untouched test (100 mm)",
-        "",
-        dataframe_to_markdown(test),
-        "",
         "Only Cartesian target coordinates (x, y, z) are model inputs. Radius, angle, family and branch metadata are retained for auditing and never exposed to the regressor.",
         "",
     ]
+    if training.get("test_100_evaluated", False):
+        lines[-2:-2] = [
+            "## Final held-out test (100 mm)",
+            "",
+            dataframe_to_markdown(test),
+            "",
+        ]
     summary_path = out / "experiment_summary.md"
     summary_path.write_text("\n".join(lines), encoding="utf-8")
     report = {
@@ -735,6 +759,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         "selected_config_id": selection["selected_config_id"],
         "validation_92p5_gate_pass": bool(training["validation_92p5_gate"]["stable_gate_pass"]),
         "test_100_gate_pass": bool(training["test_100_gate"]["stable_gate_pass"]),
+        "test_100_evaluated": bool(training.get("test_100_evaluated", False)),
         "formal_model_gate_pass": bool(training["formal_model_gate_pass"]),
         "summary_path": str(summary_path.resolve()),
     }
@@ -752,8 +777,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--robot-config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--phases", default="all")
     parser.add_argument("--preset", choices=("smoke", "pilot", "formal"), default="formal")
-    parser.add_argument("--validation-radius-mm", type=float, default=VALIDATION_RADIUS_MM)
-    parser.add_argument("--test-radius-mm", type=float, default=TEST_RADIUS_MM)
+    parser.set_defaults(
+        validation_radius_mm=VALIDATION_RADIUS_MM,
+        test_radius_mm=TEST_RADIUS_MM,
+    )
     parser.add_argument("--seeds", default=",".join(str(seed) for seed in FORMAL_SEEDS))
     parser.add_argument("--screen-config-limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)

@@ -235,6 +235,7 @@ V6 的 100 mm test 已经用于上述诊断，下一轮修复不能再把同一�
 - validation/test 半径不再暴露为伪可配置 CLI 参数，避免报告名与实际半径矛盾；
 - `is_centerline` 成为 tube annotation、dataset formal metadata 和 training-only support 的强制布尔字段；缺列或字符串伪布尔值均 fail closed；
 - 修复后正式 24+5 worker 全部 hash-compatible 复用，validation/test=`1/5,0/5` 和 strict 阴性不变。
+- consolidated Standards/Spec 复审结果为“无 hard/blocking finding”和 `Spec: no findings`；V5/V4 私有训练引擎依赖与局部解析重复作为不阻断的后续架构债保留。
 
 ## 10. 运行环境
 

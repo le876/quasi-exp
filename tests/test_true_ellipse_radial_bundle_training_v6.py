@@ -97,6 +97,11 @@ def test_formal_model_gate_requires_both_validation_and_heldout_100mm_test() -> 
         validation_gate={"stable_gate_pass": False},
         test_gate={"stable_gate_pass": True},
     ) is False
+    assert mod.formal_model_gate_pass(
+        formal_claims_allowed=True,
+        validation_gate={"stable_gate_pass": True},
+        test_gate={"stable_gate_pass": False},
+    ) is False
 
 
 def test_only_formal_preset_may_evaluate_the_registered_100mm_test() -> None:
@@ -117,11 +122,6 @@ def test_registered_holdout_radii_cannot_be_overridden_from_the_cli() -> None:
         mod.parse_args(["--validation-radius-mm", "90"])
     with pytest.raises(SystemExit):
         mod.parse_args(["--test-radius-mm", "99"])
-    assert mod.formal_model_gate_pass(
-        formal_claims_allowed=True,
-        validation_gate={"stable_gate_pass": True},
-        test_gate={"stable_gate_pass": False},
-    ) is False
 
 
 def test_training_authorization_requires_formal_upstream_dataset_gate() -> None:

@@ -118,8 +118,8 @@ pytest 8.2.2
 - hash-compatible formal training 复跑：`0.52 s`，选型、task fingerprint 与 5-seed 结论不变；
 - 审查后 smoke 全链：exit 0，`test_100_evaluated=false`，holdout predictions 只有 `validation_92p5.parquet`；
 - dataset/summary 重生：通过，dataset SHA-256 不变；
-- 全仓回归：`296 passed`；
-- 提交边界双轴审查：待完成。
+- 全仓回归：`299 passed`；
+- 提交边界双轴审查及 consolidated 复审：Standards 无 hard/blocking finding，`Spec: no findings`。
 
 ## 关键忽略产物
 

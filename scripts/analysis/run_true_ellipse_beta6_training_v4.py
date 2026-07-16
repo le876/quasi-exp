@@ -37,6 +37,11 @@ from features import build_features  # noqa: E402
 from fk_dh_numpy import fk_dh_batch  # noqa: E402
 from quasi_exp.io import load_config, load_robot_inputs  # noqa: E402
 from true_ellipse_atlas_utils import beta_bounds_rad, theta_from_beta_batch  # noqa: E402
+from true_ellipse_radial_bundle_engine import (  # noqa: E402
+    JointDomainSpec,
+    joint_margin_report,
+    registered_joint_domain,
+)
 
 
 TARGET_XYZ_COLS = ["x_target_m", "y_target_m", "z_target_m"]
@@ -254,6 +259,7 @@ def evaluate_beta_prediction(
     groups: np.ndarray | None = None,
     angle: np.ndarray | None = None,
     periodic: bool = True,
+    joint_domain: JointDomainSpec | None = None,
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
     beta = np.asarray(beta_pred, dtype=float).reshape(-1, 6)
     target = np.asarray(target_xyz, dtype=float).reshape(-1, 3)
@@ -279,10 +285,15 @@ def evaluate_beta_prediction(
         out.update(grouped_periodic_beta_metrics(beta, np.asarray(groups), np.asarray(angle)))
     else:
         out.update(periodic_beta_metrics(beta))
-    bounds = beta_bounds_rad("current")
-    violations = (beta < bounds[:, 0][None, :]) | (beta > bounds[:, 1][None, :])
-    out["beta_bound_violation_count"] = int(np.count_nonzero(violations))
-    out["beta_bound_violation_ratio"] = float(np.mean(violations))
+    domain = registered_joint_domain("current_v6") if joint_domain is None else joint_domain
+    margin = joint_margin_report(beta, domain=domain)
+    out["joint_domain_id"] = domain.domain_id
+    out["joint_domain_fingerprint"] = domain.fingerprint
+    out["prediction_min_joint_margin_deg"] = float(margin["min_joint_margin_deg"])
+    out["prediction_joint_margin_p01_deg"] = float(margin["joint_margin_p01_deg"])
+    out["prediction_joint_margin_p05_deg"] = float(margin["joint_margin_p05_deg"])
+    out["beta_bound_violation_count"] = int(margin["out_of_bounds_count"])
+    out["beta_bound_violation_ratio"] = float(margin["out_of_bounds_count"] / max(1, beta.size))
     return out, achieved, theta
 
 

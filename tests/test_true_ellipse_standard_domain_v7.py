@@ -409,3 +409,32 @@ def test_challenge_centerline_is_extracted_from_final_tube_labels() -> None:
     assert centerline["angle_idx"].tolist() == [0, 1, 2]
     assert centerline["is_centerline"].all()
     assert centerline[mod.v6_utils.atlas.BETA_COLS[0]].tolist() == [0.0, 1.0, 2.0]
+
+
+def test_surface_stage_schedule_stops_at_first_complete_gate_pass() -> None:
+    mod = _load_module()
+    stages = ({"name": "one"}, {"name": "two"}, {"name": "three"})
+    calls = []
+
+    def solve_stage(surface, stage):
+        calls.append(stage["name"])
+        return surface + 1, {"stage": stage["name"]}
+
+    def assess_stage(surface, report, stage):
+        return {
+            **report,
+            "surface_value": surface,
+            "formal_tube_label_gate_pass": stage["name"] == "two",
+        }
+
+    surface, report, attempts = mod.run_surface_stage_schedule(
+        initial_surface=0,
+        stage_specs=stages,
+        solve_stage=solve_stage,
+        assess_stage=assess_stage,
+    )
+
+    assert calls == ["one", "two"]
+    assert surface == 2
+    assert report["stage"] == "two"
+    assert [attempt["stage"] for attempt in attempts] == ["one", "two"]

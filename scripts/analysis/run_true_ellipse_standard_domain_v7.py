@@ -14,7 +14,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,7 +41,7 @@ DEFAULT_OUT_DIR = PROJECT_ROOT / "runs" / "true_ellipse_standard_domain_v7"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "radial", "tube", "dataset", "summary")
 RUNNER_STRATEGY_VERSION = 1
-TUBE_STRATEGY_VERSION = 2
+TUBE_STRATEGY_VERSION = 3
 DATASET_STRATEGY_VERSION = 1
 
 write_json = v6_utils.write_json
@@ -838,6 +838,30 @@ def _surface_stage_specs(lambda_margin: float, soft_margin_deg: float) -> tuple[
     )
 
 
+def run_surface_stage_schedule(
+    *,
+    initial_surface: Any,
+    stage_specs: Sequence[Mapping[str, Any]],
+    solve_stage: Callable[[Any, Mapping[str, Any]], tuple[Any, Mapping[str, Any]]],
+    assess_stage: Callable[[Any, Mapping[str, Any], Mapping[str, Any]], dict[str, Any]],
+) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    """Advance one surface stage at a time and stop on the first full gate pass."""
+
+    stages = tuple(stage_specs)
+    if not stages:
+        raise ValueError("surface stage schedule must not be empty")
+    current = initial_surface
+    attempts: list[dict[str, Any]] = []
+    selected: dict[str, Any] = {}
+    for stage in stages:
+        current, raw_report = solve_stage(current, stage)
+        selected = assess_stage(current, raw_report, stage)
+        attempts.append(selected)
+        if bool(selected.get("formal_tube_label_gate_pass", False)):
+            break
+    return current, selected, attempts
+
+
 def _initial_tube_surface(
     *,
     centerline: pd.DataFrame,
@@ -1004,41 +1028,63 @@ def _materialize_tube_radius(
     selected_report: dict[str, Any] = {}
     barrier_attempts: list[dict[str, Any]] = []
     for weight in policy.barrier_weights:
-        surface, surface_report = engine.optimize_tube_surface(
-            tube_targets=targets,
+        stages = _surface_stage_specs(weight, policy.soft_barrier_margin_deg)
+
+        def solve_stage(
+            stage_initial: pd.DataFrame,
+            stage: Mapping[str, Any],
+        ) -> tuple[pd.DataFrame, Mapping[str, Any]]:
+            return engine.optimize_tube_surface(
+                tube_targets=targets,
+                initial_surface=stage_initial,
+                offsets_mm=offsets,
+                domain=domain,
+                margin_policy=policy,
+                lengths_m=lengths_m,
+                p_end_local_m=p_end_local_m,
+                theta_sign=theta_sign,
+                stage_specs=(stage,),
+                cut_indices=parse_int_csv(args.cut_indices),
+                sweep_directions=("outward", "inward"),
+                max_nfev=int(args.max_opt_nfev),
+                compute_conditioning=False,
+                cut_workers=int(args.workers),
+            )
+
+        def assess_stage(
+            stage_surface: pd.DataFrame,
+            surface_report: Mapping[str, Any],
+            stage: Mapping[str, Any],
+        ) -> dict[str, Any]:
+            stage_surface["tube_success"] = stage_surface["xyz_residual_mm"].le(1.5)
+            geometric = v6_runner._tube_quality_metrics(
+                stage_surface,
+                final_points=int(args.final_points),
+                offsets_mm=offsets,
+            )
+            combined = {
+                **surface_report,
+                **geometric,
+                "rows": int(len(stage_surface)),
+                "expected_rows": int(args.final_points) * len(offsets) ** 2,
+                "tube_success_ratio": float(stage_surface["tube_success"].mean()),
+                "lambda_margin": float(weight),
+                "surface_stage": str(stage["name"]),
+            }
+            combined["formal_tube_label_gate_pass"] = formal_tube_label_gate(combined)
+            return combined
+
+        surface, combined, stage_attempts = run_surface_stage_schedule(
             initial_surface=initial,
-            offsets_mm=offsets,
-            domain=domain,
-            margin_policy=policy,
-            lengths_m=lengths_m,
-            p_end_local_m=p_end_local_m,
-            theta_sign=theta_sign,
-            stage_specs=_surface_stage_specs(weight, policy.soft_barrier_margin_deg),
-            cut_indices=parse_int_csv(args.cut_indices),
-            sweep_directions=("outward", "inward"),
-            max_nfev=int(args.max_opt_nfev),
-            compute_conditioning=False,
-            cut_workers=int(args.workers),
+            stage_specs=stages,
+            solve_stage=solve_stage,
+            assess_stage=assess_stage,
         )
-        surface["tube_success"] = surface["xyz_residual_mm"].le(1.5)
-        geometric = v6_runner._tube_quality_metrics(
-            surface,
-            final_points=int(args.final_points),
-            offsets_mm=offsets,
-        )
-        combined = {
-            **surface_report,
-            **geometric,
-            "rows": int(len(surface)),
-            "expected_rows": int(args.final_points) * len(offsets) ** 2,
-            "tube_success_ratio": float(surface["tube_success"].mean()),
-            "lambda_margin": float(weight),
-        }
-        combined["formal_tube_label_gate_pass"] = formal_tube_label_gate(combined)
-        barrier_attempts.append(
+        barrier_attempts.extend(
             {
-                key: combined.get(key)
+                key: attempt.get(key)
                 for key in (
+                    "surface_stage",
                     "lambda_margin",
                     "residual_p95_mm",
                     "residual_max_mm",
@@ -1052,6 +1098,7 @@ def _materialize_tube_radius(
                     "formal_tube_label_gate_pass",
                 )
             }
+            for attempt in stage_attempts
         )
         selected_surface = surface
         selected_report = combined

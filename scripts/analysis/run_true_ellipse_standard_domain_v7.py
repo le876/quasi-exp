@@ -1280,6 +1280,30 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     radial = ensure_radial_report(args)
     strict_radial = radial.get("strict_geometry_rmax_mm")
+    if not bool(radial.get("formal_radial_gate_pass", False)):
+        reason = (
+            "no_strict_radial_frontier"
+            if strict_radial is None
+            else "formal_radial_gate_failed_below_105mm"
+        )
+        report = {
+            "strategy_version": TUBE_STRATEGY_VERSION,
+            **formal_protocol_report(args),
+            "radial_task_fingerprint": str(radial.get("task_fingerprint", "")),
+            "radial_strict_rmax_mm": strict_radial,
+            "strict_geometry_rmax_mm": strict_radial,
+            "formal_tube_gate_pass": False,
+            "reason": reason,
+        }
+        report["task_fingerprint"] = stable_fingerprint(
+            {
+                "radial": report["radial_task_fingerprint"],
+                "protocol": report["protocol_fingerprint"],
+                "reason": reason,
+            }
+        )
+        write_json(out / "tube_report.json", report)
+        return report
     if strict_radial is None:
         report = {
             "strategy_version": TUBE_STRATEGY_VERSION,
@@ -1411,6 +1435,15 @@ def ensure_tube_report(args: argparse.Namespace) -> dict[str, Any]:
             summary_path.is_file()
             and str(cached.get("summary_sha256", "")) == file_sha256(summary_path)
         )
+        blocked_current = bool(
+            not radial.get("formal_radial_gate_pass", False)
+            and not cached.get("formal_tube_gate_pass", False)
+            and str(cached.get("reason", ""))
+            in {
+                "no_strict_radial_frontier",
+                "formal_radial_gate_failed_below_105mm",
+            }
+        )
         tubes_current = True
         if summary_current:
             summary = pd.read_csv(summary_path)
@@ -1431,8 +1464,8 @@ def ensure_tube_report(args: argparse.Namespace) -> dict[str, Any]:
             and str(cached.get("protocol_fingerprint", "")) == str(expected)
             and str(cached.get("radial_task_fingerprint", ""))
             == str(radial.get("task_fingerprint", ""))
-            and summary_current
-            and tubes_current
+            and (summary_current or blocked_current)
+            and (tubes_current or blocked_current)
         ):
             return cached
     return phase_tube(args)
@@ -1668,11 +1701,19 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         report = {
             "strategy_version": DATASET_STRATEGY_VERSION,
             **formal_protocol_report(args),
+            "tube_task_fingerprint": str(tube_report.get("task_fingerprint", "")),
             "formal_dataset_gate_pass": False,
             "dataset_gate_pass": False,
             "reason": "strict_tube_chain_below_registered_105mm_minimum_or_incomplete",
             "strict_geometry_rmax_mm": tube_report.get("strict_geometry_rmax_mm"),
         }
+        report["task_fingerprint"] = stable_fingerprint(
+            {
+                "tube": report["tube_task_fingerprint"],
+                "protocol": report["protocol_fingerprint"],
+                "reason": report["reason"],
+            }
+        )
         write_json(report_path, report)
         return report
 
@@ -1948,6 +1989,12 @@ def ensure_dataset_report(args: argparse.Namespace) -> dict[str, Any]:
     expected = formal_protocol_report(args)["protocol_fingerprint"]
     if path.exists():
         cached = read_json(path)
+        blocked_current = bool(
+            not tube.get("formal_tube_gate_pass", False)
+            and not cached.get("formal_dataset_gate_pass", False)
+            and str(cached.get("reason", ""))
+            == "strict_tube_chain_below_registered_105mm_minimum_or_incomplete"
+        )
         bound_artifacts = (
             ("attempt_path", "attempt_sha256"),
             ("manifest_path", "manifest_sha256"),
@@ -1994,7 +2041,7 @@ def ensure_dataset_report(args: argparse.Namespace) -> dict[str, Any]:
             and str(cached.get("protocol_fingerprint", "")) == str(expected)
             and str(cached.get("tube_task_fingerprint", ""))
             == str(tube.get("task_fingerprint", ""))
-            and artifacts_current
+            and (artifacts_current or blocked_current)
         ):
             return cached
     return phase_dataset(args)

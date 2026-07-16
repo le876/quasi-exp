@@ -368,6 +368,36 @@ def test_dataset_gate_requires_tube_split_support_margin_and_challenge() -> None
         assert mod.formal_dataset_gate(failed) is False
 
 
+def test_tube_phase_stops_before_materialization_when_radial_minimum_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(["--out-dir", str(tmp_path)])
+    monkeypatch.setattr(
+        mod,
+        "ensure_radial_report",
+        lambda _args: {
+            "formal_radial_gate_pass": False,
+            "strict_geometry_rmax_mm": 102.5,
+            "task_fingerprint": "radial-failure",
+        },
+    )
+    monkeypatch.setattr(
+        mod.v6_runner,
+        "load_family_spec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("tube materialization must not start")
+        ),
+    )
+
+    report = mod.phase_tube(args)
+
+    assert report["formal_tube_gate_pass"] is False
+    assert report["strict_geometry_rmax_mm"] == 102.5
+    assert report["reason"] == "formal_radial_gate_failed_below_105mm"
+
+
 def test_nonformal_parent_resampling_keeps_physical_phase_and_reindexes_grid() -> None:
     mod = _load_module()
     parent = pd.DataFrame(

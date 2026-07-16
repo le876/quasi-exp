@@ -184,6 +184,14 @@ def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> No
     assert baseline != changed_fingerprint
 
 
+def test_required_job_failure_short_circuits_an_unrecoverable_radius_bundle() -> None:
+    mod = _load_module()
+
+    assert mod._required_job_failed({"selected": False, "job_gate_pass": False}) is True
+    assert mod._required_job_failed({"selected": True, "job_gate_pass": False}) is True
+    assert mod._required_job_failed({"selected": True, "job_gate_pass": True}) is False
+
+
 def test_path_margin_decision_is_optional_for_v6_and_required_for_v7() -> None:
     mod = _load_module()
     frame = pd.DataFrame(

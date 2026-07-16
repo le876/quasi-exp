@@ -232,6 +232,16 @@ def aggregate_radius_bundle_gate(
     return report
 
 
+def _required_job_failed(report: Mapping[str, Any]) -> bool:
+    return bool(
+        not report.get("selected", False)
+        or not report.get(
+            "job_gate_pass",
+            report.get("centerline_gate_pass", False),
+        )
+    )
+
+
 def annotate_tube_rows(
     tube: pd.DataFrame,
     *,
@@ -1041,6 +1051,7 @@ def _solve_radial_radius(
     selected_paths: dict[tuple[int, str], pd.DataFrame] = {}
     selected_repeat_inputs: dict[tuple[int, str], pd.DataFrame] = {}
     rescue_cache: dict[str, dict[str, Any]] = {}
+    first_failed_job: str | None = None
     for predictor_type in required_predictors:
         predictor = predictors[predictor_type]
         for cut_idx in cuts:
@@ -1059,11 +1070,16 @@ def _solve_radial_radius(
                 rescue_cache=rescue_cache,
             )
             job_reports.append(report)
+            if _required_job_failed(report):
+                first_failed_job = f"{int(cut_idx)}:{predictor_type}"
+                break
             if selected is not None:
                 selected_paths[(int(cut_idx), predictor_type)] = selected
                 if repeat_input is None:
                     raise AssertionError("selected radial job returned no deterministic repeat input")
                 selected_repeat_inputs[(int(cut_idx), predictor_type)] = repeat_input
+        if first_failed_job is not None:
+            break
 
     cut_report = v6.cut_invariance_report(
         selected_paths,
@@ -1142,6 +1158,8 @@ def _solve_radial_radius(
         "predictors": predictor_reports,
         "required_predictors": required_predictors,
         "required_cuts": cuts,
+        "job_sweep_stopped_early": first_failed_job is not None,
+        "first_failed_job": first_failed_job,
         "jobs": job_reports,
         "cut_invariance": cut_report,
         "deterministic_repeatability": repeatability,

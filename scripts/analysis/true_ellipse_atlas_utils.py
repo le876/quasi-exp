@@ -19,8 +19,10 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "baselines"))
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 
 from fk_dh_numpy import fk_dh_batch  # noqa: E402
+from true_ellipse_radial_bundle_engine import joint_margin_barrier_residual  # noqa: E402
 
 
 BETA_COLS = [f"beta{i}_rad" for i in range(1, 7)]
@@ -837,6 +839,8 @@ def cyclic_trajectory_residual(
     lambda_acceleration: float = 0.0,
     lambda_anchor: float = 0.0,
     lambda_posture: float = 0.0,
+    lambda_margin: float = 0.0,
+    soft_margin_deg: float = 0.25,
     tracking_scale_m: float = 0.001,
     velocity_scale_rad: float = math.pi / 180.0,
     acceleration_scale_rad: float = math.pi / 720.0,
@@ -865,6 +869,16 @@ def cyclic_trajectory_residual(
         scale = np.maximum(np.max(np.abs(limits), axis=1), 1.0e-12)
         coeff = np.sqrt(np.asarray([2.0, 2.0, 1.0, 1.0, 0.5, 0.5], dtype=float))
         parts.append((math.sqrt(float(lambda_posture)) * (beta / scale[None, :]) * coeff[None, :]).reshape(-1))
+    if lambda_margin > 0.0:
+        limits = beta_bounds_rad("current") if bounds is None else np.asarray(bounds, dtype=float).reshape(6, 2)
+        parts.append(
+            math.sqrt(float(lambda_margin))
+            * joint_margin_barrier_residual(
+                beta,
+                bounds_rad=limits,
+                soft_margin_deg=float(soft_margin_deg),
+            )
+        )
     return np.concatenate(parts)
 
 
@@ -874,6 +888,7 @@ def cyclic_trajectory_jac_sparsity(
     include_acceleration: bool,
     include_anchor: bool,
     include_posture: bool,
+    include_margin: bool = False,
 ) -> sparse.csr_matrix:
     n = int(n_points)
     if n <= 0:
@@ -884,6 +899,8 @@ def cyclic_trajectory_jac_sparsity(
     if include_anchor:
         total_rows += 6 * n
     if include_posture:
+        total_rows += 6 * n
+    if include_margin:
         total_rows += 6 * n
     pattern = sparse.lil_matrix((total_rows, 6 * n), dtype=np.int8)
     row = 0
@@ -905,6 +922,10 @@ def cyclic_trajectory_jac_sparsity(
             pattern[row : row + 6, 6 * i : 6 * (i + 1)] = 1
             row += 6
     if include_posture:
+        for i in range(n):
+            pattern[row : row + 6, 6 * i : 6 * (i + 1)] = 1
+            row += 6
+    if include_margin:
         for i in range(n):
             pattern[row : row + 6, 6 * i : 6 * (i + 1)] = 1
             row += 6
@@ -1011,11 +1032,14 @@ def optimize_cyclic_trajectory(
         lambda_acceleration = float(stage.get("lambda_acceleration", 0.0))
         lambda_anchor = float(stage.get("lambda_anchor", 0.0))
         lambda_posture = float(stage.get("lambda_posture", 0.0))
+        lambda_margin = float(stage.get("lambda_margin", 0.0))
+        soft_margin_deg = float(stage.get("soft_margin_deg", 0.25))
         jac_pattern = cyclic_trajectory_jac_sparsity(
             n_points=len(frame),
             include_acceleration=lambda_acceleration > 0.0,
             include_anchor=lambda_anchor > 0.0,
             include_posture=lambda_posture > 0.0,
+            include_margin=lambda_margin > 0.0,
         )
 
         def objective(flat: np.ndarray) -> np.ndarray:
@@ -1031,6 +1055,8 @@ def optimize_cyclic_trajectory(
                 lambda_acceleration=lambda_acceleration,
                 lambda_anchor=lambda_anchor,
                 lambda_posture=lambda_posture,
+                lambda_margin=lambda_margin,
+                soft_margin_deg=soft_margin_deg,
             )
 
         result = least_squares(
@@ -1066,6 +1092,8 @@ def optimize_cyclic_trajectory(
                 "lambda_acceleration": lambda_acceleration,
                 "lambda_anchor": lambda_anchor,
                 "lambda_posture": lambda_posture,
+                "lambda_margin": lambda_margin,
+                "soft_margin_deg": soft_margin_deg,
             }
         )
         stage_report.update(evaluate_centerline_gates(stage_report))

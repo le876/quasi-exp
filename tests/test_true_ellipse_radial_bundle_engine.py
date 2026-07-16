@@ -106,6 +106,27 @@ def test_joint_margin_barrier_is_smooth_finite_and_stronger_near_a_limit() -> No
     assert np.linalg.norm(near_barrier) > 100.0 * np.linalg.norm(interior_barrier)
 
 
+def test_annotate_joint_margins_materializes_per_axis_and_minimum_fields() -> None:
+    domain = engine.registered_joint_domain("standard_beta34_10deg_v1")
+    frame = pd.DataFrame(
+        {
+            "beta1_rad": [0.0],
+            "beta2_rad": [0.0],
+            "beta3_rad": [np.deg2rad(9.9)],
+            "beta4_rad": [0.0],
+            "beta5_rad": [0.0],
+            "beta6_rad": [0.0],
+        }
+    )
+
+    annotated = engine.annotate_joint_margins(frame, domain=domain)
+
+    assert annotated["joint_domain_id"].tolist() == [domain.domain_id]
+    assert annotated["joint_domain_fingerprint"].tolist() == [domain.fingerprint]
+    assert annotated["beta3_margin_deg"].iloc[0] == pytest.approx(0.1)
+    assert annotated["min_joint_margin_deg"].iloc[0] == pytest.approx(0.1)
+
+
 def test_radius_frontier_stops_at_first_strict_failure_but_tracks_exploration() -> None:
     status = pd.DataFrame(
         {
@@ -227,3 +248,139 @@ def test_output_link_fingerprint_distinguishes_identity_and_tanh_parameterizatio
     assert identity.fingerprint != bounded.fingerprint
     with pytest.raises(ValueError, match="unregistered output link"):
         engine.registered_output_link("clip_after_test")
+
+
+def test_tube_surface_adjacency_contains_only_axis_neighbors_on_the_5x5_grid() -> None:
+    offsets = (-5.0, -2.5, 0.0, 2.5, 5.0)
+
+    edges = engine.tube_surface_adjacency(offsets)
+
+    assert len(edges) == 40
+    assert (((0.0, 0.0), (0.0, 2.5))) in edges
+    assert (((0.0, 0.0), (2.5, 0.0))) in edges
+    assert (((0.0, 0.0), (2.5, 2.5))) not in edges
+    assert len(edges) == len(set(edges))
+
+
+def test_tube_surface_sweep_order_starts_at_center_and_reverses_by_chebyshev_shell() -> None:
+    offsets = (-2.5, 0.0, 2.5)
+
+    outward = engine.tube_surface_sweep_order(offsets, direction="outward")
+    inward = engine.tube_surface_sweep_order(offsets, direction="inward")
+
+    assert outward[0] == (0.0, 0.0)
+    assert inward[-1] == (0.0, 0.0)
+    assert set(outward) == set(inward)
+    assert set(outward[:1]) == {(0.0, 0.0)}
+    assert set(outward[1:]) == {
+        (-2.5, -2.5),
+        (-2.5, 0.0),
+        (-2.5, 2.5),
+        (0.0, -2.5),
+        (0.0, 2.5),
+        (2.5, -2.5),
+        (2.5, 0.0),
+        (2.5, 2.5),
+    }
+
+
+def test_optimize_tube_surface_is_complete_cut_audited_and_deterministic() -> None:
+    import true_ellipse_atlas_utils as atlas
+
+    domain = engine.registered_joint_domain("standard_beta34_10deg_v1")
+    policy = engine.balanced_joint_margin_policy()
+    lengths_m = np.full(31, 0.04, dtype=float)
+    p_end_local_m = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)
+    angle = np.linspace(0.0, 2.0 * np.pi, 4, endpoint=False)
+    center_beta = np.zeros((4, 6), dtype=float)
+    center_beta[:, 4] = np.deg2rad(1.0 + 0.1 * np.sin(angle))
+    center_beta[:, 5] = np.deg2rad(-1.0 + 0.1 * np.cos(angle))
+    center_xyz = atlas.fk_from_beta_batch(
+        center_beta,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+    )
+    centerline = pd.DataFrame(
+        {
+            "angle_idx": np.arange(4),
+            "angle_rad": angle,
+            "x_target_m": center_xyz[:, 0],
+            "y_target_m": center_xyz[:, 1],
+            "z_target_m": center_xyz[:, 2],
+            "x_m": center_xyz[:, 0],
+            "y_m": center_xyz[:, 1],
+            "z_m": center_xyz[:, 2],
+        }
+    )
+    for index, column in enumerate(atlas.BETA_COLS):
+        centerline[column] = center_beta[:, index]
+    targets = atlas.make_normal_tube_targets(centerline, offsets_mm=(-1.0, 0.0, 1.0))
+    initial = targets.copy()
+    by_angle = centerline.set_index("angle_idx")
+    for column in atlas.BETA_COLS:
+        initial[column] = initial["angle_idx"].map(by_angle[column]).astype(float)
+    stages = (
+        {
+            "name": "surface_test",
+            "lambda_velocity": 0.1,
+            "lambda_acceleration": 0.0,
+            "lambda_anchor": 0.01,
+            "lambda_posture": 0.0,
+            "lambda_margin": 0.01,
+            "soft_margin_deg": 0.25,
+        },
+    )
+
+    first, first_report = engine.optimize_tube_surface(
+        tube_targets=targets,
+        initial_surface=initial,
+        offsets_mm=(-1.0, 0.0, 1.0),
+        domain=domain,
+        margin_policy=policy,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+        stage_specs=stages,
+        cut_indices=(0, 2),
+        sweep_directions=("outward", "inward"),
+        max_nfev=10,
+        compute_conditioning=False,
+    )
+    second, second_report = engine.optimize_tube_surface(
+        tube_targets=targets,
+        initial_surface=initial,
+        offsets_mm=(-1.0, 0.0, 1.0),
+        domain=domain,
+        margin_policy=policy,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+        stage_specs=stages,
+        cut_indices=(0, 2),
+        sweep_directions=("outward", "inward"),
+        max_nfev=10,
+        compute_conditioning=False,
+    )
+
+    assert len(first) == 4 * 9
+    assert not first.duplicated(["angle_idx", "tube_offset_id"]).any()
+    assert first_report["surface_complete"] is True
+    assert first_report["cut_count"] == 2
+    assert first_report["sweep_directions"] == ["outward", "inward"]
+    assert first_report["joint_domain_id"] == domain.domain_id
+    assert first_report["cut_pair_beta_p95_max_deg"] <= 1.0
+    assert {
+        "beta1_margin_deg",
+        "beta2_margin_deg",
+        "beta3_margin_deg",
+        "beta4_margin_deg",
+        "beta5_margin_deg",
+        "beta6_margin_deg",
+        "min_joint_margin_deg",
+    }.issubset(first.columns)
+    np.testing.assert_array_equal(
+        first[atlas.BETA_COLS].to_numpy(),
+        second[atlas.BETA_COLS].to_numpy(),
+    )
+    assert first_report["selected_surface_hash"] == second_report["selected_surface_hash"]

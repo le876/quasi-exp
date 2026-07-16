@@ -47,28 +47,9 @@ TUBE_OUTER_SHELL_STAGE = {
     "lambda_posture": 0.0,
 }
 
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Path):
-        return str(value)
-    raise TypeError(f"not JSON serializable: {type(value)!r}")
-
-
-def write_json(path: str | Path, payload: Any) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
+write_json = v6.write_json
+read_json = v6.read_json
+_json_default = v6.json_default
 
 
 def parse_float_csv(value: str | Iterable[float]) -> list[float]:
@@ -255,10 +236,6 @@ def annotate_tube_rows(
     return output
 
 
-def read_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
 def radius_slug(radius_mm: float) -> str:
     return f"r{float(radius_mm):06.2f}".replace(".", "p")
 
@@ -315,7 +292,11 @@ def _critical_legacy_artifact_paths(args: argparse.Namespace) -> tuple[list[Path
         v5_dir / "02_pointwise" / "selected_families.csv",
         v5_dir / "02_pointwise" / "pointwise_radius_summary.csv",
         v5_dir / "02_pointwise" / family_id / radius_slug(float(args.target_radius_mm)) / "targets.parquet",
-        v5_dir / "02_pointwise" / family_id / radius_slug(float(args.target_radius_mm)) / "pointwise_candidates.parquet",
+        v5_dir
+        / "02_pointwise"
+        / family_id
+        / radius_slug(float(args.target_radius_mm))
+        / "pointwise_candidates.parquet",
         v5_dir / "02_pointwise" / family_id / radius_slug(float(args.target_radius_mm)) / "pointwise_report.json",
         v5_dir / "03_branch" / "branch_radius_summary.csv",
         v5_dir / "04_tube" / "tube_radius_summary.csv",
@@ -1818,7 +1799,6 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         threshold_deg=3.0,
     )
     training_pool = v6.training_only_support_pool(assigned)
-    training_indices = training_pool.index.to_numpy(dtype=np.int64)
     # The helper resets its index, so recover the exact source indices by sample_id.
     source_index = pd.Series(assigned.index.to_numpy(), index=assigned["sample_id"].astype(str))
     training_indices = source_index.loc[training_pool["sample_id"].astype(str)].to_numpy(dtype=np.int64)

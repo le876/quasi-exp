@@ -46,6 +46,36 @@ class FamilySpec:
     phase_z_rad: float
 
 
+def json_default(value: Any) -> Any:
+    """Convert the NumPy and path values used in reports to JSON values."""
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"not JSON serializable: {type(value)!r}")
+
+
+def write_json(path: str | Path, payload: Any) -> None:
+    """Write a V6 report with deterministic, human-readable formatting."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=json_default),
+        encoding="utf-8",
+    )
+
+
+def read_json(path: str | Path) -> dict[str, Any]:
+    """Read a JSON object report."""
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def generate_radius_targets(
     family: FamilySpec,
     *,

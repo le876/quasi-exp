@@ -236,6 +236,7 @@ V6 的 100 mm test 已经用于上述诊断，下一轮修复不能再把同一�
 - `is_centerline` 成为 tube annotation、dataset formal metadata 和 training-only support 的强制布尔字段；缺列或字符串伪布尔值均 fail closed；
 - 修复后正式 24+5 worker 全部 hash-compatible 复用，validation/test=`1/5,0/5` 和 strict 阴性不变。
 - consolidated Standards/Spec 复审结果为“无 hard/blocking finding”和 `Spec: no findings`；V5/V4 私有训练引擎依赖与局部解析重复作为不阻断的后续架构债保留。
+- 最终提交前复审进一步统一 V6 JSON IO，删除 dataset 阶段死赋值，并把 dataset、split assignment、robot config 的父进程哈希从逐任务重复计算改为每批一次；worker 端独立哈希校验与原 task fingerprint 保持不变。
 
 ## 10. 运行环境
 

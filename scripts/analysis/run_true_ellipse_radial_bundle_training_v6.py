@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 
 import run_true_ellipse_family_training_v5 as v5  # noqa: E402
+import true_ellipse_radial_bundle_v6_utils as v6_utils  # noqa: E402
 from true_ellipse_family_v5_utils import dataframe_to_markdown, file_sha256, stable_fingerprint  # noqa: E402
 
 
@@ -36,32 +37,21 @@ DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_priority_grid_third_jo
 ALL_PHASES = ["audit", "split", "screen", "train", "summary"]
 TRAINING_STRATEGY_VERSION = 1
 
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Path):
-        return str(value)
-    raise TypeError(f"not JSON serializable: {type(value)!r}")
+write_json = v6_utils.write_json
+read_json = v6_utils.read_json
+_json_default = v6_utils.json_default
 
 
-def write_json(path: str | Path, payload: Any) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
-        encoding="utf-8",
-    )
-
-
-def read_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+@dataclass(frozen=True)
+class TrainingTaskInputs:
+    dataset_path: Path
+    dataset_sha256: str
+    assignment_path: Path
+    assignment_sha256: str
+    robot_config_path: Path
+    robot_config_sha256: str
+    theta_sign: float
+    evaluation_family_id: str
 
 
 def parse_int_csv(value: str | Iterable[int]) -> list[int]:
@@ -149,6 +139,8 @@ def make_training_assignment(
     missing = sorted(required - set(dataset.columns))
     if missing:
         raise ValueError(f"V6 training assignment missing columns: {missing}")
+    if not pd.api.types.is_bool_dtype(dataset["is_centerline"].dtype):
+        raise ValueError("V6 training assignment requires a boolean is_centerline column")
     assignment = dataset[
         [
             "sample_id",
@@ -434,9 +426,29 @@ def ensure_split_report(args: argparse.Namespace) -> dict[str, Any]:
     return phase_split(args)
 
 
+def resolve_training_task_inputs(args: argparse.Namespace) -> TrainingTaskInputs:
+    """Resolve and hash the immutable artifacts shared by one task batch."""
+    split = read_json(Path(args.out_dir) / "01_split" / "split_report.json")
+    robot_config = v5.v4.load_config(str(args.robot_config))
+    dataset_path = Path(args.tube_dataset).resolve()
+    assignment_path = (Path(args.out_dir) / "01_split" / "split_assignment.parquet").resolve()
+    robot_config_path = Path(args.robot_config).resolve()
+    return TrainingTaskInputs(
+        dataset_path=dataset_path,
+        dataset_sha256=file_sha256(dataset_path),
+        assignment_path=assignment_path,
+        assignment_sha256=file_sha256(assignment_path),
+        robot_config_path=robot_config_path,
+        robot_config_sha256=file_sha256(robot_config_path),
+        theta_sign=float(robot_config.get("kinematics", {}).get("theta_sign", -1.0)),
+        evaluation_family_id=str(split["evaluation_family_id"]),
+    )
+
+
 def _training_task(
     args: argparse.Namespace,
     *,
+    shared_inputs: TrainingTaskInputs,
     task_id: str,
     mode: str,
     config: v5.v4.ModelConfig,
@@ -448,9 +460,6 @@ def _training_task(
     max_iter: int,
     evaluation_specs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    split = read_json(Path(args.out_dir) / "01_split" / "split_report.json")
-    robot = v5.v4.load_config(str(args.robot_config))
-    assignment = Path(args.out_dir) / "01_split" / "split_assignment.parquet"
     task: dict[str, Any] = {
         "task_id": task_id,
         "mode": mode,
@@ -458,14 +467,14 @@ def _training_task(
         "training_task_strategy_version": TRAINING_STRATEGY_VERSION,
         "config": asdict(config),
         "seed": int(seed),
-        "dataset": str(Path(args.tube_dataset).resolve()),
-        "dataset_sha256": file_sha256(args.tube_dataset),
-        "assignment": str(assignment.resolve()),
-        "assignment_sha256": file_sha256(assignment),
-        "robot_config": str(Path(args.robot_config).resolve()),
-        "robot_config_sha256": file_sha256(args.robot_config),
-        "theta_sign": float(robot.get("kinematics", {}).get("theta_sign", -1.0)),
-        "evaluation_family_id": str(split["evaluation_family_id"]),
+        "dataset": str(shared_inputs.dataset_path),
+        "dataset_sha256": shared_inputs.dataset_sha256,
+        "assignment": str(shared_inputs.assignment_path),
+        "assignment_sha256": shared_inputs.assignment_sha256,
+        "robot_config": str(shared_inputs.robot_config_path),
+        "robot_config_sha256": shared_inputs.robot_config_sha256,
+        "theta_sign": shared_inputs.theta_sign,
+        "evaluation_family_id": shared_inputs.evaluation_family_id,
         "result_path": str(result_path.resolve()),
         "package_path": str(package_path.resolve()) if package_path is not None else None,
         "prediction_dir": str(prediction_dir.resolve()) if prediction_dir is not None else None,
@@ -511,9 +520,11 @@ def phase_screen(args: argparse.Namespace) -> dict[str, Any]:
     if limit > 0:
         configs = configs[:limit]
     seed = int(_resolved_seeds(args)[0])
+    shared_inputs = resolve_training_task_inputs(args)
     tasks = [
         _training_task(
             args,
+            shared_inputs=shared_inputs,
             task_id=f"screen_{config.config_id}_s{seed}",
             mode="v6_screen",
             config=config,
@@ -623,9 +634,11 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
     config = v5._config_from_dict(selection["selected_config"])
     seeds = _resolved_seeds(args)
     max_iter = int(preset_settings(str(args.preset))["max_iter"])
+    shared_inputs = resolve_training_task_inputs(args)
     tasks = [
         _training_task(
             args,
+            shared_inputs=shared_inputs,
             task_id=f"final_{config.config_id}_s{seed}",
             mode="v6_final",
             config=config,
@@ -726,7 +739,10 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         "",
         f"- Upstream formal dataset gate: `{audit['formal_claims_allowed']}`.",
         f"- Training rows (non-centerline only): `{split['training_rows']}`.",
-        f"- Validation radius: `{float(args.validation_radius_mm):g} mm` (never used for fitting or selection outside validation).",
+        (
+            f"- Validation radius: `{float(args.validation_radius_mm):g} mm` "
+            "(never used for fitting or selection outside validation)."
+        ),
         (
             f"- Test radius: `{float(args.test_radius_mm):g} mm` (formal-only, used after model selection)."
             if training.get("test_100_evaluated", False)
@@ -734,14 +750,22 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         ),
         f"- Selected configuration: `{selection['selected_config_id']}`.",
         f"- 100 mm test evaluated: `{training.get('test_100_evaluated', False)}`.",
-        f"- 100 mm stable seed gate: `{training['test_100_gate']['stable_gate_pass']}` ({training['test_100_gate']['passed_seed_count']}/{training['test_100_gate']['total_seed_count']}).",
+        (
+            f"- 100 mm stable seed gate: `{training['test_100_gate']['stable_gate_pass']}` "
+            f"({training['test_100_gate']['passed_seed_count']}/"
+            f"{training['test_100_gate']['total_seed_count']})."
+        ),
         f"- Formal model claim: `{training['formal_model_gate_pass']}`.",
         "",
         "## Validation (92.5 mm)",
         "",
         dataframe_to_markdown(validation),
         "",
-        "Only Cartesian target coordinates (x, y, z) are model inputs. Radius, angle, family and branch metadata are retained for auditing and never exposed to the regressor.",
+        (
+            "Only Cartesian target coordinates (x, y, z) are model inputs. Radius, angle, "
+            "family and branch metadata are retained for auditing and never exposed to the "
+            "regressor."
+        ),
         "",
     ]
     if training.get("test_100_evaluated", False):

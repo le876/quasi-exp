@@ -25,6 +25,30 @@ def _load_module():
     return module
 
 
+def test_shared_json_io_serializes_numpy_values_and_paths(tmp_path: Path) -> None:
+    mod = _load_module()
+    output = tmp_path / "nested" / "report.json"
+
+    mod.write_json(
+        output,
+        {
+            "count": np.int64(3),
+            "score": np.float64(1.25),
+            "passed": np.bool_(True),
+            "values": np.asarray([1, 2]),
+            "path": tmp_path,
+        },
+    )
+
+    assert mod.read_json(output) == {
+        "count": 3,
+        "score": 1.25,
+        "passed": True,
+        "values": [1, 2],
+        "path": str(tmp_path),
+    }
+
+
 def test_v6_target_is_rank2_and_preserves_fixed_family_phase() -> None:
     mod = _load_module()
     family = mod.FamilySpec(

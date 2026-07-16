@@ -593,6 +593,16 @@ def _radius_bundle_task_fingerprint(
             "rescue_candidates_per_angle": int(
                 getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
             ),
+            "rescue_kappa_threshold": float(
+                getattr(args, "rescue_kappa_threshold", -np.inf)
+            ),
+            "rescue_cache_strategy": "shared_predictor_rescue_cache_v2",
+            "share_rescue_cache_across_cuts": bool(
+                getattr(args, "share_rescue_cache_across_cuts", False)
+            ),
+            "stop_after_first_failed_job": bool(
+                getattr(args, "stop_after_first_failed_job", False)
+            ),
         }
     return stable_fingerprint(
         {
@@ -639,6 +649,9 @@ def _rescue_cache_fingerprint(
     residual_limit_mm: float,
     cluster_threshold_deg: float,
     seed: int,
+    lengths_m: np.ndarray,
+    p_end_local_m: np.ndarray,
+    theta_sign: float,
     pointwise_candidates: pd.DataFrame | None = None,
     expanded_seed_kappa_threshold: float = -np.inf,
 ) -> str:
@@ -652,7 +665,7 @@ def _rescue_cache_fingerprint(
     ]
     return stable_fingerprint(
         {
-            "strategy": "shared_predictor_rescue_cache_v1",
+            "strategy": "shared_predictor_rescue_cache_v2",
             "targets": np.round(
                 targets[target_columns].to_numpy(dtype=float), 12
             ).tolist(),
@@ -665,6 +678,13 @@ def _rescue_cache_fingerprint(
                 else []
             ),
             "joint_domain_fingerprint": domain.fingerprint,
+            "kinematics": {
+                "lengths_m": np.round(np.asarray(lengths_m, dtype=float), 12).tolist(),
+                "p_end_local_m": np.round(
+                    np.asarray(p_end_local_m, dtype=float), 12
+                ).tolist(),
+                "theta_sign": float(theta_sign),
+            },
             "rescue_budget": int(rescue_budget),
             "max_ik_nfev": int(max_ik_nfev),
             "residual_limit_mm": float(residual_limit_mm),
@@ -789,6 +809,9 @@ def _correct_one_job(
             residual_limit_mm=float(args.candidate_residual_mm),
             cluster_threshold_deg=float(args.candidate_cluster_deg),
             seed=int(args.seed),
+            lengths_m=np.asarray(lengths_m, dtype=float),
+            p_end_local_m=np.asarray(p_end_local_m, dtype=float),
+            theta_sign=float(theta_sign),
             pointwise_candidates=pointwise,
             expanded_seed_kappa_threshold=float(
                 getattr(args, "rescue_kappa_threshold", -np.inf)
@@ -1058,7 +1081,15 @@ def _solve_radial_radius(
     job_reports: list[dict[str, Any]] = []
     selected_paths: dict[tuple[int, str], pd.DataFrame] = {}
     selected_repeat_inputs: dict[tuple[int, str], pd.DataFrame] = {}
-    rescue_cache: dict[str, dict[str, Any]] = {}
+    share_rescue_cache = bool(
+        getattr(args, "share_rescue_cache_across_cuts", False)
+    )
+    rescue_cache: dict[str, dict[str, Any]] | None = (
+        {} if share_rescue_cache else None
+    )
+    stop_after_first_failure = bool(
+        getattr(args, "stop_after_first_failed_job", False)
+    )
     first_failed_job: str | None = None
     for predictor_type in required_predictors:
         predictor = predictors[predictor_type]
@@ -1079,14 +1110,16 @@ def _solve_radial_radius(
             )
             job_reports.append(report)
             if _required_job_failed(report):
-                first_failed_job = f"{int(cut_idx)}:{predictor_type}"
-                break
+                if first_failed_job is None:
+                    first_failed_job = f"{int(cut_idx)}:{predictor_type}"
+                if stop_after_first_failure:
+                    break
             if selected is not None:
                 selected_paths[(int(cut_idx), predictor_type)] = selected
                 if repeat_input is None:
                     raise AssertionError("selected radial job returned no deterministic repeat input")
                 selected_repeat_inputs[(int(cut_idx), predictor_type)] = repeat_input
-        if first_failed_job is not None:
+        if stop_after_first_failure and first_failed_job is not None:
             break
 
     cut_report = v6.cut_invariance_report(
@@ -1166,7 +1199,9 @@ def _solve_radial_radius(
         "predictors": predictor_reports,
         "required_predictors": required_predictors,
         "required_cuts": cuts,
-        "job_sweep_stopped_early": first_failed_job is not None,
+        "job_sweep_stopped_early": bool(
+            stop_after_first_failure and first_failed_job is not None
+        ),
         "first_failed_job": first_failed_job,
         "jobs": job_reports,
         "cut_invariance": cut_report,
@@ -2253,6 +2288,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--family-search-top-formal", type=int, default=8)
     parser.add_argument("--seed", type=int, default=20260715)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.set_defaults(
+        stop_after_first_failed_job=False,
+        share_rescue_cache_across_cuts=False,
+    )
     return parser.parse_args(argv)
 
 

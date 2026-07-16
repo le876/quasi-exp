@@ -146,6 +146,8 @@ def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> No
     for column in mod.v6.atlas.BETA_COLS:
         predictor[column] = 0.0
     domain = mod.registered_joint_domain("standard_beta34_10deg_v1")
+    lengths_m = np.linspace(0.01, 0.31, 31)
+    p_end_local_m = np.asarray([0.0, 0.0, 0.1, 1.0])
 
     baseline = mod._rescue_cache_fingerprint(
         targets=targets,
@@ -156,6 +158,9 @@ def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> No
         residual_limit_mm=2.0,
         cluster_threshold_deg=0.25,
         seed=20260716,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
     )
     repeat = mod._rescue_cache_fingerprint(
         targets=targets,
@@ -166,6 +171,9 @@ def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> No
         residual_limit_mm=2.0,
         cluster_threshold_deg=0.25,
         seed=20260716,
+        lengths_m=lengths_m.copy(),
+        p_end_local_m=p_end_local_m.copy(),
+        theta_sign=-1.0,
     )
     changed = predictor.copy()
     changed.loc[0, mod.v6.atlas.BETA_COLS[0]] = 1.0e-3
@@ -178,10 +186,36 @@ def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> No
         residual_limit_mm=2.0,
         cluster_threshold_deg=0.25,
         seed=20260716,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+    )
+    changed_kinematics_fingerprint = mod._rescue_cache_fingerprint(
+        targets=targets,
+        predictor=predictor,
+        domain=domain,
+        rescue_budget=24,
+        max_ik_nfev=200,
+        residual_limit_mm=2.0,
+        cluster_threshold_deg=0.25,
+        seed=20260716,
+        lengths_m=lengths_m + 1.0e-6,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
     )
 
     assert baseline == repeat
     assert baseline != changed_fingerprint
+    assert baseline != changed_kinematics_fingerprint
+
+
+def test_v6_defaults_preserve_full_failed_job_diagnostics_and_disable_shared_rescue_cache() -> None:
+    mod = _load_module()
+
+    args = mod.parse_args([])
+
+    assert args.stop_after_first_failed_job is False
+    assert args.share_rescue_cache_across_cuts is False
 
 
 def test_required_job_failure_short_circuits_an_unrecoverable_radius_bundle() -> None:

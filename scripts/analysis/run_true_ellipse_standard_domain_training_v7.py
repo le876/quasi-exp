@@ -45,7 +45,7 @@ DEFAULT_DATASET = (
 DEFAULT_OUT_DIR = PROJECT_ROOT / "runs" / "true_ellipse_standard_domain_training_v7"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "split", "screen", "train", "summary")
-TRAINING_STRATEGY_VERSION = 1
+TRAINING_STRATEGY_VERSION = 2
 
 write_json = upstream_v7.write_json
 read_json = upstream_v7.read_json
@@ -352,6 +352,54 @@ def resolve_holdout(
     return {"validation_radius_mm": validation, "test_radius_mm": test}
 
 
+def resolve_training_sources(
+    args: argparse.Namespace,
+    upstream: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve a test-free source view for smoke/pilot before opening data."""
+
+    formal = str(args.preset) == "formal"
+    path_key = "dataset_path" if formal else "nonformal_dataset_path"
+    hash_key = "dataset_sha256" if formal else "nonformal_dataset_sha256"
+    raw_path = upstream.get(path_key)
+    expected_hash = str(upstream.get(hash_key, ""))
+    if not raw_path or not expected_hash:
+        raise ValueError(f"upstream dataset report is missing {path_key}/{hash_key}")
+    dataset_path = Path(str(raw_path)).resolve()
+    if not dataset_path.is_file() or file_sha256(dataset_path) != expected_hash:
+        raise ValueError(f"registered training dataset changed: {path_key}")
+    if formal and Path(args.tube_dataset).resolve() != dataset_path:
+        raise ValueError("formal dataset override disagrees with upstream registration")
+
+    registered_paths = upstream.get("challenge_paths") or {}
+    registered_reports = upstream.get("challenge_reports") or {}
+    active_splits = ("validation", "test") if formal else ("validation",)
+    challenge_paths: dict[str, Path] = {}
+    challenge_hashes: dict[str, str] = {}
+    for split in active_splits:
+        raw_challenge = registered_paths.get(split)
+        expected_challenge_hash = str(
+            registered_reports.get(split, {}).get("challenge_artifact_sha256", "")
+        )
+        if not raw_challenge or not expected_challenge_hash:
+            raise ValueError(f"registered {split} challenge is missing")
+        challenge_path = Path(str(raw_challenge)).resolve()
+        if (
+            not challenge_path.is_file()
+            or file_sha256(challenge_path) != expected_challenge_hash
+        ):
+            raise ValueError(f"registered {split} challenge changed")
+        challenge_paths[split] = challenge_path
+        challenge_hashes[split] = expected_challenge_hash
+    return {
+        "dataset_path": dataset_path,
+        "dataset_sha256": expected_hash,
+        "challenge_paths": challenge_paths,
+        "challenge_hashes": challenge_hashes,
+        "test_access_allowed": formal,
+    }
+
+
 def formal_training_protocol_report(
     args: argparse.Namespace,
     upstream: Mapping[str, Any] | None = None,
@@ -411,19 +459,14 @@ def _audit_task_fingerprint(args: argparse.Namespace) -> str:
     report_path = Path(args.upstream_dir) / "03_dataset" / "dataset_report.json"
     upstream = read_json(report_path) if report_path.is_file() else {}
     protocol = formal_training_protocol_report(args, upstream) if upstream.get("holdout") else {}
-    challenge_paths = upstream.get("challenge_paths") or {}
+    sources = resolve_training_sources(args, upstream) if upstream.get("holdout") else None
     return stable_fingerprint(
         {
             "phase": "v7_training_audit",
             "strategy_version": TRAINING_STRATEGY_VERSION,
             "upstream_report": file_sha256(report_path) if report_path.is_file() else "missing",
-            "dataset": file_sha256(args.tube_dataset)
-            if Path(args.tube_dataset).is_file()
-            else "missing",
-            "challenges": {
-                key: file_sha256(path) if Path(path).is_file() else "missing"
-                for key, path in challenge_paths.items()
-            },
+            "dataset": sources["dataset_sha256"] if sources else "missing",
+            "challenges": sources["challenge_hashes"] if sources else {},
             "robot_config": file_sha256(args.robot_config)
             if Path(args.robot_config).is_file()
             else "missing",
@@ -441,9 +484,8 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
     upstream = read_json(upstream_path)
     holdout = resolve_holdout(args, upstream)
     protocol = formal_training_protocol_report(args, upstream)
-    dataset_path = Path(args.tube_dataset)
-    if not dataset_path.is_file():
-        raise FileNotFoundError(f"V7 tube dataset is missing: {dataset_path}")
+    sources = resolve_training_sources(args, upstream)
+    dataset_path = Path(sources["dataset_path"])
     dataset = pd.read_parquet(dataset_path)
     required = {
         "sample_id",
@@ -458,7 +500,8 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         *BETA_COLUMNS,
     }
     missing = sorted(required - set(dataset.columns))
-    challenge_paths = {key: Path(value) for key, value in (upstream.get("challenge_paths") or {}).items()}
+    challenge_paths = dict(sources["challenge_paths"])
+    challenge_hashes = dict(sources["challenge_hashes"])
     challenge_reports = upstream.get("challenge_reports") or {}
     domain = engine.registered_joint_domain("standard_beta34_10deg_v1")
     robot_config = v5.v4.load_config(str(args.robot_config))
@@ -470,10 +513,9 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
     checks = {
         "upstream_formal_dataset": bool(upstream.get("formal_dataset_gate_pass", False)),
         "dataset_path_bound": bool(
-            upstream.get("dataset_path")
-            and Path(str(upstream["dataset_path"])).resolve() == dataset_path.resolve()
+            dataset_path == Path(sources["dataset_path"])
         ),
-        "dataset_hash_bound": str(upstream.get("dataset_sha256", "")) == file_sha256(dataset_path),
+        "dataset_hash_bound": str(sources["dataset_sha256"]) == file_sha256(dataset_path),
         "required_columns": not missing,
         "unique_sample_ids": bool("sample_id" in dataset and dataset["sample_id"].is_unique),
         "single_family": bool("family_id" in dataset and dataset["family_id"].nunique() == 1),
@@ -483,22 +525,30 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
             and challenge_reports.get("validation", {}).get("challenge_artifact_sha256")
             == file_sha256(challenge_paths["validation"])
         ),
-        "test_challenge_bound": bool(
-            challenge_paths.get("test", Path("/missing")).is_file()
-            and challenge_reports.get("test", {}).get("challenge_gate_pass", False)
-            and challenge_reports.get("test", {}).get("challenge_artifact_sha256")
-            == file_sha256(challenge_paths["test"])
-        ),
         "standard_domain_matches_config": bool(
             configured_bounds.shape == (6, 2)
             and np.isfinite(configured_bounds).all()
             and np.allclose(configured_bounds, domain.bounds_rad, atol=1.0e-12, rtol=0.0)
         ),
-        "registered_holdout_present": bool(
+        "registered_validation_present": bool(
             np.any(np.isclose(dataset["radius_mm"], holdout["validation_radius_mm"]))
-            and np.any(np.isclose(dataset["radius_mm"], holdout["test_radius_mm"]))
         ),
     }
+    if str(args.preset) == "formal":
+        checks["test_challenge_bound"] = bool(
+            challenge_paths.get("test", Path("/missing")).is_file()
+            and challenge_reports.get("test", {}).get("challenge_gate_pass", False)
+            and challenge_reports.get("test", {}).get("challenge_artifact_sha256")
+            == challenge_hashes.get("test")
+        )
+        checks["registered_test_present"] = bool(
+            np.any(np.isclose(dataset["radius_mm"], holdout["test_radius_mm"]))
+        )
+    else:
+        checks["registered_test_inaccessible"] = bool(
+            "test" not in challenge_paths
+            and not np.any(np.isclose(dataset["radius_mm"], holdout["test_radius_mm"]))
+        )
     audit_gate = bool(all(checks.values()))
     report = {
         "strategy_version": TRAINING_STRATEGY_VERSION,
@@ -512,11 +562,10 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         "audit_gate_pass": audit_gate,
         "formal_claims_allowed": bool(audit_gate and protocol["formal_training_protocol_gate_pass"]),
         "dataset_path": str(dataset_path.resolve()),
-        "dataset_sha256": file_sha256(dataset_path),
+        "dataset_sha256": str(sources["dataset_sha256"]),
         "challenge_paths": {key: str(path.resolve()) for key, path in challenge_paths.items()},
-        "challenge_hashes": {
-            key: file_sha256(path) for key, path in challenge_paths.items() if path.is_file()
-        },
+        "challenge_hashes": challenge_hashes,
+        "test_access_allowed": bool(sources["test_access_allowed"]),
         "robot_config_path": str(Path(args.robot_config).resolve()),
         "robot_config_sha256": file_sha256(args.robot_config),
     }
@@ -545,7 +594,7 @@ def _split_task_fingerprint(args: argparse.Namespace, audit: Mapping[str, Any]) 
             "phase": "v7_training_split",
             "strategy_version": TRAINING_STRATEGY_VERSION,
             "audit": audit.get("task_fingerprint", ""),
-            "dataset": file_sha256(args.tube_dataset),
+            "dataset": str(audit.get("dataset_sha256", "")),
             "holdout": audit["holdout"],
         }
     )
@@ -555,7 +604,7 @@ def phase_split(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.out_dir) / "01_split"
     out.mkdir(parents=True, exist_ok=True)
     audit = ensure_audit_report(args)
-    dataset = pd.read_parquet(args.tube_dataset)
+    dataset = pd.read_parquet(audit["dataset_path"])
     assignment, split = make_training_assignment(dataset, **audit["holdout"])
     assignment.insert(0, "row_index", np.arange(len(assignment), dtype=np.int64))
     assignment_path = out / "split_assignment.parquet"
@@ -597,8 +646,8 @@ def resolve_training_inputs(args: argparse.Namespace) -> TrainingInputs:
     robot_config = v5.v4.load_config(str(args.robot_config))
     challenge_paths = {key: Path(value).resolve() for key, value in audit["challenge_paths"].items()}
     return TrainingInputs(
-        dataset_path=Path(args.tube_dataset).resolve(),
-        dataset_sha256=file_sha256(args.tube_dataset),
+        dataset_path=Path(audit["dataset_path"]).resolve(),
+        dataset_sha256=str(audit["dataset_sha256"]),
         assignment_path=Path(split["assignment_path"]).resolve(),
         assignment_sha256=file_sha256(split["assignment_path"]),
         robot_config_path=Path(args.robot_config).resolve(),

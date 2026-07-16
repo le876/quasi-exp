@@ -125,6 +125,43 @@ def test_nonformal_evaluation_never_registers_test_or_test_challenge() -> None:
     assert "test_tube_diagnostic" in {spec["label"] for spec in formal}
 
 
+def test_nonformal_training_sources_use_safe_dataset_and_validation_challenge_only(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    full = tmp_path / "full.parquet"
+    safe = tmp_path / "safe.parquet"
+    validation = tmp_path / "validation.parquet"
+    test = tmp_path / "test.parquet"
+    for path in (full, safe, validation, test):
+        path.write_bytes(path.name.encode())
+    upstream = {
+        "dataset_path": str(full),
+        "dataset_sha256": mod.file_sha256(full),
+        "nonformal_dataset_path": str(safe),
+        "nonformal_dataset_sha256": mod.file_sha256(safe),
+        "challenge_paths": {"validation": str(validation), "test": str(test)},
+        "challenge_reports": {
+            "validation": {"challenge_artifact_sha256": mod.file_sha256(validation)},
+            "test": {"challenge_artifact_sha256": mod.file_sha256(test)},
+        },
+    }
+
+    smoke = mod.resolve_training_sources(
+        Namespace(preset="smoke", tube_dataset=full), upstream
+    )
+    formal = mod.resolve_training_sources(
+        Namespace(preset="formal", tube_dataset=full), upstream
+    )
+
+    assert smoke["dataset_path"] == safe
+    assert smoke["dataset_sha256"] == mod.file_sha256(safe)
+    assert set(smoke["challenge_paths"]) == {"validation"}
+    assert test not in smoke["challenge_paths"].values()
+    assert formal["dataset_path"] == full
+    assert set(formal["challenge_paths"]) == {"validation", "test"}
+
+
 def test_formal_model_gate_requires_stable_integer_and_half_phase_but_not_tube() -> None:
     mod = _load_module()
     stable = {"stable_gate_pass": True, "passed_seed_count": 4, "total_seed_count": 5}

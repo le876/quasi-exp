@@ -42,7 +42,7 @@ DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "radial", "tube", "dataset", "summary")
 RUNNER_STRATEGY_VERSION = 1
 TUBE_STRATEGY_VERSION = 3
-DATASET_STRATEGY_VERSION = 1
+DATASET_STRATEGY_VERSION = 2
 
 write_json = v6_utils.write_json
 read_json = v6_utils.read_json
@@ -336,7 +336,12 @@ def compute_holdout_support_candidates(
         validation_radius = float(test_radius) - float(validation_gap_mm)
         holdout_mask = np.isclose(radii, float(test_radius), atol=1.0e-8)
         holdout_mask |= np.isclose(radii, validation_radius, atol=1.0e-8)
-        training_mask = ~holdout_mask & ~dataset["is_centerline"].astype(bool).to_numpy()
+        larger_radius_mask = radii > float(test_radius) + 1.0e-8
+        training_mask = (
+            ~holdout_mask
+            & ~larger_radius_mask
+            & ~dataset["is_centerline"].astype(bool).to_numpy()
+        )
         training_xyz = dataset.loc[training_mask, v6_utils.atlas.TARGET_XYZ_COLS].to_numpy(
             dtype=float
         )
@@ -375,11 +380,36 @@ def compute_holdout_support_candidates(
                     "training_rows": int(training_mask.sum()),
                     "target_rows": int(len(target_xyz)),
                     "held_out_radius_excluded": bool(not np.any(training_mask & target_mask)),
+                    "larger_radius_excluded": bool(
+                        not np.any(training_mask & larger_radius_mask)
+                    ),
                     **support,
                     "strict_support_gate_pass": bool(support_pass),
                 }
             )
     return pd.DataFrame(rows)
+
+
+def restrict_dataset_to_test_frontier(
+    dataset: pd.DataFrame,
+    *,
+    test_radius_mm: float,
+) -> pd.DataFrame:
+    """Keep the registered outer holdout as the dataset's largest radius."""
+
+    if "radius_mm" not in dataset:
+        raise ValueError("registered test-frontier selection requires radius_mm")
+    radius = dataset["radius_mm"].to_numpy(dtype=float)
+    selected = dataset.loc[radius <= float(test_radius_mm) + 1.0e-8].copy()
+    if selected.empty or not np.any(
+        np.isclose(
+            selected["radius_mm"].to_numpy(dtype=float),
+            float(test_radius_mm),
+            atol=1.0e-8,
+        )
+    ):
+        raise ValueError("registered test frontier is absent from the dataset")
+    return selected.reset_index(drop=True)
 
 
 def formal_dataset_gate(checks: Mapping[str, Any]) -> bool:
@@ -472,6 +502,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--family-search-top-formal", type=int, default=8)
     parser.add_argument("--seed", type=int, default=20260716)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.set_defaults(
+        stop_after_first_failed_job=True,
+        share_rescue_cache_across_cuts=True,
+    )
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_argv)
 
@@ -495,18 +529,58 @@ def _load_robot(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, float
     return inputs.lengths_m, inputs.p_end_local_m, theta_sign
 
 
-def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
-    out = Path(args.out_dir) / "00_audit"
-    out.mkdir(parents=True, exist_ok=True)
-    protocol = formal_protocol_report(args)
-    source_paths = {
+def _audit_source_paths(args: argparse.Namespace) -> dict[str, Path]:
+    return {
         "v6_audit": Path(args.v6_dir) / "00_audit" / "audit_report.json",
         "v6_radial": Path(args.v6_dir) / "01_radial" / "radial_report.json",
         "v6_tube": Path(args.v6_dir) / "02_tube" / "tube_report.json",
         "v6_dataset": Path(args.v6_dir) / "03_dataset" / "dataset_report.json",
-        "v6_checkpoint": REPO_ROOT / "docs" / "checkpoints" / "2026-07-15-true-ellipse-radial-bundle-v6.md",
+        "v6_checkpoint": REPO_ROOT
+        / "docs"
+        / "checkpoints"
+        / "2026-07-15-true-ellipse-radial-bundle-v6.md",
         "robot_config": Path(args.robot_config),
     }
+
+
+def _artifact_manifest(paths: Mapping[str, Path]) -> dict[str, dict[str, Any]]:
+    return {
+        name: {
+            "path": str(path.resolve()),
+            "sha256": file_sha256(path),
+            "bytes": int(path.stat().st_size),
+        }
+        for name, path in paths.items()
+        if path.is_file()
+    }
+
+
+def artifact_manifest_is_current(
+    manifest: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    for entry in manifest.values():
+        path = Path(str(entry.get("path", "")))
+        expected = str(entry.get("sha256", ""))
+        if not path.is_file() or not expected or file_sha256(path) != expected:
+            return False
+    return True
+
+
+def audit_dependency_fingerprint(args: argparse.Namespace) -> str:
+    manifest = _artifact_manifest(_audit_source_paths(args))
+    return stable_fingerprint(
+        {
+            "protocol": formal_protocol_report(args)["protocol_fingerprint"],
+            "sources": manifest,
+        }
+    )
+
+
+def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
+    out = Path(args.out_dir) / "00_audit"
+    out.mkdir(parents=True, exist_ok=True)
+    protocol = formal_protocol_report(args)
+    source_paths = _audit_source_paths(args)
     missing = sorted(name for name, path in source_paths.items() if not path.is_file())
     source_reports = {
         name: read_json(path)
@@ -534,15 +608,7 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         "standard_domain_matches_config": domain_matches_config,
         "fixed_family": str(args.family_id) == PRIMARY_FAMILY_ID,
     }
-    manifest = {
-        name: {
-            "path": str(path.resolve()),
-            "sha256": file_sha256(path),
-            "bytes": int(path.stat().st_size),
-        }
-        for name, path in source_paths.items()
-        if path.is_file()
-    }
+    manifest = _artifact_manifest(source_paths)
     report = {
         "strategy_version": RUNNER_STRATEGY_VERSION,
         **protocol,
@@ -554,19 +620,23 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
     report["formal_audit_gate_pass"] = bool(
         report["audit_gate_pass"] and report["formal_protocol_gate_pass"]
     )
-    report["task_fingerprint"] = stable_fingerprint(
-        {"protocol": report["protocol_fingerprint"], "sources": manifest}
-    )
+    report["task_fingerprint"] = audit_dependency_fingerprint(args)
     write_json(out / "audit_report.json", report)
     return report
 
 
 def ensure_audit_report(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.out_dir) / "00_audit" / "audit_report.json"
-    expected = formal_protocol_report(args)["protocol_fingerprint"]
+    expected_protocol = formal_protocol_report(args)["protocol_fingerprint"]
+    expected_task = audit_dependency_fingerprint(args)
     if path.exists():
         cached = read_json(path)
-        if str(cached.get("protocol_fingerprint", "")) == str(expected):
+        if (
+            int(cached.get("strategy_version", -1)) == RUNNER_STRATEGY_VERSION
+            and str(cached.get("protocol_fingerprint", "")) == str(expected_protocol)
+            and str(cached.get("task_fingerprint", "")) == str(expected_task)
+            and artifact_manifest_is_current(cached.get("source_manifest", {}))
+        ):
             return cached
     return phase_audit(args)
 
@@ -801,6 +871,7 @@ def phase_radial(args: argparse.Namespace) -> dict[str, Any]:
         "path_manifest": path_manifest,
         "path_manifest_path": str((out / "strict_path_manifest.json").resolve()),
         "radius_status_path": str((out / "radius_status.csv").resolve()),
+        "radius_status_sha256": file_sha256(out / "radius_status.csv"),
         **frontiers,
     }
     report["formal_radial_gate_pass"] = bool(
@@ -822,10 +893,24 @@ def phase_radial(args: argparse.Namespace) -> dict[str, Any]:
 
 def ensure_radial_report(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.out_dir) / "01_radial" / "radial_report.json"
+    audit = ensure_audit_report(args)
     expected = formal_protocol_report(args)["protocol_fingerprint"]
     if path.exists():
         cached = read_json(path)
-        if str(cached.get("protocol_fingerprint", "")) == str(expected):
+        status_path = Path(str(cached.get("radius_status_path", "")))
+        status_current = bool(
+            status_path.is_file()
+            and str(cached.get("radius_status_sha256", ""))
+            == file_sha256(status_path)
+        )
+        if (
+            int(cached.get("strategy_version", -1)) == RUNNER_STRATEGY_VERSION
+            and str(cached.get("protocol_fingerprint", "")) == str(expected)
+            and str(cached.get("audit_task_fingerprint", ""))
+            == str(audit.get("task_fingerprint", ""))
+            and artifact_manifest_is_current(cached.get("path_manifest", {}))
+            and status_current
+        ):
             return cached
     return phase_radial(args)
 
@@ -1287,6 +1372,7 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
         "tube_paths": tube_paths,
         "centerline_manifest": manifest,
         "summary_path": str((out / "tube_radius_summary.csv").resolve()),
+        "summary_sha256": file_sha256(out / "tube_radius_summary.csv"),
     }
     report["formal_tube_gate_pass"] = bool(
         report["formal_protocol_gate_pass"]
@@ -1314,10 +1400,38 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
 
 def ensure_tube_report(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.out_dir) / "02_tube" / "tube_report.json"
+    radial = ensure_radial_report(args)
     expected = formal_protocol_report(args)["protocol_fingerprint"]
     if path.exists():
         cached = read_json(path)
-        if str(cached.get("protocol_fingerprint", "")) == str(expected):
+        summary_path = Path(str(cached.get("summary_path", "")))
+        summary_current = bool(
+            summary_path.is_file()
+            and str(cached.get("summary_sha256", "")) == file_sha256(summary_path)
+        )
+        tubes_current = True
+        if summary_current:
+            summary = pd.read_csv(summary_path)
+            for row in summary.to_dict(orient="records"):
+                if not bool(row.get("formal_tube_label_gate_pass", False)):
+                    continue
+                artifact = Path(str(row.get("tube_artifact_path", "")))
+                expected_hash = str(row.get("tube_artifact_sha256", ""))
+                if (
+                    not artifact.is_file()
+                    or not expected_hash
+                    or file_sha256(artifact) != expected_hash
+                ):
+                    tubes_current = False
+                    break
+        if (
+            int(cached.get("strategy_version", -1)) == TUBE_STRATEGY_VERSION
+            and str(cached.get("protocol_fingerprint", "")) == str(expected)
+            and str(cached.get("radial_task_fingerprint", ""))
+            == str(radial.get("task_fingerprint", ""))
+            and summary_current
+            and tubes_current
+        ):
             return cached
     return phase_tube(args)
 
@@ -1542,6 +1656,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     report_path = out / "dataset_report.json"
     attempt_path = out / "dataset_attempt.parquet"
     final_path = out / "true_ellipse_standard_domain_tubes_v7.parquet"
+    nonformal_path = out / "true_ellipse_standard_domain_tubes_v7_nonformal.parquet"
     manifest_path = out / "trajectory_manifest.csv"
     support_path = out / "holdout_support_candidates.csv"
     centerline_dir = out / "integer_centerlines"
@@ -1618,13 +1733,6 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         and dataset["sample_id"].is_unique
         and dataset["family_id"].astype(str).nunique() == 1
     )
-    conflict = v5_expansion.branch_conflict_report(dataset, voxel_mm=2.0, threshold_deg=3.0)
-    margin = engine.joint_margin_report(
-        dataset[v6_utils.atlas.BETA_COLS].to_numpy(dtype=float),
-        domain=_domain(),
-        at_bound_tolerance_deg=_margin_policy().at_bound_tolerance_deg,
-    )
-    margin_gate = engine.evaluate_joint_margin_gate(margin, policy=_margin_policy())
     dataset = engine.annotate_joint_margins(dataset, domain=_domain())
 
     strict_rmax = float(tube_report["strict_geometry_rmax_mm"])
@@ -1654,15 +1762,20 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         holdout = selected
         break
     if holdout is None:
-        assigned = dataset.copy()
+        registered_dataset = dataset.copy()
+        assigned = registered_dataset.copy()
         assigned["split"] = "unassigned"
         assigned["used_for_training"] = False
         split_report = {"split_gate_pass": False, "reason": "no_support_backed_holdout_pair"}
         validation_support = False
         test_support = False
     else:
-        assigned, split_report = assign_dynamic_radius_splits(
+        registered_dataset = restrict_dataset_to_test_frontier(
             dataset,
+            test_radius_mm=float(holdout["test_radius_mm"]),
+        )
+        assigned, split_report = assign_dynamic_radius_splits(
+            registered_dataset,
             validation_radius_mm=float(holdout["validation_radius_mm"]),
             test_radius_mm=float(holdout["test_radius_mm"]),
         )
@@ -1677,6 +1790,27 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         test_support = bool(
             selected_support.loc[selected_support["role"].eq("test"), "strict_support_gate_pass"].all()
         )
+    selected_radii = sorted(float(value) for value in assigned["radius_mm"].unique())
+    selected_manifest = manifest[
+        manifest["radius_mm"].astype(float).isin(selected_radii)
+    ]
+    completeness_gate = bool(
+        len(selected_manifest) == len(selected_radii)
+        and selected_manifest["trajectory_complete"].fillna(False).astype(bool).all()
+        and assigned["sample_id"].is_unique
+        and assigned["family_id"].astype(str).nunique() == 1
+    )
+    conflict = v5_expansion.branch_conflict_report(
+        registered_dataset,
+        voxel_mm=2.0,
+        threshold_deg=3.0,
+    )
+    margin = engine.joint_margin_report(
+        registered_dataset[v6_utils.atlas.BETA_COLS].to_numpy(dtype=float),
+        domain=_domain(),
+        at_bound_tolerance_deg=_margin_policy().at_bound_tolerance_deg,
+    )
+    margin_gate = engine.evaluate_joint_margin_gate(margin, policy=_margin_policy())
     assigned.to_parquet(attempt_path, index=False, compression="zstd")
 
     challenge_reports: dict[str, Any] = {}
@@ -1740,6 +1874,11 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     dataset_gate = formal_dataset_gate(checks)
     if dataset_gate:
         assigned.to_parquet(final_path, index=False, compression="zstd")
+        assigned.loc[~assigned["split"].eq("test")].to_parquet(
+            nonformal_path,
+            index=False,
+            compression="zstd",
+        )
     report = {
         "strategy_version": DATASET_STRATEGY_VERSION,
         **formal_protocol_report(args),
@@ -1750,9 +1889,10 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "formal_dataset_gate_pass": dataset_gate,
         "checks_recomputed": checks,
         "rows": int(len(assigned)),
-        "expected_rows": int(len(radii) * int(args.final_points) * 25),
+        "expected_rows": int(len(selected_radii) * int(args.final_points) * 25),
         "trajectory_count": int(assigned["trajectory_id"].nunique()),
-        "radii_mm": list(radii),
+        "radii_mm": selected_radii,
+        "materialized_radii_mm": list(radii),
         "unique_sample_ids": bool(assigned["sample_id"].is_unique),
         "missing_metadata_columns": missing_metadata,
         "split": split_report,
@@ -1774,6 +1914,11 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "manifest_sha256": file_sha256(manifest_path),
         "dataset_path": str(final_path.resolve()) if dataset_gate else None,
         "dataset_sha256": file_sha256(final_path) if dataset_gate else None,
+        "nonformal_dataset_path": str(nonformal_path.resolve()) if dataset_gate else None,
+        "nonformal_dataset_sha256": file_sha256(nonformal_path) if dataset_gate else None,
+        "nonformal_dataset_rows": int((~assigned["split"].eq("test")).sum())
+        if dataset_gate
+        else 0,
         "model_input_columns": list(v6_utils.atlas.TARGET_XYZ_COLS),
     }
     report["task_fingerprint"] = stable_fingerprint(
@@ -1781,6 +1926,8 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "tube": report["tube_task_fingerprint"],
             "protocol": report["protocol_fingerprint"],
             "attempt": report["attempt_sha256"],
+            "dataset": report["dataset_sha256"],
+            "nonformal_dataset": report["nonformal_dataset_sha256"],
             "manifest": report["manifest_sha256"],
             "support": report["support_candidates_sha256"],
             "challenges": {
@@ -1795,10 +1942,58 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
 
 def ensure_dataset_report(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.out_dir) / "03_dataset" / "dataset_report.json"
+    tube = ensure_tube_report(args)
     expected = formal_protocol_report(args)["protocol_fingerprint"]
     if path.exists():
         cached = read_json(path)
-        if str(cached.get("protocol_fingerprint", "")) == str(expected):
+        bound_artifacts = (
+            ("attempt_path", "attempt_sha256"),
+            ("manifest_path", "manifest_sha256"),
+            ("support_candidates_path", "support_candidates_sha256"),
+        )
+        artifacts_current = True
+        for path_key, hash_key in bound_artifacts:
+            artifact = Path(str(cached.get(path_key, "")))
+            expected_hash = str(cached.get(hash_key, ""))
+            if (
+                not artifact.is_file()
+                or not expected_hash
+                or file_sha256(artifact) != expected_hash
+            ):
+                artifacts_current = False
+                break
+        if artifacts_current:
+            for split, challenge in (cached.get("challenge_reports") or {}).items():
+                artifact = Path(str(challenge.get("challenge_artifact_path", "")))
+                expected_hash = str(challenge.get("challenge_artifact_sha256", ""))
+                if (
+                    not artifact.is_file()
+                    or not expected_hash
+                    or file_sha256(artifact) != expected_hash
+                ):
+                    artifacts_current = False
+                    break
+        if artifacts_current and bool(cached.get("formal_dataset_gate_pass", False)):
+            for path_key, hash_key in (
+                ("dataset_path", "dataset_sha256"),
+                ("nonformal_dataset_path", "nonformal_dataset_sha256"),
+            ):
+                artifact = Path(str(cached.get(path_key, "")))
+                expected_hash = str(cached.get(hash_key, ""))
+                if (
+                    not artifact.is_file()
+                    or not expected_hash
+                    or file_sha256(artifact) != expected_hash
+                ):
+                    artifacts_current = False
+                    break
+        if (
+            int(cached.get("strategy_version", -1)) == DATASET_STRATEGY_VERSION
+            and str(cached.get("protocol_fingerprint", "")) == str(expected)
+            and str(cached.get("tube_task_fingerprint", ""))
+            == str(tube.get("task_fingerprint", ""))
+            and artifacts_current
+        ):
             return cached
     return phase_dataset(args)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -36,6 +37,8 @@ def test_cli_defaults_register_standard_domain_120mm_protocol() -> None:
     assert args.rescue_candidates_per_angle == 24
     assert args.rescue_kappa_threshold == 100.0
     assert args.lambda_margin == 0.01
+    assert args.stop_after_first_failed_job is True
+    assert args.share_rescue_cache_across_cuts is True
     assert mod.parse_float_csv(args.radius_checkpoints_mm) == list(
         mod.engine.v7_standard_domain_protocol().formal_checkpoints_mm
     )
@@ -249,10 +252,10 @@ def test_half_phase_predictor_uses_cyclic_neighbor_average() -> None:
     assert predictor["radial_predictor_type"].eq("cyclic_half_phase_average").all()
 
 
-def test_support_candidate_table_uses_only_strict_training_rows() -> None:
+def test_support_candidate_table_uses_only_strict_training_rows_below_candidate_test() -> None:
     mod = _load_module()
     rows = []
-    for radius in (75.0, 97.5, 105.0):
+    for radius in (75.0, 97.5, 105.0, 110.0):
         for angle in range(4):
             rows.append(
                 {
@@ -282,6 +285,65 @@ def test_support_candidate_table_uses_only_strict_training_rows() -> None:
     assert table["validation_radius_mm"].eq(97.5).all()
     assert table["training_rows"].eq(4).all()
     assert table["held_out_radius_excluded"].all()
+    assert table["larger_radius_excluded"].all()
+
+
+def test_registered_test_frontier_excludes_larger_materialized_radii() -> None:
+    mod = _load_module()
+    dataset = pd.DataFrame(
+        {
+            "sample_id": ["a", "b", "c", "d"],
+            "radius_mm": [97.5, 105.0, 106.25, 107.5],
+        }
+    )
+
+    selected = mod.restrict_dataset_to_test_frontier(dataset, test_radius_mm=105.0)
+
+    assert selected["sample_id"].tolist() == ["a", "b"]
+    assert selected["radius_mm"].max() == 105.0
+
+
+def test_audit_dependency_fingerprint_changes_with_v6_source(tmp_path: Path) -> None:
+    mod = _load_module()
+    v6_dir = tmp_path / "v6"
+    for relative in (
+        "00_audit/audit_report.json",
+        "01_radial/radial_report.json",
+        "02_tube/tube_report.json",
+        "03_dataset/dataset_report.json",
+    ):
+        path = v6_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"gate": True}), encoding="utf-8")
+    args = mod.parse_args(
+        [
+            "--preset",
+            "smoke",
+            "--v6-dir",
+            str(v6_dir),
+            "--robot-config",
+            str(REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"),
+        ]
+    )
+
+    baseline = mod.audit_dependency_fingerprint(args)
+    (v6_dir / "00_audit" / "audit_report.json").write_text(
+        json.dumps({"gate": False}),
+        encoding="utf-8",
+    )
+
+    assert mod.audit_dependency_fingerprint(args) != baseline
+
+
+def test_report_artifact_manifest_fails_closed_after_mutation(tmp_path: Path) -> None:
+    mod = _load_module()
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"before")
+    manifest = {"one": {"path": str(artifact), "sha256": mod.file_sha256(artifact)}}
+
+    assert mod.artifact_manifest_is_current(manifest) is True
+    artifact.write_bytes(b"after")
+    assert mod.artifact_manifest_is_current(manifest) is False
 
 
 def test_dataset_gate_requires_tube_split_support_margin_and_challenge() -> None:

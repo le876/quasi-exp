@@ -431,6 +431,7 @@ def formal_training_protocol_report(
             "standard_beta34_10deg_v1"
         ).domain_id
         == "standard_beta34_10deg_v1",
+        "declared_runtime": upstream_v7.declared_runtime_gate(),
     }
     normalized = {key: bool(value) for key, value in checks.items()}
     protocol = {
@@ -447,6 +448,7 @@ def formal_training_protocol_report(
         ).fingerprint,
         "output_link_ids": ["identity", "tanh_bounds"],
         "settings": preset_settings(str(args.preset)),
+        "runtime": upstream_v7.runtime_environment_report(),
     }
     return {
         "formal_training_protocol_gate_pass": bool(all(normalized.values())),

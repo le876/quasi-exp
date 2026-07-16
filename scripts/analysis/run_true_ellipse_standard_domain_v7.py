@@ -18,6 +18,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+import pyarrow
+import scipy
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +45,13 @@ ALL_PHASES = ("audit", "radial", "tube", "dataset", "summary")
 RUNNER_STRATEGY_VERSION = 1
 TUBE_STRATEGY_VERSION = 3
 DATASET_STRATEGY_VERSION = 2
+DECLARED_RUNTIME = {
+    "python_series": "3.11",
+    "numpy": "1.26.4",
+    "scipy": "1.11.4",
+    "pandas": "2.2.2",
+    "pyarrow": "16.1.0",
+}
 
 write_json = v6_utils.write_json
 read_json = v6_utils.read_json
@@ -86,12 +95,29 @@ def _margin_policy() -> engine.JointMarginPolicy:
     return engine.balanced_joint_margin_policy()
 
 
+def runtime_environment_report() -> dict[str, str]:
+    return {
+        "python": ".".join(str(value) for value in sys.version_info[:3]),
+        "python_series": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "numpy": str(np.__version__),
+        "scipy": str(scipy.__version__),
+        "pandas": str(pd.__version__),
+        "pyarrow": str(pyarrow.__version__),
+    }
+
+
+def declared_runtime_gate(runtime: Mapping[str, str] | None = None) -> bool:
+    observed = runtime_environment_report() if runtime is None else dict(runtime)
+    return all(observed.get(key) == value for key, value in DECLARED_RUNTIME.items())
+
+
 def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
     registered = engine.v7_standard_domain_protocol()
     domain = engine.registered_joint_domain(str(args.joint_domain_id))
     checkpoints = tuple(parse_float_csv(args.radius_checkpoints_mm))
     cuts = tuple(parse_int_csv(args.cut_indices))
     anchors = tuple(parse_name_csv(args.anchor_schedules))
+    runtime = runtime_environment_report()
     checks = {
         "formal_preset": str(args.preset) == "formal",
         "fixed_family": str(args.family_id) == registered.family_id,
@@ -110,6 +136,7 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         and np.isclose(float(args.soft_margin_deg), _margin_policy().soft_barrier_margin_deg),
         "registered_margin_weight": np.isclose(float(args.lambda_margin), 1.0e-2),
         "formal_tube_offsets": tuple(parse_float_csv(args.tube_offsets_mm)) == v6_utils.FORMAL_TUBE_OFFSETS_MM,
+        "declared_runtime": declared_runtime_gate(runtime),
     }
     normalized = {key: bool(value) for key, value in checks.items()}
     protocol = {
@@ -133,6 +160,7 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "soft_margin_deg": float(args.soft_margin_deg),
         "joint_domain_fingerprint": domain.fingerprint,
         "joint_margin_policy_fingerprint": _margin_policy().fingerprint,
+        "runtime": runtime,
     }
     return {
         "formal_protocol_gate_pass": bool(all(normalized.values())),

@@ -43,6 +43,9 @@ def test_cli_defaults_register_standard_domain_120mm_protocol() -> None:
         mod.engine.v7_standard_domain_protocol().formal_checkpoints_mm
     )
     assert report["formal_protocol_gate_pass"] is True
+    assert report["checks"]["declared_runtime"] is True
+    assert report["protocol"]["runtime"]["python_series"] == "3.11"
+    assert mod.declared_runtime_gate(report["protocol"]["runtime"]) is True
     assert report["joint_domain_fingerprint"] == mod.engine.registered_joint_domain(
         "standard_beta34_10deg_v1"
     ).fingerprint

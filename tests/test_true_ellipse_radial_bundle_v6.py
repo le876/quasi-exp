@@ -461,6 +461,62 @@ def test_candidate_layer_filter_enforces_two_mm_quarter_degree_and_eight_candida
     assert filtered.groupby("angle_idx").size().ge(1).all()
 
 
+def test_rescue_seed_budget_expands_beyond_legacy_eight_candidate_mode() -> None:
+    mod = _load_module()
+
+    assert mod.rescue_seeds_per_scale(8) == 2
+    assert mod.rescue_seeds_per_scale(24) == 8
+    with pytest.raises(ValueError, match="positive"):
+        mod.rescue_seeds_per_scale(0)
+
+
+def test_large_rescue_budget_materializes_24_seeds_with_deterministic_angle_workers() -> None:
+    mod = _load_module()
+    beta = np.zeros((1, 6), dtype=float)
+    lengths_m = np.ones(31, dtype=float)
+    p_end_local_m = np.asarray([0.0, 0.0, 0.0, 1.0])
+    xyz = mod.atlas.fk_from_beta_batch(
+        beta,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+    )[0]
+    targets = pd.DataFrame(
+        {
+            "angle_idx": [0, 1],
+            "angle_rad": [0.0, np.pi],
+            "family_id": ["f", "f"],
+            "radius_mm": [104.5, 104.5],
+            "x_target_m": [xyz[0], xyz[0]],
+            "y_target_m": [xyz[1], xyz[1]],
+            "z_target_m": [xyz[2], xyz[2]],
+        }
+    )
+    predictor = targets[["angle_idx", "angle_rad", "family_id", "radius_mm"]].copy()
+    for column in mod.atlas.BETA_COLS:
+        predictor[column] = 0.0
+
+    candidates, report = mod.generate_radial_candidate_layers(
+        targets,
+        predictor,
+        bounds=np.deg2rad(np.asarray([[-30.0, 30.0]] * 6)),
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+        max_nfev=1,
+        max_seed_count=24,
+        residual_limit_mm=1.0e6,
+        cluster_threshold_deg=0.0,
+        max_candidates_per_angle=24,
+        workers=2,
+    )
+
+    assert report["nullspace_seeds_per_scale"] == 8
+    assert report["candidate_workers"] == 2
+    assert report["raw_candidate_rows"] == 48
+    assert candidates.groupby("angle_idx").size().eq(24).all()
+
+
 def test_exact_repeatability_is_not_satisfied_by_a_numerically_close_rerun() -> None:
     mod = _load_module()
     first = _path(mod, radius_mm=81.0)

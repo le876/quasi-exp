@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -801,6 +802,17 @@ def repeat_input_for_strategy(
     raise ValueError(f"unsupported selected solver strategy: {strategy}")
 
 
+def rescue_seeds_per_scale(max_seed_count: int) -> int:
+    """Preserve V6's legacy budget while fully populating larger V7 rescues."""
+
+    budget = int(max_seed_count)
+    if budget <= 0:
+        raise ValueError("rescue max_seed_count must be positive")
+    if budget <= 8:
+        return 2
+    return int(math.ceil((budget - 1) / 3.0))
+
+
 def generate_radial_candidate_layers(
     targets: pd.DataFrame,
     predictor: pd.DataFrame,
@@ -816,6 +828,7 @@ def generate_radial_candidate_layers(
     cluster_threshold_deg: float = 0.25,
     max_candidates_per_angle: int = 8,
     seed: int = 0,
+    workers: int = 1,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Generate bounded per-angle IK candidates around a radial predictor."""
     target_ordered = restore_angle_order(targets)
@@ -824,8 +837,11 @@ def generate_radial_candidate_layers(
         raise ValueError("candidate generation requires target/predictor angle alignment")
     limits = np.asarray(bounds, dtype=float).reshape(6, 2)
     pointwise = pointwise_candidates if pointwise_candidates is not None else pd.DataFrame()
-    records: list[dict[str, Any]] = []
-    for position, target_row in target_ordered.iterrows():
+    if int(workers) < 1:
+        raise ValueError("candidate workers must be positive")
+
+    def solve_angle(item: tuple[int, pd.Series]) -> list[dict[str, Any]]:
+        position, target_row = item
         angle_idx = int(target_row["angle_idx"])
         prediction = predictor_ordered.iloc[position][atlas.BETA_COLS].to_numpy(dtype=float)
         jac = atlas.numerical_jacobian_beta(
@@ -834,12 +850,13 @@ def generate_radial_candidate_layers(
             p_end_local_m=np.asarray(p_end_local_m, dtype=float),
             theta_sign=float(theta_sign),
         )
+        seeds_per_scale = rescue_seeds_per_scale(int(max_seed_count))
         null_seeds = atlas.generate_nullspace_seeds(
             prediction,
             jac,
             bounds=limits,
             scales_deg=(0.25, 0.5, 1.0),
-            seeds_per_scale=2,
+            seeds_per_scale=seeds_per_scale,
             seed=int(seed) + angle_idx,
         )
         seeds = [prediction]
@@ -879,6 +896,7 @@ def generate_radial_candidate_layers(
             center_beta=prediction,
             lambda_center=1.0e-3,
         )
+        angle_records: list[dict[str, Any]] = []
         for solution in solutions:
             record = target_row.to_dict()
             record.update(
@@ -893,7 +911,17 @@ def generate_radial_candidate_layers(
                 record[column] = float(solution.beta_rad[beta_idx])
             for xyz_idx, column in enumerate(atlas.XYZ_COLS):
                 record[column] = float(solution.xyz_m[xyz_idx])
-            records.append(record)
+            angle_records.append(record)
+        return angle_records
+
+    items = list(target_ordered.iterrows())
+    worker_count = min(int(workers), len(items)) if items else 1
+    if worker_count == 1:
+        batches = [solve_angle(item) for item in items]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            batches = list(executor.map(solve_angle, items))
+    records = [record for batch in batches for record in batch]
     raw = pd.DataFrame(records)
     filtered, filter_report = filter_candidate_layers(
         raw,
@@ -906,6 +934,8 @@ def generate_radial_candidate_layers(
         **filter_report,
         "raw_candidate_rows": int(len(raw)),
         "max_seed_count": int(max_seed_count),
+        "nullspace_seeds_per_scale": rescue_seeds_per_scale(int(max_seed_count)),
+        "candidate_workers": int(worker_count),
         "candidate_generation_gate_pass": bool(filter_report["candidate_layer_gate_pass"]),
     }
     return filtered, report

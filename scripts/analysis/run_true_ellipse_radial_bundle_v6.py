@@ -715,6 +715,9 @@ def _correct_one_job(
 
     rescue_report: dict[str, Any] | None = None
     if selected_path is None:
+        rescue_budget = int(
+            getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
+        )
         pointwise = _pointwise_candidates_for_radius(
             args,
             family_id=str(family_id),
@@ -729,15 +732,12 @@ def _correct_one_job(
             theta_sign=theta_sign,
             max_nfev=int(args.max_ik_nfev),
             pointwise_candidates=pointwise,
-            max_seed_count=int(
-                getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
-            ),
+            max_seed_count=rescue_budget,
             residual_limit_mm=float(args.candidate_residual_mm),
             cluster_threshold_deg=float(args.candidate_cluster_deg),
-            max_candidates_per_angle=int(
-                getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
-            ),
+            max_candidates_per_angle=rescue_budget,
             seed=int(args.seed) + int(cut_idx),
+            workers=int(args.workers) if rescue_budget > 8 else 1,
         )
         candidates.to_parquet(job_dir / "rescue_candidates.parquet", index=False, compression="zstd")
         graph_path, graph_report = v6.candidate_graph_rescue(candidates)

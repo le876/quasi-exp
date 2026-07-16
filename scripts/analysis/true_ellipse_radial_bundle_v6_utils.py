@@ -622,6 +622,8 @@ def correct_radial_predictor(
     theta_sign: float,
     max_nfev: int,
     compute_conditioning: bool = True,
+    lambda_margin: float = 0.0,
+    soft_margin_deg: float = 0.25,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Jointly correct all phases, with cyclic seam terms and radial anchors."""
     required_targets = {"angle_idx", *atlas.TARGET_XYZ_COLS}
@@ -649,7 +651,14 @@ def correct_radial_predictor(
 
     rotated_targets = rotate_for_cut(target_ordered, cut_idx=int(cut_idx))
     rotated_predictor = rotate_for_cut(predictor_ordered, cut_idx=int(cut_idx))
-    stage_specs = anchor_stages(str(anchor_schedule))
+    stage_specs = tuple(
+        {
+            **stage,
+            "lambda_margin": float(lambda_margin),
+            "soft_margin_deg": float(soft_margin_deg),
+        }
+        for stage in anchor_stages(str(anchor_schedule))
+    )
     corrected, raw_report = atlas.optimize_cyclic_trajectory(
         targets=rotated_targets,
         initial_beta=rotated_predictor[atlas.BETA_COLS].to_numpy(dtype=float),
@@ -686,6 +695,8 @@ def correct_radial_predictor(
             "radial_anchor_retained": bool(
                 stage_specs and all(float(stage["lambda_anchor"]) > 0.0 for stage in stage_specs)
             ),
+            "lambda_margin": float(lambda_margin),
+            "soft_margin_deg": float(soft_margin_deg),
             "input_predictor_branch_hash": hashlib.sha256(
                 predictor_ordered[atlas.BETA_COLS].to_numpy(dtype=float).tobytes()
             ).hexdigest(),

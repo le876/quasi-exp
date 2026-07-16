@@ -956,6 +956,7 @@ def solve_tube_curve(
     theta_sign: float,
     max_nfev: int,
     parent_offset_id: str,
+    bounds: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Lift one fixed normal-offset curve while staying on the selected branch."""
     targets = curve_targets.sort_values("angle_idx").reset_index(drop=True)
@@ -966,15 +967,19 @@ def solve_tube_curve(
     pinv = np.asarray(weighted_pinv, dtype=float).reshape(len(center), 6, 3)
     center_beta = center[atlas.BETA_COLS].to_numpy(dtype=float)
     center_xyz = center[atlas.XYZ_COLS].to_numpy(dtype=float)
-    bounds = atlas.beta_bounds_rad("current")
+    limits = (
+        atlas.beta_bounds_rad("current")
+        if bounds is None
+        else np.asarray(bounds, dtype=float).reshape(6, 2)
+    )
     rows: list[dict[str, Any]] = []
     previous_beta: np.ndarray | None = None
     for position, target_row in targets.iterrows():
         target_xyz = target_row[atlas.TARGET_XYZ_COLS].to_numpy(dtype=float)
         prediction = np.clip(
             center_beta[position] + pinv[position] @ (target_xyz - center_xyz[position]),
-            bounds[:, 0],
-            bounds[:, 1],
+            limits[:, 0],
+            limits[:, 1],
         )
         parent_beta = parent.iloc[position][atlas.BETA_COLS].to_numpy(dtype=float)
         seeds = [prediction, parent_beta, center_beta[position]]
@@ -984,7 +989,7 @@ def solve_tube_curve(
         solutions = atlas.solve_beta_ik_many(
             target_xyz,
             init_betas=seeds_array,
-            bounds=bounds,
+            bounds=limits,
             lengths_m=np.asarray(lengths_m, dtype=float),
             p_end_local_m=np.asarray(p_end_local_m, dtype=float),
             theta_sign=float(theta_sign),

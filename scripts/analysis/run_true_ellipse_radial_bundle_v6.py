@@ -27,6 +27,13 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "analysis"))
 import run_true_ellipse_family_expansion_v5 as v5_expansion  # noqa: E402
 import run_true_ellipse_family_training_v5 as v5_training  # noqa: E402
 import true_ellipse_radial_bundle_v6_utils as v6  # noqa: E402
+from true_ellipse_radial_bundle_engine import (  # noqa: E402
+    JointDomainSpec,
+    balanced_joint_margin_policy,
+    evaluate_joint_margin_gate,
+    joint_margin_report,
+    registered_joint_domain,
+)
 from quasi_exp.io import load_config, load_robot_inputs  # noqa: E402
 from true_ellipse_family_v5_utils import dataframe_to_markdown, stable_fingerprint  # noqa: E402
 
@@ -50,6 +57,31 @@ TUBE_OUTER_SHELL_STAGE = {
 write_json = v6.write_json
 read_json = v6.read_json
 _json_default = v6.json_default
+
+
+def _resolved_joint_domain(args: argparse.Namespace) -> JointDomainSpec:
+    return registered_joint_domain(str(getattr(args, "joint_domain_id", "current_v6")))
+
+
+def _joint_margin_decision(path: pd.DataFrame, args: argparse.Namespace) -> dict[str, Any]:
+    domain = _resolved_joint_domain(args)
+    policy = balanced_joint_margin_policy()
+    margin = joint_margin_report(
+        path[v6.atlas.BETA_COLS].to_numpy(dtype=float),
+        domain=domain,
+        at_bound_tolerance_deg=policy.at_bound_tolerance_deg,
+    )
+    raw = evaluate_joint_margin_gate(margin, policy=policy)
+    required = bool(getattr(args, "require_joint_margin_gate", False))
+    return {
+        **margin,
+        "joint_margin_policy_id": policy.policy_id,
+        "joint_margin_policy_fingerprint": policy.fingerprint,
+        "raw_joint_margin_gate_pass": bool(raw["joint_margin_gate_pass"]),
+        "joint_margin_gate_required": required,
+        "job_margin_gate_pass": bool(not required or raw["joint_margin_gate_pass"]),
+        "joint_margin_checks": raw["checks"],
+    }
 
 
 def parse_float_csv(value: str | Iterable[float]) -> list[float]:
@@ -171,7 +203,13 @@ def aggregate_radius_bundle_gate(
     failed = [
         f"{cut}:{predictor}"
         for cut, predictor in required
-        if (cut, predictor) in selected and not bool(selected[(cut, predictor)].get("centerline_gate_pass", False))
+        if (cut, predictor) in selected
+        and not bool(
+            selected[(cut, predictor)].get(
+                "job_gate_pass",
+                selected[(cut, predictor)].get("centerline_gate_pass", False),
+            )
+        )
     ]
     report = {
         "required_job_count": int(len(required)),
@@ -533,6 +571,19 @@ def _radius_bundle_task_fingerprint(
         }
         for path in parent_artifact_paths
     ]
+    domain_payload: dict[str, Any] = {}
+    if hasattr(args, "joint_domain_id"):
+        domain = _resolved_joint_domain(args)
+        domain_payload = {
+            "joint_domain_id": domain.domain_id,
+            "joint_domain_fingerprint": domain.fingerprint,
+            "require_joint_margin_gate": bool(getattr(args, "require_joint_margin_gate", False)),
+            "lambda_margin": float(getattr(args, "lambda_margin", 0.0)),
+            "soft_margin_deg": float(getattr(args, "soft_margin_deg", 0.25)),
+            "rescue_candidates_per_angle": int(
+                getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
+            ),
+        }
     return stable_fingerprint(
         {
             "phase": "radial_radius",
@@ -547,6 +598,7 @@ def _radius_bundle_task_fingerprint(
                 "path": str(Path(args.robot_config).resolve()),
                 "sha256": v6.file_sha256(args.robot_config),
             },
+            **domain_payload,
         }
     )
 
@@ -591,19 +643,39 @@ def _correct_one_job(
     selected_report: dict[str, Any] | None = None
     selected_strategy: str | None = None
     selected_input_predictor: pd.DataFrame | None = None
+    domain = _resolved_joint_domain(args)
+    lambda_margin = float(getattr(args, "lambda_margin", 0.0))
+    soft_margin_deg = float(getattr(args, "soft_margin_deg", 0.25))
+
+    def apply_job_gate(
+        corrected_path: pd.DataFrame,
+        correction: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        enriched = dict(correction)
+        margin = _joint_margin_decision(corrected_path, args)
+        enriched.update(margin)
+        enriched["job_gate_pass"] = bool(
+            enriched.get("centerline_gate_pass", False)
+            and margin["job_margin_gate_pass"]
+        )
+        return enriched
+
     for schedule in schedules:
         corrected, correction_report = v6.correct_radial_predictor(
             targets,
             predictor,
             cut_idx=int(cut_idx),
             anchor_schedule=str(schedule),
-            bounds=v6.atlas.beta_bounds_rad("current"),
+            bounds=domain.bounds_rad,
             lengths_m=lengths_m,
             p_end_local_m=p_end_local_m,
             theta_sign=theta_sign,
             max_nfev=int(args.max_opt_nfev),
             compute_conditioning=True,
+            lambda_margin=lambda_margin,
+            soft_margin_deg=soft_margin_deg,
         )
+        correction_report = apply_job_gate(corrected, correction_report)
         corrected.to_parquet(job_dir / f"{schedule}.parquet", index=False, compression="zstd")
         write_json(job_dir / f"{schedule}.json", correction_report)
         attempts.append(
@@ -611,6 +683,7 @@ def _correct_one_job(
                 "strategy": "direct_joint_corrector",
                 "anchor_schedule": str(schedule),
                 "centerline_gate_pass": bool(correction_report.get("centerline_gate_pass", False)),
+                "job_gate_pass": bool(correction_report.get("job_gate_pass", False)),
                 "report_path": str((job_dir / f"{schedule}.json").resolve()),
                 "path": str((job_dir / f"{schedule}.parquet").resolve()),
                 **{
@@ -629,7 +702,7 @@ def _correct_one_job(
                 },
             }
         )
-        if bool(correction_report.get("centerline_gate_pass", False)):
+        if bool(correction_report.get("job_gate_pass", False)):
             selected_path = corrected
             selected_schedule = str(schedule)
             selected_report = correction_report
@@ -650,16 +723,20 @@ def _correct_one_job(
         candidates, candidate_report = v6.generate_radial_candidate_layers(
             targets,
             predictor,
-            bounds=v6.atlas.beta_bounds_rad("current"),
+            bounds=domain.bounds_rad,
             lengths_m=lengths_m,
             p_end_local_m=p_end_local_m,
             theta_sign=theta_sign,
             max_nfev=int(args.max_ik_nfev),
             pointwise_candidates=pointwise,
-            max_seed_count=int(args.max_candidates_per_angle),
+            max_seed_count=int(
+                getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
+            ),
             residual_limit_mm=float(args.candidate_residual_mm),
             cluster_threshold_deg=float(args.candidate_cluster_deg),
-            max_candidates_per_angle=int(args.max_candidates_per_angle),
+            max_candidates_per_angle=int(
+                getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
+            ),
             seed=int(args.seed) + int(cut_idx),
         )
         candidates.to_parquet(job_dir / "rescue_candidates.parquet", index=False, compression="zstd")
@@ -677,13 +754,16 @@ def _correct_one_job(
                     graph_predictor,
                     cut_idx=int(cut_idx),
                     anchor_schedule=str(schedule),
-                    bounds=v6.atlas.beta_bounds_rad("current"),
+                    bounds=domain.bounds_rad,
                     lengths_m=lengths_m,
                     p_end_local_m=p_end_local_m,
                     theta_sign=theta_sign,
                     max_nfev=int(args.max_opt_nfev),
                     compute_conditioning=True,
+                    lambda_margin=lambda_margin,
+                    soft_margin_deg=soft_margin_deg,
                 )
+                correction_report = apply_job_gate(corrected, correction_report)
                 corrected.to_parquet(
                     job_dir / f"rescue_{schedule}.parquet", index=False, compression="zstd"
                 )
@@ -695,11 +775,12 @@ def _correct_one_job(
                         "centerline_gate_pass": bool(
                             correction_report.get("centerline_gate_pass", False)
                         ),
+                        "job_gate_pass": bool(correction_report.get("job_gate_pass", False)),
                         "report_path": str((job_dir / f"rescue_{schedule}.json").resolve()),
                         "path": str((job_dir / f"rescue_{schedule}.parquet").resolve()),
                     }
                 )
-                if bool(correction_report.get("centerline_gate_pass", False)):
+                if bool(correction_report.get("job_gate_pass", False)):
                     selected_path = corrected
                     selected_schedule = str(schedule)
                     selected_report = correction_report
@@ -724,6 +805,9 @@ def _correct_one_job(
         "selected_anchor_schedule": selected_schedule,
         "centerline_gate_pass": bool(
             selected_report is not None and selected_report.get("centerline_gate_pass", False)
+        ),
+        "job_gate_pass": bool(
+            selected_report is not None and selected_report.get("job_gate_pass", False)
         ),
         "attempts": attempts,
         "rescue": rescue_report,
@@ -799,12 +883,13 @@ def _solve_radial_radius(
     targets.to_parquet(radius_dir / "targets_360.parquet", index=False, compression="zstd")
     predictors: dict[str, pd.DataFrame] = {}
     predictor_reports: dict[str, dict[str, Any]] = {}
+    domain = _resolved_joint_domain(args)
     copy_predictor, copy_report = v6.build_radial_predictor(
         parent_path,
         parent_radius_mm=float(parent_radius_mm),
         target_radius_mm=float(target_radius_mm),
         family_id=family.family_id,
-        bounds=v6.atlas.beta_bounds_rad("current"),
+        bounds=domain.bounds_rad,
     )
     predictors["parent_copy"] = copy_predictor
     predictor_reports["parent_copy"] = copy_report
@@ -816,7 +901,7 @@ def _solve_radial_radius(
             previous_parent=previous_parent,
             previous_parent_radius_mm=float(previous_parent_radius_mm),
             family_id=family.family_id,
-            bounds=v6.atlas.beta_bounds_rad("current"),
+            bounds=domain.bounds_rad,
         )
         predictors["radial_secant"] = secant_predictor
         predictor_reports["radial_secant"] = secant_report
@@ -877,12 +962,14 @@ def _solve_radial_radius(
             selected_repeat_inputs[canonical_key],
             cut_idx=canonical_key[0],
             anchor_schedule=str(canonical_job["selected_anchor_schedule"]),
-            bounds=v6.atlas.beta_bounds_rad("current"),
+            bounds=domain.bounds_rad,
             lengths_m=lengths_m,
             p_end_local_m=p_end_local_m,
             theta_sign=theta_sign,
             max_nfev=int(args.max_opt_nfev),
             compute_conditioning=True,
+            lambda_margin=float(getattr(args, "lambda_margin", 0.0)),
+            soft_margin_deg=float(getattr(args, "soft_margin_deg", 0.25)),
         )
         repeat.to_parquet(radius_dir / "deterministic_repeat_360.parquet", index=False, compression="zstd")
         write_json(radius_dir / "deterministic_repeat_optimizer.json", repeat_raw)

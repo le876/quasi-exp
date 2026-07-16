@@ -400,6 +400,8 @@ def test_joint_corrector_receives_the_rotated_full_predictor_and_positive_anchor
         p_end_local_m=np.asarray([0.0, 0.0, 0.0, 1.0]),
         theta_sign=-1.0,
         max_nfev=5,
+        lambda_margin=0.01,
+        soft_margin_deg=0.25,
     )
 
     passed_targets = captured["targets"]
@@ -408,6 +410,9 @@ def test_joint_corrector_receives_the_rotated_full_predictor_and_positive_anchor
     expected_beta = mod.rotate_for_cut(predictor, cut_idx=2)[mod.atlas.BETA_COLS].to_numpy(dtype=float)
     assert np.allclose(captured["initial_beta"], expected_beta)
     assert all(float(stage["lambda_anchor"]) > 0.0 for stage in captured["stages"])
+    assert all(float(stage["lambda_margin"]) == 0.01 for stage in captured["stages"])
+    assert all(float(stage["soft_margin_deg"]) == 0.25 for stage in captured["stages"])
+    assert report["lambda_margin"] == 0.01
     assert corrected["angle_idx"].tolist() == [0, 1, 2, 3]
     assert report["full_predictor_path_used"] is True
     assert report["radial_anchor_retained"] is True

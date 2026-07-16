@@ -934,8 +934,11 @@ def test_tube_curve_solver_reuses_exact_centerline_branch() -> None:
         lengths_m=lengths_m,
         p_end_local_m=p_end_local_m,
         theta_sign=-1.0,
-        max_nfev=5,
+        max_nfev=10,
         parent_offset_id="centerline",
+        bounds=np.deg2rad(
+            np.asarray([[-5, 5], [-5, 5], [-10, 10], [-10, 10], [-15, 15], [-15, 15]], dtype=float)
+        ),
     )
 
     assert len(curve) == 3

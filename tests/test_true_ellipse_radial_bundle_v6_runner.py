@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -90,6 +91,70 @@ def test_radius_bundle_gate_requires_all_cut_predictor_runs_cut_invariance_and_e
     assert complete["required_job_count"] == 8
     assert missing["radial_bundle_gate_pass"] is False
     assert missing["missing_jobs"] == ["270:radial_secant"]
+
+
+def test_runner_defaults_to_v6_domain_and_can_resolve_the_registered_v7_domain() -> None:
+    mod = _load_module()
+
+    current = mod._resolved_joint_domain(mod.parse_args([]))
+    standard = mod._resolved_joint_domain(
+        SimpleNamespace(joint_domain_id="standard_beta34_10deg_v1")
+    )
+
+    assert current.domain_id == "current_v6"
+    assert standard.domain_id == "standard_beta34_10deg_v1"
+    assert np.rad2deg(current.bounds_rad[2, 1]) == 5.0
+    assert np.rad2deg(standard.bounds_rad[2, 1]) == 10.0
+
+
+def test_radius_bundle_gate_honors_stricter_job_gate_when_present() -> None:
+    mod = _load_module()
+    jobs = [
+        {
+            "cut_idx": 0,
+            "radial_predictor_type": "parent_copy",
+            "selected": True,
+            "centerline_gate_pass": True,
+            "job_gate_pass": False,
+        }
+    ]
+
+    decision = mod.aggregate_radius_bundle_gate(
+        geometry_report={"target_geometry_gate_pass": True},
+        job_reports=jobs,
+        required_cuts=(0,),
+        required_predictors=("parent_copy",),
+        cut_report={"cut_invariance_gate_pass": True},
+        repeatability_report={"deterministic_exact_gate_pass": True},
+    )
+
+    assert decision["all_job_centerline_gates_pass"] is False
+    assert decision["radial_bundle_gate_pass"] is False
+
+
+def test_path_margin_decision_is_optional_for_v6_and_required_for_v7() -> None:
+    mod = _load_module()
+    frame = pd.DataFrame(
+        {
+            column: np.zeros(8, dtype=float)
+            for column in mod.v6.atlas.BETA_COLS
+        }
+    )
+    frame["beta3_rad"] = np.deg2rad(9.99)
+
+    optional = mod._joint_margin_decision(
+        frame,
+        SimpleNamespace(joint_domain_id="standard_beta34_10deg_v1", require_joint_margin_gate=False),
+    )
+    required = mod._joint_margin_decision(
+        frame,
+        SimpleNamespace(joint_domain_id="standard_beta34_10deg_v1", require_joint_margin_gate=True),
+    )
+
+    assert optional["raw_joint_margin_gate_pass"] is False
+    assert optional["job_margin_gate_pass"] is True
+    assert required["raw_joint_margin_gate_pass"] is False
+    assert required["job_margin_gate_pass"] is False
 
 
 def test_tube_annotation_materializes_v6_provenance_and_unique_sample_ids() -> None:

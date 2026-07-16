@@ -619,6 +619,50 @@ def _pointwise_candidates_for_radius(
     return pd.read_parquet(path) if path.is_file() else None
 
 
+def _rescue_cache_fingerprint(
+    *,
+    targets: pd.DataFrame,
+    predictor: pd.DataFrame,
+    domain: JointDomainSpec,
+    rescue_budget: int,
+    max_ik_nfev: int,
+    residual_limit_mm: float,
+    cluster_threshold_deg: float,
+    seed: int,
+    pointwise_candidates: pd.DataFrame | None = None,
+) -> str:
+    target_columns = ["angle_idx", *v6.atlas.TARGET_XYZ_COLS]
+    predictor_columns = ["angle_idx", *v6.atlas.BETA_COLS]
+    pointwise = pointwise_candidates if pointwise_candidates is not None else pd.DataFrame()
+    pointwise_columns = [
+        column
+        for column in ("angle_idx", "xyz_residual_mm", *v6.atlas.BETA_COLS)
+        if column in pointwise
+    ]
+    return stable_fingerprint(
+        {
+            "strategy": "shared_predictor_rescue_cache_v1",
+            "targets": np.round(
+                targets[target_columns].to_numpy(dtype=float), 12
+            ).tolist(),
+            "predictor": np.round(
+                predictor[predictor_columns].to_numpy(dtype=float), 12
+            ).tolist(),
+            "pointwise": (
+                np.round(pointwise[pointwise_columns].to_numpy(dtype=float), 12).tolist()
+                if len(pointwise) and pointwise_columns
+                else []
+            ),
+            "joint_domain_fingerprint": domain.fingerprint,
+            "rescue_budget": int(rescue_budget),
+            "max_ik_nfev": int(max_ik_nfev),
+            "residual_limit_mm": float(residual_limit_mm),
+            "cluster_threshold_deg": float(cluster_threshold_deg),
+            "seed": int(seed),
+        }
+    )
+
+
 def _correct_one_job(
     args: argparse.Namespace,
     *,
@@ -632,6 +676,7 @@ def _correct_one_job(
     theta_sign: float,
     family_id: str,
     target_radius_mm: float,
+    rescue_cache: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[pd.DataFrame | None, dict[str, Any], pd.DataFrame | None]:
     predictor_type = str(predictor_report["radial_predictor_type"])
     job_dir = radius_dir / "jobs" / predictor_type / f"cut_{int(cut_idx):03d}"
@@ -723,24 +768,101 @@ def _correct_one_job(
             family_id=str(family_id),
             radius_mm=float(target_radius_mm),
         )
-        candidates, candidate_report = v6.generate_radial_candidate_layers(
-            targets,
-            predictor,
-            bounds=domain.bounds_rad,
-            lengths_m=lengths_m,
-            p_end_local_m=p_end_local_m,
-            theta_sign=theta_sign,
-            max_nfev=int(args.max_ik_nfev),
-            pointwise_candidates=pointwise,
-            max_seed_count=rescue_budget,
+        cache_fingerprint = _rescue_cache_fingerprint(
+            targets=targets,
+            predictor=predictor,
+            domain=domain,
+            rescue_budget=rescue_budget,
+            max_ik_nfev=int(args.max_ik_nfev),
             residual_limit_mm=float(args.candidate_residual_mm),
             cluster_threshold_deg=float(args.candidate_cluster_deg),
-            max_candidates_per_angle=rescue_budget,
-            seed=int(args.seed) + int(cut_idx),
-            workers=int(args.workers) if rescue_budget > 8 else 1,
+            seed=int(args.seed),
+            pointwise_candidates=pointwise,
         )
-        candidates.to_parquet(job_dir / "rescue_candidates.parquet", index=False, compression="zstd")
-        graph_path, graph_report = v6.candidate_graph_rescue(candidates)
+        shared_cache = rescue_cache if rescue_cache is not None else {}
+        cached_payload = shared_cache.get(predictor_type)
+        cache_dir = radius_dir / "rescue_cache" / predictor_type
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_report_path = cache_dir / "cache_report.json"
+        cache_candidates_path = cache_dir / "candidates.parquet"
+        cache_graph_path = cache_dir / "graph_path.parquet"
+        cache_hit = bool(
+            cached_payload is not None
+            and str(cached_payload.get("fingerprint", "")) == cache_fingerprint
+        )
+        if not cache_hit and bool(args.skip_existing) and all(
+            path.is_file()
+            for path in (cache_report_path, cache_candidates_path, cache_graph_path)
+        ):
+            cached_report = read_json(cache_report_path)
+            if (
+                str(cached_report.get("fingerprint", "")) == cache_fingerprint
+                and str(cached_report.get("candidates_sha256", ""))
+                == v6.file_sha256(cache_candidates_path)
+                and str(cached_report.get("graph_path_sha256", ""))
+                == v6.file_sha256(cache_graph_path)
+            ):
+                cached_payload = {
+                    "fingerprint": cache_fingerprint,
+                    "candidates": pd.read_parquet(cache_candidates_path),
+                    "candidate_report": cached_report["candidate_report"],
+                    "graph_path": pd.read_parquet(cache_graph_path),
+                    "graph_report": cached_report["graph_report"],
+                }
+                shared_cache[predictor_type] = cached_payload
+                cache_hit = True
+        if cache_hit and cached_payload is not None:
+            candidates = cached_payload["candidates"]
+            candidate_report = cached_payload["candidate_report"]
+            graph_path = cached_payload["graph_path"]
+            graph_report = cached_payload["graph_report"]
+        else:
+            candidates, candidate_report = v6.generate_radial_candidate_layers(
+                targets,
+                predictor,
+                bounds=domain.bounds_rad,
+                lengths_m=lengths_m,
+                p_end_local_m=p_end_local_m,
+                theta_sign=theta_sign,
+                max_nfev=int(args.max_ik_nfev),
+                pointwise_candidates=pointwise,
+                max_seed_count=rescue_budget,
+                residual_limit_mm=float(args.candidate_residual_mm),
+                cluster_threshold_deg=float(args.candidate_cluster_deg),
+                max_candidates_per_angle=rescue_budget,
+                seed=int(args.seed),
+                workers=int(args.workers) if rescue_budget > 8 else 1,
+            )
+            graph_path, graph_report = v6.candidate_graph_rescue(candidates)
+            candidates.to_parquet(
+                cache_candidates_path,
+                index=False,
+                compression="zstd",
+            )
+            graph_path.to_parquet(
+                cache_graph_path,
+                index=False,
+                compression="zstd",
+            )
+            cache_report = {
+                "fingerprint": cache_fingerprint,
+                "predictor_type": predictor_type,
+                "candidate_report": candidate_report,
+                "graph_report": graph_report,
+                "candidates_path": str(cache_candidates_path.resolve()),
+                "candidates_sha256": v6.file_sha256(cache_candidates_path),
+                "graph_path": str(cache_graph_path.resolve()),
+                "graph_path_sha256": v6.file_sha256(cache_graph_path),
+            }
+            write_json(cache_report_path, cache_report)
+            cached_payload = {
+                "fingerprint": cache_fingerprint,
+                "candidates": candidates,
+                "candidate_report": candidate_report,
+                "graph_path": graph_path,
+                "graph_report": graph_report,
+            }
+            shared_cache[predictor_type] = cached_payload
         if len(graph_path):
             graph_predictor = graph_path[["angle_idx", *v6.atlas.BETA_COLS]].copy()
             if "angle_rad" in graph_path:
@@ -794,6 +916,9 @@ def _correct_one_job(
         rescue_report = {
             "candidate_report": candidate_report,
             "graph_report": graph_report,
+            "cache_hit": cache_hit,
+            "cache_fingerprint": cache_fingerprint,
+            "cache_report_path": str(cache_report_path.resolve()),
         }
         write_json(job_dir / "rescue_report.json", rescue_report)
 
@@ -915,6 +1040,7 @@ def _solve_radial_radius(
     job_reports: list[dict[str, Any]] = []
     selected_paths: dict[tuple[int, str], pd.DataFrame] = {}
     selected_repeat_inputs: dict[tuple[int, str], pd.DataFrame] = {}
+    rescue_cache: dict[str, dict[str, Any]] = {}
     for predictor_type in required_predictors:
         predictor = predictors[predictor_type]
         for cut_idx in cuts:
@@ -930,6 +1056,7 @@ def _solve_radial_radius(
                 theta_sign=theta_sign,
                 family_id=family.family_id,
                 target_radius_mm=float(target_radius_mm),
+                rescue_cache=rescue_cache,
             )
             job_reports.append(report)
             if selected is not None:

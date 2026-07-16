@@ -132,6 +132,58 @@ def test_radius_bundle_gate_honors_stricter_job_gate_when_present() -> None:
     assert decision["radial_bundle_gate_pass"] is False
 
 
+def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> None:
+    mod = _load_module()
+    targets = pd.DataFrame(
+        {
+            "angle_idx": [0, 1],
+            "x_target_m": [1.0, 2.0],
+            "y_target_m": [0.0, 0.0],
+            "z_target_m": [0.0, 0.0],
+        }
+    )
+    predictor = targets[["angle_idx"]].copy()
+    for column in mod.v6.atlas.BETA_COLS:
+        predictor[column] = 0.0
+    domain = mod.registered_joint_domain("standard_beta34_10deg_v1")
+
+    baseline = mod._rescue_cache_fingerprint(
+        targets=targets,
+        predictor=predictor,
+        domain=domain,
+        rescue_budget=24,
+        max_ik_nfev=200,
+        residual_limit_mm=2.0,
+        cluster_threshold_deg=0.25,
+        seed=20260716,
+    )
+    repeat = mod._rescue_cache_fingerprint(
+        targets=targets,
+        predictor=predictor.copy(),
+        domain=domain,
+        rescue_budget=24,
+        max_ik_nfev=200,
+        residual_limit_mm=2.0,
+        cluster_threshold_deg=0.25,
+        seed=20260716,
+    )
+    changed = predictor.copy()
+    changed.loc[0, mod.v6.atlas.BETA_COLS[0]] = 1.0e-3
+    changed_fingerprint = mod._rescue_cache_fingerprint(
+        targets=targets,
+        predictor=changed,
+        domain=domain,
+        rescue_budget=24,
+        max_ik_nfev=200,
+        residual_limit_mm=2.0,
+        cluster_threshold_deg=0.25,
+        seed=20260716,
+    )
+
+    assert baseline == repeat
+    assert baseline != changed_fingerprint
+
+
 def test_path_margin_decision_is_optional_for_v6_and_required_for_v7() -> None:
     mod = _load_module()
     frame = pd.DataFrame(

@@ -222,6 +222,74 @@ def test_training_assignment_preserves_upstream_dynamic_split_and_no_centerline_
     assert not assignment.loc[assignment["used_for_training"], "is_centerline"].any()
 
 
+def test_nonformal_training_assignment_accepts_physically_absent_test_rows() -> None:
+    mod = _load_module()
+    dataset = pd.DataFrame(
+        {
+            "sample_id": ["a", "b", "c"],
+            "family_id": ["f"] * 3,
+            "trajectory_id": ["f@75", "f@75", "f@102.5"],
+            "radius_mm": [75.0, 75.0, 102.5],
+            "angle_idx": [0, 1, 0],
+            "is_centerline": [False, True, True],
+            "split": ["train", "train", "validation"],
+            "used_for_training": [True, False, False],
+        }
+    )
+
+    _assignment, report = mod.make_training_assignment(
+        dataset,
+        validation_radius_mm=102.5,
+        test_radius_mm=110.0,
+        require_test=False,
+    )
+
+    assert report["validation_present"] is True
+    assert report["test_present"] is False
+    assert report["split_gate_pass"] is True
+
+
+def test_nonformal_final_fingerprint_never_opens_full_registered_dataset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    out_dir = tmp_path / "training"
+    (out_dir / "00_audit").mkdir(parents=True)
+    (out_dir / "01_split").mkdir(parents=True)
+    mod.write_json(
+        out_dir / "00_audit" / "audit_report.json",
+        {
+            "holdout": {"validation_radius_mm": 102.5, "test_radius_mm": 110.0},
+            "dataset_sha256": "safe-dataset-hash",
+        },
+    )
+    assignment = out_dir / "01_split" / "split_assignment.parquet"
+    assignment.write_bytes(b"assignment")
+    full = tmp_path / "full-registered.parquet"
+    calls = []
+    real_hash = mod.file_sha256
+
+    def recording_hash(path):
+        calls.append(Path(path))
+        return real_hash(path)
+
+    monkeypatch.setattr(mod, "file_sha256", recording_hash)
+    args = Namespace(
+        out_dir=out_dir,
+        tube_dataset=full,
+        preset="smoke",
+        seeds=",".join(str(seed) for seed in mod.FORMAL_SEEDS),
+    )
+
+    mod._final_task_fingerprint(
+        args,
+        {"task_fingerprint": "screen", "selected_config": {"id": "config"}},
+    )
+
+    assert full not in calls
+
+
 def test_training_worker_encodes_decodes_and_evaluates_registered_challenge(
     tmp_path: Path,
     monkeypatch,

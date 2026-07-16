@@ -606,6 +606,8 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         "v6_tube_pass": bool(source_reports.get("v6_tube", {}).get("formal_tube_gate_pass", False)),
         "v6_dataset_pass": bool(source_reports.get("v6_dataset", {}).get("formal_dataset_gate_pass", False)),
         "standard_domain_matches_config": domain_matches_config,
+        "registered_standard_domain": str(args.joint_domain_id)
+        == engine.v7_standard_domain_protocol().joint_domain_id,
         "fixed_family": str(args.family_id) == PRIMARY_FAMILY_ID,
     }
     manifest = _artifact_manifest(source_paths)

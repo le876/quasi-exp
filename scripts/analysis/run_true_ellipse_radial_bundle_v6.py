@@ -639,6 +639,24 @@ def _pointwise_candidates_for_radius(
     return pd.read_parquet(path) if path.is_file() else None
 
 
+def rescue_seed_for_cut(base_seed: int, *, cut_idx: int, shared: bool) -> int:
+    """Preserve V6's per-cut seeds; V7 sharing requires a cut-independent seed."""
+
+    return int(base_seed) if bool(shared) else int(base_seed) + int(cut_idx)
+
+
+def rescue_cache_directory(
+    *,
+    radius_dir: Path,
+    job_dir: Path,
+    predictor_type: str,
+    shared: bool,
+) -> Path:
+    if bool(shared):
+        return Path(radius_dir) / "rescue_cache" / str(predictor_type)
+    return Path(job_dir) / "rescue_cache"
+
+
 def _rescue_cache_fingerprint(
     *,
     targets: pd.DataFrame,
@@ -792,6 +810,12 @@ def _correct_one_job(
 
     rescue_report: dict[str, Any] | None = None
     if selected_path is None:
+        shared_rescue = rescue_cache is not None
+        rescue_seed = rescue_seed_for_cut(
+            int(args.seed),
+            cut_idx=int(cut_idx),
+            shared=shared_rescue,
+        )
         rescue_budget = int(
             getattr(args, "rescue_candidates_per_angle", args.max_candidates_per_angle)
         )
@@ -808,7 +832,7 @@ def _correct_one_job(
             max_ik_nfev=int(args.max_ik_nfev),
             residual_limit_mm=float(args.candidate_residual_mm),
             cluster_threshold_deg=float(args.candidate_cluster_deg),
-            seed=int(args.seed),
+            seed=rescue_seed,
             lengths_m=np.asarray(lengths_m, dtype=float),
             p_end_local_m=np.asarray(p_end_local_m, dtype=float),
             theta_sign=float(theta_sign),
@@ -819,7 +843,12 @@ def _correct_one_job(
         )
         shared_cache = rescue_cache if rescue_cache is not None else {}
         cached_payload = shared_cache.get(predictor_type)
-        cache_dir = radius_dir / "rescue_cache" / predictor_type
+        cache_dir = rescue_cache_directory(
+            radius_dir=radius_dir,
+            job_dir=job_dir,
+            predictor_type=predictor_type,
+            shared=shared_rescue,
+        )
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_report_path = cache_dir / "cache_report.json"
         cache_candidates_path = cache_dir / "candidates.parquet"
@@ -868,7 +897,7 @@ def _correct_one_job(
                 residual_limit_mm=float(args.candidate_residual_mm),
                 cluster_threshold_deg=float(args.candidate_cluster_deg),
                 max_candidates_per_angle=rescue_budget,
-                seed=int(args.seed),
+                seed=rescue_seed,
                 workers=int(args.workers) if rescue_budget > 8 else 1,
                 expanded_seed_kappa_threshold=float(
                     getattr(args, "rescue_kappa_threshold", -np.inf)

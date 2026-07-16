@@ -229,6 +229,7 @@ def make_training_assignment(
     *,
     validation_radius_mm: float,
     test_radius_mm: float,
+    require_test: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     required = {
         "sample_id",
@@ -296,7 +297,7 @@ def make_training_assignment(
         and report["training_radius_count"] >= 1
         and report["training_centerline_count"] == 0
         and validation_present
-        and test_present
+        and (test_present or not bool(require_test))
         and split_matches
         and training_matches
         and trajectory_leakage == 0
@@ -605,7 +606,11 @@ def phase_split(args: argparse.Namespace) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     audit = ensure_audit_report(args)
     dataset = pd.read_parquet(audit["dataset_path"])
-    assignment, split = make_training_assignment(dataset, **audit["holdout"])
+    assignment, split = make_training_assignment(
+        dataset,
+        **audit["holdout"],
+        require_test=str(args.preset) == "formal",
+    )
     assignment.insert(0, "row_index", np.arange(len(assignment), dtype=np.int64))
     assignment_path = out / "split_assignment.parquet"
     assignment.to_parquet(assignment_path, index=False, compression="zstd")
@@ -1204,7 +1209,7 @@ def _final_task_fingerprint(args: argparse.Namespace, selection: Mapping[str, An
                 preset=str(args.preset), holdout=audit["holdout"]
             ),
             "max_iter": preset_settings(str(args.preset))["max_iter"],
-            "dataset": file_sha256(args.tube_dataset),
+            "dataset": str(audit.get("dataset_sha256", "")),
             "assignment": file_sha256(
                 Path(args.out_dir) / "01_split" / "split_assignment.parquet"
             ),

@@ -216,6 +216,32 @@ def test_v6_defaults_preserve_full_failed_job_diagnostics_and_disable_shared_res
 
     assert args.stop_after_first_failed_job is False
     assert args.share_rescue_cache_across_cuts is False
+    assert mod.rescue_seed_for_cut(100, cut_idx=90, shared=False) == 190
+    assert mod.rescue_seed_for_cut(100, cut_idx=90, shared=True) == 100
+
+
+def test_rescue_cache_directory_is_cut_local_unless_v7_sharing_is_enabled(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    radius_dir = tmp_path / "r105p00"
+    job_dir = radius_dir / "jobs" / "parent_copy" / "cut_090"
+
+    local = mod.rescue_cache_directory(
+        radius_dir=radius_dir,
+        job_dir=job_dir,
+        predictor_type="parent_copy",
+        shared=False,
+    )
+    shared = mod.rescue_cache_directory(
+        radius_dir=radius_dir,
+        job_dir=job_dir,
+        predictor_type="parent_copy",
+        shared=True,
+    )
+
+    assert local == job_dir / "rescue_cache"
+    assert shared == radius_dir / "rescue_cache" / "parent_copy"
 
 
 def test_required_job_failure_short_circuits_an_unrecoverable_radius_bundle() -> None:

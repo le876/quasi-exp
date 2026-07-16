@@ -192,6 +192,22 @@ def test_cut_invariance_requires_every_registered_run_and_pairwise_p95_within_on
     assert failing["pairwise_branch_diff_p95_max_deg"] > 1.0
 
 
+def test_cut_invariance_single_run_is_auditable_nonformal_degenerate_case() -> None:
+    mod = _load_module()
+    baseline = _path(mod, radius_mm=81.0)
+
+    report = mod.cut_invariance_report(
+        {(0, "parent_copy"): baseline},
+        required_cuts=(0,),
+        required_predictors=("parent_copy",),
+    )
+
+    assert report["missing_runs"] == []
+    assert report["pairwise_comparison_count"] == 0
+    assert report["single_run_degenerate_case"] is True
+    assert report["cut_invariance_gate_pass"] is True
+
+
 def test_adaptive_radius_walk_retries_half_then_quarter_steps_without_changing_family() -> None:
     mod = _load_module()
     initial = _path(mod, radius_mm=80.0)

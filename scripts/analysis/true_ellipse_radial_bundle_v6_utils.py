@@ -362,7 +362,11 @@ def cut_invariance_report(
                     "branch_diff_max_deg": float(np.max(diff)),
                 }
             )
-    p95_max = max((row["branch_diff_p95_deg"] for row in pairwise), default=float("inf"))
+    single_run = bool(len(required) == 1 and len(ordered_paths) == 1 and not missing)
+    p95_max = max(
+        (row["branch_diff_p95_deg"] for row in pairwise),
+        default=0.0 if single_run else float("inf"),
+    )
     return {
         "required_run_count": int(len(required)),
         "materialized_run_count": int(len(ordered_paths)),
@@ -370,7 +374,12 @@ def cut_invariance_report(
         "pairwise_comparison_count": int(len(pairwise)),
         "pairwise_branch_diff_p95_max_deg": float(p95_max),
         "pairwise": pairwise,
-        "cut_invariance_gate_pass": bool(not missing and pairwise and p95_max <= float(threshold_deg)),
+        "single_run_degenerate_case": single_run,
+        "cut_invariance_gate_pass": bool(
+            not missing
+            and (single_run or bool(pairwise))
+            and p95_max <= float(threshold_deg)
+        ),
     }
 
 

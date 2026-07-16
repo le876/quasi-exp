@@ -113,6 +113,15 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
     normalized = {key: bool(value) for key, value in checks.items()}
     protocol = {
         **registered.as_dict(),
+        "family_id": str(args.family_id),
+        "joint_domain_id": str(args.joint_domain_id),
+        "start_radius_mm": float(args.start_radius_mm),
+        "target_radius_mm": float(args.target_radius_mm),
+        "formal_checkpoints_mm": list(checkpoints),
+        "base_step_mm": float(args.base_step_mm),
+        "retry_steps_mm": parse_float_csv(args.retry_steps_mm),
+        "strict_candidate_limit": int(args.max_candidates_per_angle),
+        "rescue_candidate_limit": int(args.rescue_candidates_per_angle),
         "preset": str(args.preset),
         "cut_indices": list(cuts),
         "anchor_schedules": list(anchors),
@@ -155,6 +164,26 @@ def materialized_dataset_radii(strict_geometry_rmax_mm: float) -> tuple[float, .
     ]
     radii = sorted(set(checkpoints) | set(engine.training_anchor_radii(strict_geometry_rmax_mm)))
     return tuple(radii)
+
+
+def resample_parent_curve(parent: pd.DataFrame, *, n_points: int) -> pd.DataFrame:
+    """Select an exact cyclic sub-grid while giving it local angle indices."""
+
+    if "angle_idx" not in parent or "angle_rad" not in parent:
+        raise ValueError("parent resampling requires angle_idx and angle_rad")
+    ordered = parent.sort_values("angle_idx", kind="stable").reset_index(drop=True)
+    target_count = int(n_points)
+    if target_count <= 0 or target_count > len(ordered):
+        raise ValueError("parent resampling requires 0 < n_points <= source rows")
+    positions = np.floor(
+        np.linspace(0.0, float(len(ordered)), target_count, endpoint=False)
+    ).astype(np.int64)
+    if len(set(positions.tolist())) != target_count:
+        raise ValueError("parent resampling did not produce a unique cyclic grid")
+    sampled = ordered.iloc[positions].copy().reset_index(drop=True)
+    sampled["source_angle_idx"] = sampled["angle_idx"].astype(int)
+    sampled["angle_idx"] = np.arange(target_count, dtype=np.int64)
+    return sampled
 
 
 def generate_half_phase_targets(
@@ -603,6 +632,7 @@ def phase_radial(args: argparse.Namespace) -> dict[str, Any]:
     source_radius = float(args.start_radius_mm)
     source_path = v6_runner.v5_centerline_path(args.v5_dir, family.family_id, source_radius)
     source = v6_runner.load_v5_parent_path(args.v5_dir, family.family_id, source_radius)
+    source = resample_parent_curve(source, n_points=int(args.final_points))
     relabeled, relabel_report, relabel_artifact = v6_runner._solve_radial_radius(
         args,
         audit_report=audit,
@@ -803,6 +833,7 @@ def _initial_tube_surface(
     theta_sign: float,
     max_nfev: int,
 ) -> pd.DataFrame:
+    del max_nfev  # The initializer is a predictor; formal correction happens surface-wise.
     center = centerline.sort_values("angle_idx", kind="stable").reset_index(drop=True)
     center_beta = center[v6_utils.atlas.BETA_COLS].to_numpy(dtype=float)
     center_xyz = center[v6_utils.atlas.XYZ_COLS].to_numpy(dtype=float)
@@ -825,54 +856,73 @@ def _initial_tube_surface(
     pairs = engine.tube_surface_sweep_order(offsets_mm, direction="outward")
     center_pair = (0.0, 0.0)
     solved: dict[tuple[float, float], pd.DataFrame] = {}
-    center_targets = tube_targets[
-        np.isclose(tube_targets["delta_n1_mm"].to_numpy(dtype=float), 0.0)
-        & np.isclose(tube_targets["delta_n2_mm"].to_numpy(dtype=float), 0.0)
-    ].sort_values("angle_idx", kind="stable").reset_index(drop=True)
-    center_curve = center_targets.copy()
-    for index, column in enumerate(v6_utils.atlas.BETA_COLS):
-        center_curve[column] = center_beta[:, index]
-    theta = v6_utils.atlas.theta_from_beta_batch(center_beta, theta_sign=theta_sign)
-    for index, column in enumerate(v6_utils.atlas.THETA_COLS):
-        center_curve[column] = theta[:, index]
-    for index, column in enumerate(v6_utils.atlas.XYZ_COLS):
-        center_curve[column] = center_xyz[:, index]
-    center_curve["xyz_residual_mm"] = np.linalg.norm(
-        center_curve[v6_utils.atlas.TARGET_XYZ_COLS].to_numpy(dtype=float) - center_xyz,
-        axis=1,
-    ) * 1000.0
-    center_curve["tube_success"] = center_curve["xyz_residual_mm"].le(1.5)
-    center_curve["parent_offset_id"] = "centerline"
-    center_curve["inverse_nfev"] = 0
-    solved[center_pair] = center_curve
     adjacency = engine.tube_surface_adjacency(offsets_mm)
     for pair in pairs:
-        if pair == center_pair:
-            continue
-        neighbor_pairs = [
-            right if left == pair else left
-            for left, right in adjacency
-            if (left == pair and right in solved) or (right == pair and left in solved)
-        ]
-        parent_pair = min(
-            neighbor_pairs or [center_pair],
-            key=lambda item: math.hypot(item[0] - pair[0], item[1] - pair[1]),
-        )
         mask = np.isclose(tube_targets["delta_n1_mm"].to_numpy(dtype=float), pair[0])
         mask &= np.isclose(tube_targets["delta_n2_mm"].to_numpy(dtype=float), pair[1])
         curve_targets = tube_targets.loc[mask].sort_values("angle_idx", kind="stable").reset_index(drop=True)
-        solved[pair] = v5_expansion.solve_tube_curve(
-            curve_targets,
-            centerline=center,
-            parent_curve=solved[parent_pair],
-            weighted_pinv=pinv,
-            lengths_m=lengths_m,
-            p_end_local_m=p_end_local_m,
-            theta_sign=theta_sign,
-            max_nfev=int(max_nfev),
-            parent_offset_id=f"n1_{parent_pair[0]:g}_n2_{parent_pair[1]:g}",
-            bounds=bounds,
+        target_xyz = curve_targets[v6_utils.atlas.TARGET_XYZ_COLS].to_numpy(dtype=float)
+        if pair == center_pair:
+            beta_prediction = center_beta.copy()
+            parent_pair = center_pair
+        else:
+            neighbor_pairs = [
+                right if left == pair else left
+                for left, right in adjacency
+                if (left == pair and right in solved) or (right == pair and left in solved)
+            ]
+            parent_pair = min(
+                neighbor_pairs or [center_pair],
+                key=lambda item: math.hypot(item[0] - pair[0], item[1] - pair[1]),
+            )
+            direct = center_beta + np.einsum(
+                "nij,nj->ni",
+                pinv,
+                target_xyz - center_xyz,
+            )
+            parent = solved[parent_pair].sort_values("angle_idx", kind="stable").reset_index(
+                drop=True
+            )
+            parent_beta = parent[v6_utils.atlas.BETA_COLS].to_numpy(dtype=float)
+            parent_target = parent[v6_utils.atlas.TARGET_XYZ_COLS].to_numpy(dtype=float)
+            incremental = parent_beta + np.einsum(
+                "nij,nj->ni",
+                pinv,
+                target_xyz - parent_target,
+            )
+            beta_prediction = 0.5 * direct + 0.5 * incremental
+        beta_prediction = np.clip(
+            beta_prediction,
+            np.asarray(bounds, dtype=float)[:, 0],
+            np.asarray(bounds, dtype=float)[:, 1],
         )
+        theta = v6_utils.atlas.theta_from_beta_batch(
+            beta_prediction,
+            theta_sign=float(theta_sign),
+        )
+        achieved = v6_utils.atlas.fk_from_beta_batch(
+            beta_prediction,
+            lengths_m=np.asarray(lengths_m, dtype=float),
+            p_end_local_m=np.asarray(p_end_local_m, dtype=float),
+            theta_sign=float(theta_sign),
+        )
+        curve = curve_targets.copy()
+        for index, column in enumerate(v6_utils.atlas.BETA_COLS):
+            curve[column] = beta_prediction[:, index]
+        for index, column in enumerate(v6_utils.atlas.THETA_COLS):
+            curve[column] = theta[:, index]
+        for index, column in enumerate(v6_utils.atlas.XYZ_COLS):
+            curve[column] = achieved[:, index]
+        curve["xyz_residual_mm"] = np.linalg.norm(target_xyz - achieved, axis=1) * 1000.0
+        curve["tube_success"] = curve["xyz_residual_mm"].le(1.5)
+        curve["parent_offset_id"] = (
+            "centerline"
+            if pair == center_pair
+            else f"n1_{parent_pair[0]:g}_n2_{parent_pair[1]:g}"
+        )
+        curve["inverse_nfev"] = 0
+        curve["initializer_strategy"] = "jacobian_neighbor_predictor_v1"
+        solved[pair] = curve
     return pd.concat([solved[pair] for pair in pairs], ignore_index=True, sort=False)
 
 

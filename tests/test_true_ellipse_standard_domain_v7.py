@@ -47,6 +47,7 @@ def test_cli_defaults_register_standard_domain_120mm_protocol() -> None:
 def test_formal_protocol_rejects_domain_candidate_and_radius_ladder_changes() -> None:
     mod = _load_module()
 
+    baseline = mod.formal_protocol_report(mod.parse_args([]))
     wrong_domain = mod.formal_protocol_report(mod.parse_args(["--joint-domain-id", "current_v6"]))
     wrong_candidates = mod.formal_protocol_report(
         mod.parse_args(["--rescue-candidates-per-angle", "8"])
@@ -58,6 +59,9 @@ def test_formal_protocol_rejects_domain_candidate_and_radius_ladder_changes() ->
     assert wrong_domain["formal_protocol_gate_pass"] is False
     assert wrong_candidates["formal_protocol_gate_pass"] is False
     assert wrong_ladder["formal_protocol_gate_pass"] is False
+    assert wrong_domain["protocol_fingerprint"] != baseline["protocol_fingerprint"]
+    assert wrong_candidates["protocol_fingerprint"] != baseline["protocol_fingerprint"]
+    assert wrong_ladder["protocol_fingerprint"] != baseline["protocol_fingerprint"]
 
 
 def test_rescue_admission_is_exploratory_and_does_not_replace_strict_gate() -> None:
@@ -299,3 +303,82 @@ def test_dataset_gate_requires_tube_split_support_margin_and_challenge() -> None
         failed = dict(passing)
         failed[field] = False
         assert mod.formal_dataset_gate(failed) is False
+
+
+def test_nonformal_parent_resampling_keeps_physical_phase_and_reindexes_grid() -> None:
+    mod = _load_module()
+    parent = pd.DataFrame(
+        {
+            "angle_idx": np.arange(360),
+            "angle_rad": np.deg2rad(np.arange(360, dtype=float)),
+            "marker": np.arange(360),
+        }
+    )
+
+    sampled = mod.resample_parent_curve(parent, n_points=36)
+
+    assert sampled["angle_idx"].tolist() == list(range(36))
+    assert sampled["marker"].tolist() == list(range(0, 360, 10))
+    assert np.rad2deg(sampled["angle_rad"].to_numpy()) == pytest.approx(
+        np.arange(0, 360, 10)
+    )
+
+
+def test_tube_surface_initializer_is_vectorized_predictor_not_pointwise_ik(monkeypatch) -> None:
+    mod = _load_module()
+    lengths_m = np.full(31, 0.04, dtype=float)
+    p_end_local_m = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)
+    angle = np.linspace(0.0, 2.0 * np.pi, 4, endpoint=False)
+    beta = np.zeros((4, 6), dtype=float)
+    beta[:, 4] = np.deg2rad(1.0 + 0.1 * np.sin(angle))
+    beta[:, 5] = np.deg2rad(-1.0 + 0.1 * np.cos(angle))
+    xyz = mod.v6_utils.atlas.fk_from_beta_batch(
+        beta,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+    )
+    centerline = pd.DataFrame(
+        {
+            "angle_idx": np.arange(4),
+            "angle_rad": angle,
+            "x_target_m": xyz[:, 0],
+            "y_target_m": xyz[:, 1],
+            "z_target_m": xyz[:, 2],
+            "x_m": xyz[:, 0],
+            "y_m": xyz[:, 1],
+            "z_m": xyz[:, 2],
+        }
+    )
+    for index, column in enumerate(mod.v6_utils.atlas.BETA_COLS):
+        centerline[column] = beta[:, index]
+    targets = mod.v6_utils.atlas.make_normal_tube_targets(
+        centerline, offsets_mm=(-1.0, 0.0, 1.0)
+    )
+    monkeypatch.setattr(
+        mod.v5_expansion,
+        "solve_tube_curve",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pointwise IK must not be used by the surface initializer")
+        ),
+    )
+
+    initial = mod._initial_tube_surface(
+        centerline=centerline,
+        tube_targets=targets,
+        offsets_mm=(-1.0, 0.0, 1.0),
+        bounds=mod._domain().bounds_rad,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+        max_nfev=5,
+    )
+
+    assert len(initial) == 4 * 9
+    assert np.isfinite(initial[mod.v6_utils.atlas.BETA_COLS]).all().all()
+    assert np.isfinite(initial["xyz_residual_mm"]).all()
+    center = initial[
+        np.isclose(initial["delta_n1_mm"], 0.0)
+        & np.isclose(initial["delta_n2_mm"], 0.0)
+    ].sort_values("angle_idx")
+    np.testing.assert_allclose(center[mod.v6_utils.atlas.BETA_COLS], beta)

@@ -105,6 +105,7 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "final_points_360": int(args.final_points) == 360,
         "strict_candidates_eight": int(args.max_candidates_per_angle) == registered.strict_candidate_limit,
         "rescue_candidates_24": int(args.rescue_candidates_per_angle) == registered.rescue_candidate_limit,
+        "rescue_kappa_threshold_100": np.isclose(float(args.rescue_kappa_threshold), 100.0),
         "balanced_margin_required": bool(args.require_joint_margin_gate)
         and np.isclose(float(args.soft_margin_deg), _margin_policy().soft_barrier_margin_deg),
         "registered_margin_weight": np.isclose(float(args.lambda_margin), 1.0e-2),
@@ -122,6 +123,7 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "retry_steps_mm": parse_float_csv(args.retry_steps_mm),
         "strict_candidate_limit": int(args.max_candidates_per_angle),
         "rescue_candidate_limit": int(args.rescue_candidates_per_angle),
+        "rescue_kappa_threshold": float(args.rescue_kappa_threshold),
         "preset": str(args.preset),
         "cut_indices": list(cuts),
         "anchor_schedules": list(anchors),
@@ -449,6 +451,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--final-points", type=int, default=360)
     parser.add_argument("--max-candidates-per-angle", type=int, default=registered.strict_candidate_limit)
     parser.add_argument("--rescue-candidates-per-angle", type=int, default=registered.rescue_candidate_limit)
+    parser.add_argument("--rescue-kappa-threshold", type=float, default=100.0)
     parser.add_argument("--candidate-cluster-deg", type=float, default=0.25)
     parser.add_argument("--candidate-residual-mm", type=float, default=2.0)
     parser.add_argument("--tube-offsets-mm", default="-5,-2.5,0,2.5,5")

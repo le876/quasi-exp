@@ -813,6 +813,20 @@ def rescue_seeds_per_scale(max_seed_count: int) -> int:
     return int(math.ceil((budget - 1) / 3.0))
 
 
+def rescue_seed_budget_for_kappa(
+    max_seed_count: int,
+    *,
+    kappa: float,
+    threshold: float,
+) -> int:
+    budget = int(max_seed_count)
+    if budget <= 0:
+        raise ValueError("rescue max_seed_count must be positive")
+    if budget <= 8:
+        return budget
+    return budget if float(kappa) >= float(threshold) else 8
+
+
 def generate_radial_candidate_layers(
     targets: pd.DataFrame,
     predictor: pd.DataFrame,
@@ -829,6 +843,7 @@ def generate_radial_candidate_layers(
     max_candidates_per_angle: int = 8,
     seed: int = 0,
     workers: int = 1,
+    expanded_seed_kappa_threshold: float = -np.inf,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Generate bounded per-angle IK candidates around a radial predictor."""
     target_ordered = restore_angle_order(targets)
@@ -850,7 +865,13 @@ def generate_radial_candidate_layers(
             p_end_local_m=np.asarray(p_end_local_m, dtype=float),
             theta_sign=float(theta_sign),
         )
-        seeds_per_scale = rescue_seeds_per_scale(int(max_seed_count))
+        predictor_kappa = float(atlas.jacobian_metrics(jac)["kappa"])
+        local_seed_budget = rescue_seed_budget_for_kappa(
+            int(max_seed_count),
+            kappa=predictor_kappa,
+            threshold=float(expanded_seed_kappa_threshold),
+        )
+        seeds_per_scale = rescue_seeds_per_scale(local_seed_budget)
         null_seeds = atlas.generate_nullspace_seeds(
             prediction,
             jac,
@@ -882,7 +903,7 @@ def generate_radial_candidate_layers(
             seen.add(key)
             deduplicated.append(clipped)
             deduplicated_sources.append(source)
-            if len(deduplicated) >= int(max_seed_count):
+            if len(deduplicated) >= local_seed_budget:
                 break
         solutions = atlas.solve_beta_ik_many(
             target_row[atlas.TARGET_XYZ_COLS].to_numpy(dtype=float),
@@ -905,6 +926,8 @@ def generate_radial_candidate_layers(
                     "candidate_seed_source": deduplicated_sources[int(solution.seed_rank)],
                     "xyz_residual_mm": float(solution.residual_mm),
                     "inverse_nfev": int(solution.nfev),
+                    "candidate_seed_budget": int(local_seed_budget),
+                    "predictor_kappa": predictor_kappa,
                 }
             )
             for beta_idx, column in enumerate(atlas.BETA_COLS):
@@ -934,6 +957,13 @@ def generate_radial_candidate_layers(
         **filter_report,
         "raw_candidate_rows": int(len(raw)),
         "max_seed_count": int(max_seed_count),
+        "expanded_seed_kappa_threshold": float(expanded_seed_kappa_threshold),
+        "expanded_seed_angle_count": int(
+            raw.loc[raw["candidate_seed_budget"].astype(int).gt(8), "angle_idx"].nunique()
+        ),
+        "legacy_seed_angle_count": int(
+            raw.loc[raw["candidate_seed_budget"].astype(int).le(8), "angle_idx"].nunique()
+        ),
         "nullspace_seeds_per_scale": rescue_seeds_per_scale(int(max_seed_count)),
         "candidate_workers": int(worker_count),
         "candidate_generation_gate_pass": bool(filter_report["candidate_layer_gate_pass"]),

@@ -640,6 +640,7 @@ def _rescue_cache_fingerprint(
     cluster_threshold_deg: float,
     seed: int,
     pointwise_candidates: pd.DataFrame | None = None,
+    expanded_seed_kappa_threshold: float = -np.inf,
 ) -> str:
     target_columns = ["angle_idx", *v6.atlas.TARGET_XYZ_COLS]
     predictor_columns = ["angle_idx", *v6.atlas.BETA_COLS]
@@ -669,6 +670,7 @@ def _rescue_cache_fingerprint(
             "residual_limit_mm": float(residual_limit_mm),
             "cluster_threshold_deg": float(cluster_threshold_deg),
             "seed": int(seed),
+            "expanded_seed_kappa_threshold": float(expanded_seed_kappa_threshold),
         }
     )
 
@@ -788,6 +790,9 @@ def _correct_one_job(
             cluster_threshold_deg=float(args.candidate_cluster_deg),
             seed=int(args.seed),
             pointwise_candidates=pointwise,
+            expanded_seed_kappa_threshold=float(
+                getattr(args, "rescue_kappa_threshold", -np.inf)
+            ),
         )
         shared_cache = rescue_cache if rescue_cache is not None else {}
         cached_payload = shared_cache.get(predictor_type)
@@ -842,6 +847,9 @@ def _correct_one_job(
                 max_candidates_per_angle=rescue_budget,
                 seed=int(args.seed),
                 workers=int(args.workers) if rescue_budget > 8 else 1,
+                expanded_seed_kappa_threshold=float(
+                    getattr(args, "rescue_kappa_threshold", -np.inf)
+                ),
             )
             graph_path, graph_report = v6.candidate_graph_rescue(candidates)
             candidates.to_parquet(

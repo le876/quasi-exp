@@ -469,6 +469,10 @@ def test_rescue_seed_budget_expands_beyond_legacy_eight_candidate_mode() -> None
     with pytest.raises(ValueError, match="positive"):
         mod.rescue_seeds_per_scale(0)
 
+    assert mod.rescue_seed_budget_for_kappa(24, kappa=99.9, threshold=100.0) == 8
+    assert mod.rescue_seed_budget_for_kappa(24, kappa=100.0, threshold=100.0) == 24
+    assert mod.rescue_seed_budget_for_kappa(8, kappa=1.0e9, threshold=100.0) == 8
+
 
 def test_large_rescue_budget_materializes_24_seeds_with_deterministic_angle_workers() -> None:
     mod = _load_module()

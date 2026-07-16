@@ -34,6 +34,7 @@ def test_cli_defaults_register_standard_domain_120mm_protocol() -> None:
     assert args.target_radius_mm == 120.0
     assert args.max_candidates_per_angle == 8
     assert args.rescue_candidates_per_angle == 24
+    assert args.rescue_kappa_threshold == 100.0
     assert args.lambda_margin == 0.01
     assert mod.parse_float_csv(args.radius_checkpoints_mm) == list(
         mod.engine.v7_standard_domain_protocol().formal_checkpoints_mm

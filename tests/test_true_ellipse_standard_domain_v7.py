@@ -382,3 +382,30 @@ def test_tube_surface_initializer_is_vectorized_predictor_not_pointwise_ik(monke
         & np.isclose(initial["delta_n2_mm"], 0.0)
     ].sort_values("angle_idx")
     np.testing.assert_allclose(center[mod.v6_utils.atlas.BETA_COLS], beta)
+
+
+def test_challenge_centerline_is_extracted_from_final_tube_labels() -> None:
+    mod = _load_module()
+    rows = []
+    for angle in range(3):
+        for offset, is_centerline in (("center", True), ("outer", False)):
+            row = {
+                "angle_idx": angle,
+                "tube_offset_id": offset,
+                "is_centerline": is_centerline,
+                "sample_id": f"{angle}:{offset}",
+            }
+            row.update(
+                {
+                    column: float(angle + index + (0.0 if is_centerline else 10.0))
+                    for index, column in enumerate(mod.v6_utils.atlas.BETA_COLS)
+                }
+            )
+            rows.append(row)
+    tube = pd.DataFrame(rows)
+
+    centerline = mod.extract_tube_centerline(tube, expected_points=3)
+
+    assert centerline["angle_idx"].tolist() == [0, 1, 2]
+    assert centerline["is_centerline"].all()
+    assert centerline[mod.v6_utils.atlas.BETA_COLS[0]].tolist() == [0.0, 1.0, 2.0]

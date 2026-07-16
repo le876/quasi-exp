@@ -396,6 +396,22 @@ def formal_dataset_gate(checks: Mapping[str, Any]) -> bool:
     return bool(all(bool(checks.get(name, False)) for name in required))
 
 
+def extract_tube_centerline(tube: pd.DataFrame, *, expected_points: int) -> pd.DataFrame:
+    required = {"angle_idx", "is_centerline", *v6_utils.atlas.BETA_COLS}
+    missing = sorted(required - set(tube.columns))
+    if missing:
+        raise ValueError(f"tube centerline extraction missing columns: {missing}")
+    centerline = tube.loc[tube["is_centerline"].astype(bool)].sort_values(
+        "angle_idx", kind="stable"
+    ).reset_index(drop=True)
+    expected = list(range(int(expected_points)))
+    if centerline["angle_idx"].astype(int).tolist() != expected:
+        raise ValueError("final tube does not contain exactly one centerline row per phase")
+    if "sample_id" in centerline and not centerline["sample_id"].is_unique:
+        raise ValueError("final tube centerline sample IDs are not unique")
+    return centerline
+
+
 def _preset_settings(preset: str) -> dict[str, Any]:
     if str(preset) == "smoke":
         return {"final_points": 36, "cut_indices": (0,), "max_opt_nfev": 8}
@@ -1477,6 +1493,8 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     final_path = out / "true_ellipse_standard_domain_tubes_v7.parquet"
     manifest_path = out / "trajectory_manifest.csv"
     support_path = out / "holdout_support_candidates.csv"
+    centerline_dir = out / "integer_centerlines"
+    centerline_dir.mkdir(parents=True, exist_ok=True)
     tube_report = ensure_tube_report(args)
     if not bool(tube_report.get("formal_tube_gate_pass", False)):
         report = {
@@ -1494,6 +1512,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     radii = tuple(float(value) for value in tube_report["materialized_radii_mm"])
     frames: list[pd.DataFrame] = []
     manifest_rows: list[dict[str, Any]] = []
+    dataset_centerlines: dict[str, dict[str, Any]] = {}
     for radius_mm in radii:
         key = f"{radius_mm:g}"
         tube_path = Path(tube_report["tube_paths"][key])
@@ -1525,6 +1544,19 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "tube_sha256": file_sha256(tube_path),
             }
         )
+        final_centerline = extract_tube_centerline(tube, expected_points=int(args.final_points))
+        final_centerline_path = centerline_dir / f"{v6_runner.radius_slug(radius_mm)}.parquet"
+        final_centerline.to_parquet(
+            final_centerline_path,
+            index=False,
+            compression="zstd",
+        )
+        dataset_centerlines[key] = {
+            "path": str(final_centerline_path.resolve()),
+            "sha256": file_sha256(final_centerline_path),
+            "source_tube_sha256": file_sha256(tube_path),
+            "rows": int(len(final_centerline)),
+        }
         frames.append(tube)
     dataset = pd.concat(frames, ignore_index=True, sort=False)
     manifest = pd.DataFrame(manifest_rows)
@@ -1606,7 +1638,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
             ("test", "test_radius_mm"),
         ):
             radius_mm = float(holdout[radius_key])
-            centerline_path = Path(tube_report["centerline_manifest"][f"{radius_mm:g}"]["path"])
+            centerline_path = Path(dataset_centerlines[f"{radius_mm:g}"]["path"])
             _challenge, challenge_report, challenge_path = materialize_half_phase_challenge(
                 args,
                 family=family,
@@ -1684,6 +1716,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "challenge_gate_pass": challenge_gate,
         "challenge_reports": challenge_reports,
         "challenge_paths": challenge_paths,
+        "integer_centerline_manifest": dataset_centerlines,
         "attempt_path": str(attempt_path.resolve()),
         "attempt_sha256": file_sha256(attempt_path),
         "manifest_path": str(manifest_path.resolve()),

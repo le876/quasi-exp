@@ -361,6 +361,7 @@ def test_optimize_tube_surface_is_complete_cut_audited_and_deterministic() -> No
         sweep_directions=("outward", "inward"),
         max_nfev=10,
         compute_conditioning=False,
+        cut_workers=2,
     )
 
     assert len(first) == 4 * 9
@@ -384,3 +385,4 @@ def test_optimize_tube_surface_is_complete_cut_audited_and_deterministic() -> No
         second[atlas.BETA_COLS].to_numpy(),
     )
     assert first_report["selected_surface_hash"] == second_report["selected_surface_hash"]
+    assert second_report["cut_workers"] == 2

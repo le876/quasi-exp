@@ -41,7 +41,7 @@ DEFAULT_OUT_DIR = PROJECT_ROOT / "runs" / "true_ellipse_standard_domain_v7"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "radial", "tube", "dataset", "summary")
 RUNNER_STRATEGY_VERSION = 1
-TUBE_STRATEGY_VERSION = 1
+TUBE_STRATEGY_VERSION = 2
 DATASET_STRATEGY_VERSION = 1
 
 write_json = v6_utils.write_json
@@ -1018,6 +1018,7 @@ def _materialize_tube_radius(
             sweep_directions=("outward", "inward"),
             max_nfev=int(args.max_opt_nfev),
             compute_conditioning=False,
+            cut_workers=int(args.workers),
         )
         surface["tube_success"] = surface["xyz_residual_mm"].le(1.5)
         geometric = v6_runner._tube_quality_metrics(

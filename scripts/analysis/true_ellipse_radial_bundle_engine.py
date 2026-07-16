@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from itertools import combinations
 from typing import Any, Mapping, Sequence
@@ -539,6 +540,7 @@ def optimize_tube_surface(
     sweep_directions: Sequence[str] = ("outward", "inward"),
     max_nfev: int = 40,
     compute_conditioning: bool = True,
+    cut_workers: int = 1,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Jointly relabel a phase×normal-grid surface by block-coordinate sweeps.
 
@@ -597,11 +599,13 @@ def optimize_tube_surface(
     normalized_cuts = tuple(int(value) for value in cut_indices)
     if not normalized_cuts:
         raise ValueError("tube surface requires at least one cyclic cut")
-
-    cut_outputs: list[tuple[int, pd.DataFrame, dict[str, Any]]] = []
+    if int(cut_workers) < 1:
+        raise ValueError("tube surface cut_workers must be positive")
     for cut_idx in normalized_cuts:
         if cut_idx not in angle_indices:
             raise ValueError(f"cyclic cut is absent from tube angles: {cut_idx}")
+
+    def optimize_cut(cut_idx: int) -> tuple[int, pd.DataFrame, dict[str, Any]]:
         curves = {pair: frame.copy() for pair, frame in initial_curves.items()}
         curve_reports: list[dict[str, Any]] = []
         for sweep_index, direction in enumerate(normalized_directions):
@@ -677,7 +681,14 @@ def optimize_tube_surface(
             **margin,
             **margin_gate,
         }
-        cut_outputs.append((int(cut_idx), surface, cut_report))
+        return int(cut_idx), surface, cut_report
+
+    worker_count = min(int(cut_workers), len(normalized_cuts))
+    if worker_count == 1:
+        cut_outputs = [optimize_cut(cut_idx) for cut_idx in normalized_cuts]
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            cut_outputs = list(executor.map(optimize_cut, normalized_cuts))
 
     pair_differences: list[dict[str, Any]] = []
     for (left_cut, left, _left_report), (right_cut, right, _right_report) in combinations(cut_outputs, 2):
@@ -716,7 +727,7 @@ def optimize_tube_surface(
         and int(selected_surface["tube_offset_id"].nunique()) == len(pairs)
     )
     report = {
-        "strategy_version": "tube-surface-v1",
+        "strategy_version": "tube-surface-v2-parallel-cuts",
         "joint_domain_id": domain.domain_id,
         "joint_domain_fingerprint": domain.fingerprint,
         "joint_margin_policy_id": margin_policy.policy_id,
@@ -728,6 +739,7 @@ def optimize_tube_surface(
         "surface_complete": complete,
         "cut_count": int(len(normalized_cuts)),
         "cut_indices": list(normalized_cuts),
+        "cut_workers": int(worker_count),
         "sweep_directions": list(normalized_directions),
         "selected_cut_idx": int(selected_cut),
         "selected_surface_hash": _surface_hash(selected_surface, beta_columns),

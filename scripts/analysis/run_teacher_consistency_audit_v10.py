@@ -38,8 +38,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             if not (out / "summary.json").exists():
                 subprocess.run(
                     [
-                        args.python, str(args.teacher_runner), "--preset", "smoke",
+                        args.python, str(args.teacher_runner), "--preset", "pilot",
                         "--phase-count", "180", "--variants", variant,
+                        "--tube-offsets-mm", "0",
                         "--radius-mm", str(args.radius_mm), "--project-root", str(args.project_root),
                         "--protocol-config", str(args.protocol_config), "--output", str(out),
                         "--traversal-direction", direction, "--cyclic-cut", str(cut),

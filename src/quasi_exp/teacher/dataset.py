@@ -86,6 +86,30 @@ def evaluate_tube_gate(
         "multi_branch_zero": float(metrics.get("multi_branch_ratio", math.inf))
         <= float(thresholds["multi_branch_ratio"]),
     }
+
+
+def measured_multi_branch_ratio(frame: pd.DataFrame, *, threshold_deg: float = 1.0) -> float:
+    """Measure conflicting labels only for numerically identical target XYZ rows."""
+
+    beta_columns = [f"teacher_beta{index}_rad" for index in range(1, 7)]
+    xyz_columns = ["target_x_m", "target_y_m", "target_z_m"]
+    missing = set(beta_columns + xyz_columns) - set(frame.columns)
+    if missing:
+        raise ValueError(f"branch audit is missing columns: {sorted(missing)}")
+    keyed = frame.assign(
+        _xyz_key=list(map(tuple, np.round(frame[xyz_columns].to_numpy(dtype=float), 12)))
+    )
+    duplicate_groups = [group for _, group in keyed.groupby("_xyz_key") if len(group) > 1]
+    if not duplicate_groups:
+        return 0.0
+    conflicts = []
+    for group in duplicate_groups:
+        beta = group[beta_columns].to_numpy(dtype=float)
+        gap = np.rad2deg(
+            np.sqrt(np.mean(np.square(beta[:, None, :] - beta[None, :, :]), axis=2))
+        )
+        conflicts.append(bool(np.max(gap) > float(threshold_deg)))
+    return float(np.mean(conflicts))
     return {
         "gate_id": "trajectory-tube-v10.1",
         "thresholds": dict(thresholds),

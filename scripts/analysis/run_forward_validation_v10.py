@@ -40,6 +40,22 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         absolute_error_p95_m_limit=5.0e-5,
     )
     jacobian_wall = time.perf_counter() - jacobian_started
+    singular = np.asarray(
+        [np.linalg.svd(environment.jacobian(row), compute_uv=False) for row in source]
+    )
+    condition = singular[:, 0] / np.maximum(singular[:, 2], np.finfo(float).eps)
+    singular_summary = {
+        f"sigma{axis + 1}_{quantile}": float(np.percentile(singular[:, axis], percentile))
+        for axis in range(3)
+        for quantile, percentile in (("p01", 1), ("p50", 50), ("p99", 99))
+    }
+    singular_summary.update(
+        {
+            "kappa_p50": float(np.percentile(condition, 50)),
+            "kappa_p95": float(np.percentile(condition, 95)),
+            "kappa_max": float(np.max(condition)),
+        }
+    )
 
     policy = TeacherPolicy(
         variant=TeacherVariant.T1,
@@ -100,6 +116,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "passed": jacobian.passed,
             "metrics": dict(jacobian.metrics),
             "per_scale": [dict(row) for row in jacobian.per_scale],
+            "singular_value_distribution": singular_summary,
             "wall_time_s": jacobian_wall,
         },
         "synthetic_recovery": {

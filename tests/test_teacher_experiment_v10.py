@@ -23,11 +23,13 @@ def test_manifest_fingerprint_binds_protocol_inputs_and_raw_worker_bytes(tmp_pat
         tube_offsets_mm=(-1.0, 0.0, 1.0),
         solver_seed=20260720,
         input_files=(worker,),
+        worker_code_files=(Path(__file__),),
     )
 
     assert manifest.input_sha256[str(worker.resolve())] == sha256_file(worker)
     assert len(manifest.protocol_sha256) == 64
     assert manifest.raw_worker_bytes_sha256 == sha256_file(worker)
+    assert manifest.worker_code_sha256[str(Path(__file__).resolve())] == sha256_file(__file__)
 
 
 def test_atomic_json_rejects_non_finite_values(tmp_path: Path) -> None:

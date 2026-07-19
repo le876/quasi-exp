@@ -51,8 +51,19 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             norm.adapt(arrays["train"].features)
             hidden = tf.keras.layers.Dense(128, activation="gelu")(norm(inputs))
             hidden = tf.keras.layers.Dense(128, activation="gelu")(hidden)
-            beta_out = tf.keras.layers.Dense(6, name="beta")(hidden)
             chart_out = tf.keras.layers.Dense(chart_count, name="chart")(hidden)
+            expert_outputs = [
+                tf.keras.layers.Dense(6, name=f"expert_{chart_index}")(hidden)
+                for chart_index in range(chart_count)
+            ]
+            experts = tf.keras.layers.Lambda(lambda values: tf.stack(values, axis=1), name="experts")(
+                expert_outputs
+            )
+            probabilities = tf.keras.layers.Softmax(name="chart_probabilities")(chart_out)
+            beta_out = tf.keras.layers.Lambda(
+                lambda values: tf.reduce_sum(values[0] * values[1][..., None], axis=1),
+                name="beta",
+            )([experts, probabilities])
             model = tf.keras.Model(inputs, [beta_out, chart_out])
             model.compile(
                 optimizer="adam",

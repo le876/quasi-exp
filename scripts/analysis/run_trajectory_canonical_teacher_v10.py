@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -31,10 +32,12 @@ from quasi_exp.teacher.canonical import (
     TeacherVariant,
     TrajectorySpec,
 )
+from quasi_exp.teacher.atlas import build_local_atlas
 from quasi_exp.teacher.dataset import (
     evaluate_centerline_gate,
     evaluate_tube_gate,
     trajectory_frame,
+    measured_multi_branch_ratio,
 )
 from quasi_exp.teacher.experiment import ExperimentManifest, atomic_write_json
 from quasi_exp.teacher.forward import ForwardEnvironment
@@ -129,12 +132,24 @@ def generate_targets(family: pd.Series, radius_mm: float, phase_count: int) -> n
 
 
 def legacy_path(project_root: Path, radius_mm: float, phase_count: int) -> tuple[np.ndarray, Path]:
-    path = (
+    requested = (
         project_root
         / "runs/true_ellipse_standard_domain_v7/01_radial"
         / radius_slug(radius_mm)
         / "selected_centerline_360.parquet"
     )
+    path = requested
+    if not path.exists():
+        candidates = list(
+            (project_root / "runs/true_ellipse_standard_domain_v7/01_radial").glob(
+                "r*/selected_centerline_360.parquet"
+            )
+        )
+        if not candidates:
+            raise FileNotFoundError(str(requested))
+        def parsed_radius(candidate: Path) -> float:
+            return float(candidate.parent.name[1:].replace("p", "."))
+        path = min(candidates, key=lambda candidate: abs(parsed_radius(candidate) - float(radius_mm)))
     frame = pd.read_parquet(path).sort_values("angle_idx", kind="stable")
     if 360 % int(phase_count) != 0:
         raise ValueError("phase_count must evenly subsample the 360-point V7 baseline")
@@ -155,7 +170,12 @@ def normal_frame(targets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return n1, n2
 
 
-def policy_for(variant: TeacherVariant, seed: int, preset: str) -> TeacherPolicy:
+def policy_for(
+    variant: TeacherVariant,
+    seed: int,
+    preset: str,
+    registered: dict[str, Any] | None = None,
+) -> TeacherPolicy:
     budget = 4 if preset == "smoke" else 16
     common = dict(
         variant=variant,
@@ -165,6 +185,9 @@ def policy_for(variant: TeacherVariant, seed: int, preset: str) -> TeacherPolicy
         max_corrector_iterations=30 if preset == "smoke" else 100,
         safe_joint_margin_deg=1.5,
     )
+    if registered is not None:
+        values = registered[variant.value]
+        return TeacherPolicy(**common, **{key: float(value) for key, value in values.items()})
     if variant == TeacherVariant.T1:
         return TeacherPolicy(**common, lambda_velocity=0.1, lambda_acceleration=0.0, lambda_posture=0.01, lambda_conditioning=0.0)
     if variant == TeacherVariant.T2:
@@ -183,6 +206,8 @@ def legacy_trajectory(
     *,
     radius_mm: float,
     seed: int,
+    traversal_direction: str = "forward",
+    cyclic_cut: int = 0,
 ) -> TeacherTrajectory:
     achieved = environment.fk(beta)
     residual = np.linalg.norm(achieved - targets, axis=1) * 1000.0
@@ -216,8 +241,8 @@ def legacy_trajectory(
             "family_id": FAMILY_ID,
             "radius_mm": radius_mm,
             "solver_seed": seed,
-            "traversal_direction": "forward",
-            "cyclic_cut": 0,
+            "traversal_direction": traversal_direction,
+            "cyclic_cut": int(cyclic_cut),
             "root_configuration_id": "v7-selected-centerline",
         },
         success=bool(np.max(residual) <= 3.0 and np.min(margin) >= -1e-8),
@@ -229,19 +254,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     project_root = Path(args.project_root).resolve()
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
+    protocol_config = load_config(args.protocol_config)
+    if str(protocol_config["family_id"]) != str(args.family_id):
+        raise ValueError("family-id differs from the frozen protocol config")
     family_path = project_root / "runs/true_ellipse_family_expansion_v5/02_pointwise/selected_families.csv"
     legacy_beta, legacy_source = legacy_path(project_root, args.radius_mm, args.phase_count)
     manifest = ExperimentManifest.create(
-        protocol_id="trajectory-canonical-teacher-v10.1",
+        protocol_id=str(protocol_config["protocol_id"]),
         teacher_variants=args.variants,
         family_id=args.family_id,
         radii_mm=(args.radius_mm,),
         phase_count=args.phase_count,
         tube_offsets_mm=args.tube_offsets_mm,
         solver_seed=args.solver_seed,
-        input_files=(family_path, args.robot_config, legacy_source),
+        traversal_direction=args.traversal_direction,
+        cyclic_cut=args.cyclic_cut,
+        input_files=(family_path, args.robot_config, args.protocol_config, legacy_source),
+        worker_code_files=(
+            Path(__file__),
+            Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/canonical.py",
+            Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/forward.py",
+            Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/dataset.py",
+        ),
     )
-    atomic_write_json(output / "manifest.json", manifest.as_dict())
+    manifest_path = output / "manifest.json"
+    if manifest_path.exists() and not args.force:
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing != manifest.as_dict():
+            raise RuntimeError("output contains a different protocol manifest; choose a new output or use --force")
+    atomic_write_json(manifest_path, manifest.as_dict())
     atomic_write_json(output / "runtime.json", runtime_fingerprint())
     environment = load_environment(project_root, Path(args.robot_config))
     family = load_family(project_root, args.family_id)
@@ -252,25 +293,42 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     for variant_name in args.variants:
         variant = TeacherVariant(variant_name)
+        policy = policy_for(variant, args.solver_seed, args.preset, protocol_config["teacher_policies"])
         variant_dir = output / variant.value
         variant_dir.mkdir(parents=True, exist_ok=True)
         center_path = variant_dir / "centerline.parquet"
         report_path = variant_dir / "centerline_report.json"
-        if variant == TeacherVariant.T0:
-            trajectory = legacy_trajectory(
-                environment, targets, legacy_beta, radius_mm=args.radius_mm, seed=args.solver_seed
-            )
-        elif center_path.exists() and report_path.exists() and not args.force:
+        reusable = (
+            center_path.exists()
+            and report_path.exists()
+            and (args.preset == "smoke" or (variant_dir / "tube_report.json").exists())
+        )
+        if reusable and not args.force:
             report = json.loads(report_path.read_text(encoding="utf-8"))
             rows.append(report)
             continue
+        if not args.force and (center_path.exists() or report_path.exists()):
+            raise RuntimeError(
+                f"incomplete cached variant {variant.value}; preserve it and resume into a new output, or explicitly use --force"
+            )
+        if variant == TeacherVariant.T0:
+            trajectory = legacy_trajectory(
+                environment,
+                targets,
+                legacy_beta,
+                radius_mm=args.radius_mm,
+                seed=args.solver_seed,
+                traversal_direction=args.traversal_direction,
+                cyclic_cut=args.cyclic_cut,
+            )
         else:
-            policy = policy_for(variant, args.solver_seed, args.preset)
             spec = TrajectorySpec(
                 trajectory_id=f"{args.family_id}@r{args.radius_mm:g}:center",
                 family_id=args.family_id,
                 radius_mm=args.radius_mm,
                 target_xyz_m=targets,
+                traversal_direction=args.traversal_direction,
+                cyclic_cut=args.cyclic_cut,
             )
             solve_started = time.perf_counter()
             trajectory = teacher.solve(
@@ -280,6 +338,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 initial_beta_path=legacy_beta,
             )
             trajectory.provenance["wall_time_s"] = time.perf_counter() - solve_started
+        atlas = None
+        if variant == TeacherVariant.T4:
+            atlas = build_local_atlas(trajectory, environment, policy)
+            trajectory = replace(trajectory, chart_id=atlas.phase_chart_ids)
+            trajectory.metrics["chart_overlap_gap_p95_deg"] = atlas.overlap_gap_p95_deg
+            trajectory.metrics["chart_overlap_gate_pass"] = float(atlas.overlap_gate_pass)
         trajectory_frame(trajectory, environment).to_parquet(center_path, index=False)
         gate = evaluate_centerline_gate(trajectory)
         report = {
@@ -293,7 +357,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         # Smoke validates the executable centerline chain. Pilot expands to
         # the registered 3x3 normal tube and writes one resumable curve/job.
-        if args.preset == "pilot" and variant != TeacherVariant.T0:
+        if args.preset == "pilot":
             tube_frames: list[pd.DataFrame] = []
             tube_residuals: list[np.ndarray] = []
             tube_local_beta: list[np.ndarray] = []
@@ -317,12 +381,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         radius_mm=args.radius_mm,
                         target_xyz_m=shifted,
                         tube_offsets_mm=tuple(args.tube_offsets_mm),
+                        traversal_direction=args.traversal_direction,
+                        cyclic_cut=args.cyclic_cut,
                     )
                     tube_traj = teacher.solve(
                         tube_spec,
-                        policy_for(variant, args.solver_seed, args.preset),
+                        policy,
                         root_beta=trajectory.beta_rad[0],
-                        initial_beta_path=trajectory.beta_rad,
+                        initial_beta_path=(
+                            atlas.predict_path(shifted)
+                            if atlas is not None
+                            else trajectory.beta_rad
+                        ),
                     )
                     tube_frames.append(
                         trajectory_frame(tube_traj, environment, tube_n1_mm=offset1, tube_n2_mm=offset2)
@@ -344,7 +414,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "residual_p95_mm": float(np.percentile(all_residual, 95)),
                 "residual_max_mm": float(np.max(all_residual)),
                 "local_beta_rms_p95_deg": float(np.percentile(all_local, 95)),
-                "multi_branch_ratio": 0.0,
+                "multi_branch_ratio": measured_multi_branch_ratio(tube_frame),
             }
             atomic_write_json(
                 variant_dir / "tube_report.json",
@@ -367,6 +437,7 @@ def parse_args() -> argparse.Namespace:
     default_project = project_root_from(Path(__file__).resolve().parents[2])
     parser.add_argument("--project-root", type=Path, default=default_project)
     parser.add_argument("--robot-config", type=Path, default=default_project / "configs/robot_rods_only_standard_100k.yaml")
+    parser.add_argument("--protocol-config", type=Path, default=Path(__file__).resolve().parents[2] / "configs/trajectory_canonical_teacher_v10.yaml")
     parser.add_argument("--output", type=Path, default=default_project / "runs/trajectory_canonical_teacher_v10/pilot_a")
     parser.add_argument("--family-id", default=FAMILY_ID)
     parser.add_argument("--radius-mm", type=float, default=100.0)
@@ -375,6 +446,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tube-offsets-mm", type=float, nargs="+")
     parser.add_argument("--variants", nargs="+", choices=tuple(item.value for item in TeacherVariant))
     parser.add_argument("--solver-seed", type=int, default=20260720)
+    parser.add_argument("--traversal-direction", choices=("forward", "reverse"), default="forward")
+    parser.add_argument("--cyclic-cut", type=int, default=0)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     if args.phase_count is None:

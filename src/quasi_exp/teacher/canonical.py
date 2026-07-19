@@ -383,6 +383,13 @@ class CanonicalTeacher:
         if policy.variant in {TeacherVariant.T0, TeacherVariant.T1}:
             selected = np.vstack(previous)
             graph_report: dict[str, Any] = {"success": True, "mode": "continuation"}
+        elif policy.variant == TeacherVariant.T2:
+            selected = (
+                np.asarray(initial_path, dtype=float).copy()
+                if initial_path is not None
+                else np.vstack(previous)
+            )
+            graph_report = {"success": True, "mode": "direct_whole_trajectory"}
         else:
             selected, graph_report = link_cyclic_candidates(
                 candidate_layers,
@@ -420,6 +427,16 @@ class CanonicalTeacher:
         )
         metrics["joint_margin_min_deg"] = float(np.min(margin) * 180.0 / math.pi)
         metrics["corrector_iteration_count"] = float(total_corrector_iterations)
+        multi_branch = []
+        for layer, errors in zip(candidate_layers, residual_layers):
+            feasible = layer[errors <= float(policy.tracking_tolerance_mm)]
+            distinct = any(
+                beta_rms_deg(feasible[left], feasible[right]) >= float(policy.candidate_cluster_deg)
+                for left in range(len(feasible))
+                for right in range(left + 1, len(feasible))
+            )
+            multi_branch.append(distinct)
+        metrics["multi_branch_waypoint_ratio"] = float(np.mean(multi_branch))
 
         chart_id = np.zeros(len(restored_beta), dtype=np.int64)
         if policy.variant == TeacherVariant.T4:
@@ -465,6 +482,7 @@ class CanonicalTeacher:
     ) -> np.ndarray:
         bounds = np.asarray(self._environment.bounds, dtype=float).reshape(6, 2)
         count = len(target)
+        conditioning_indices = tuple(range(0, count, 6))
         velocity_scale = math.radians(1.0)
         acceleration_scale = math.radians(0.25)
 
@@ -497,6 +515,19 @@ class CanonicalTeacher:
                     math.sqrt(float(policy.lambda_posture))
                     * (((beta - mid) / span) * priority[None, :]).reshape(-1)
                 )
+            if policy.lambda_conditioning > 0.0:
+                conditioning = []
+                for point_index in conditioning_indices:
+                    row_beta = beta[point_index]
+                    sigma = np.linalg.svd(
+                        _environment_jacobian(self._environment, row_beta),
+                        compute_uv=False,
+                    )
+                    conditioning.append(0.01 / (float(sigma[-1]) + 0.01))
+                parts.append(
+                    math.sqrt(float(policy.lambda_conditioning))
+                    * np.asarray(conditioning, dtype=float)
+                )
             safe_margin = math.radians(float(policy.safe_joint_margin_deg))
             lower_margin = beta - bounds[:, 0][None, :]
             upper_margin = bounds[:, 1][None, :] - beta
@@ -504,6 +535,11 @@ class CanonicalTeacher:
             # Smoothness is unnecessary here: least_squares only needs a
             # stable high-weight one-sided shell penalty.
             parts.append(10.0 * np.maximum(safe_margin - margin, 0.0).reshape(-1) / safe_margin)
+            parts.append(
+                math.sqrt(max(float(policy.closure_weight), 0.0))
+                * (beta[-1] - beta[0])
+                / velocity_scale
+            )
             return np.concatenate(parts)
 
         # The FK and posture rows are point-local; velocity/acceleration are
@@ -514,7 +550,10 @@ class CanonicalTeacher:
             residual_count += count * 6
         if policy.lambda_posture > 0.0:
             residual_count += count * 6
+        if policy.lambda_conditioning > 0.0:
+            residual_count += len(conditioning_indices)
         residual_count += count * 6
+        residual_count += 6
         sparsity = lil_matrix((residual_count, count * 6), dtype=np.int8)
         row = 0
         for point_index in range(count):
@@ -533,9 +572,16 @@ class CanonicalTeacher:
             for point_index in range(count):
                 sparsity[row : row + 6, point_index * 6 : (point_index + 1) * 6] = 1
                 row += 6
+        if policy.lambda_conditioning > 0.0:
+            for point_index in conditioning_indices:
+                sparsity[row, point_index * 6 : (point_index + 1) * 6] = 1
+                row += 1
         for point_index in range(count):
             sparsity[row : row + 6, point_index * 6 : (point_index + 1) * 6] = 1
             row += 6
+        sparsity[row : row + 6, 0:6] = 1
+        sparsity[row : row + 6, (count - 1) * 6 : count * 6] = 1
+        row += 6
 
         result = least_squares(
             residual,

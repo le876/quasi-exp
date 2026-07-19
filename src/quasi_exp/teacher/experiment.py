@@ -37,8 +37,11 @@ class ExperimentManifest:
     phase_count: int
     tube_offsets_mm: tuple[float, ...]
     solver_seed: int
+    traversal_direction: str
+    cyclic_cut: int
     input_sha256: dict[str, str]
     raw_worker_bytes_sha256: str
+    worker_code_sha256: dict[str, str]
     protocol_sha256: str
 
     @classmethod
@@ -52,10 +55,15 @@ class ExperimentManifest:
         phase_count: int,
         tube_offsets_mm: Sequence[float],
         solver_seed: int,
+        traversal_direction: str = "forward",
+        cyclic_cut: int = 0,
         input_files: Sequence[str | Path],
+        worker_code_files: Sequence[str | Path] = (),
     ) -> "ExperimentManifest":
         files = tuple(sorted(Path(path).resolve() for path in input_files))
         input_hashes = {str(path): sha256_file(path) for path in files}
+        worker_files = tuple(sorted(Path(path).resolve() for path in worker_code_files))
+        worker_hashes = {str(path): sha256_file(path) for path in worker_files}
         raw_digest = hashlib.sha256()
         for path in files:
             raw_digest.update(path.read_bytes())
@@ -67,8 +75,11 @@ class ExperimentManifest:
             "phase_count": int(phase_count),
             "tube_offsets_mm": tuple(float(value) for value in tube_offsets_mm),
             "solver_seed": int(solver_seed),
+            "traversal_direction": str(traversal_direction),
+            "cyclic_cut": int(cyclic_cut),
             "input_sha256": input_hashes,
             "raw_worker_bytes_sha256": raw_digest.hexdigest(),
+            "worker_code_sha256": worker_hashes,
         }
         return cls(**payload, protocol_sha256=hashlib.sha256(_canonical_json(payload)).hexdigest())
 

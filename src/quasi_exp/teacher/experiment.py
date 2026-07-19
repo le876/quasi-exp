@@ -40,8 +40,9 @@ class ExperimentManifest:
     traversal_direction: str
     cyclic_cut: int
     input_sha256: dict[str, str]
-    raw_worker_bytes_sha256: str
+    raw_input_bytes_sha256: str
     worker_code_sha256: dict[str, str]
+    runtime_fingerprint: dict[str, Any]
     protocol_sha256: str
 
     @classmethod
@@ -59,6 +60,7 @@ class ExperimentManifest:
         cyclic_cut: int = 0,
         input_files: Sequence[str | Path],
         worker_code_files: Sequence[str | Path] = (),
+        runtime_fingerprint: dict[str, Any] | None = None,
     ) -> "ExperimentManifest":
         files = tuple(sorted(Path(path).resolve() for path in input_files))
         input_hashes = {str(path): sha256_file(path) for path in files}
@@ -78,8 +80,9 @@ class ExperimentManifest:
             "traversal_direction": str(traversal_direction),
             "cyclic_cut": int(cyclic_cut),
             "input_sha256": input_hashes,
-            "raw_worker_bytes_sha256": raw_digest.hexdigest(),
+            "raw_input_bytes_sha256": raw_digest.hexdigest(),
             "worker_code_sha256": worker_hashes,
+            "runtime_fingerprint": dict(runtime_fingerprint or {}),
         }
         return cls(**payload, protocol_sha256=hashlib.sha256(_canonical_json(payload)).hexdigest())
 

@@ -86,6 +86,12 @@ def evaluate_tube_gate(
         "multi_branch_zero": float(metrics.get("multi_branch_ratio", math.inf))
         <= float(thresholds["multi_branch_ratio"]),
     }
+    return {
+        "gate_id": "trajectory-tube-v10.1",
+        "thresholds": dict(thresholds),
+        "checks": checks,
+        "tube_gate_pass": bool(all(checks.values())),
+    }
 
 
 def measured_multi_branch_ratio(frame: pd.DataFrame, *, threshold_deg: float = 1.0) -> float:
@@ -110,12 +116,6 @@ def measured_multi_branch_ratio(frame: pd.DataFrame, *, threshold_deg: float = 1
         )
         conflicts.append(bool(np.max(gap) > float(threshold_deg)))
     return float(np.mean(conflicts))
-    return {
-        "gate_id": "trajectory-tube-v10.1",
-        "thresholds": dict(thresholds),
-        "checks": checks,
-        "tube_gate_pass": bool(all(checks.values())),
-    }
 
 
 def trajectory_frame(
@@ -165,6 +165,9 @@ def trajectory_frame(
         np.minimum(beta - bounds[:, 0][None, :], bounds[:, 1][None, :] - beta)
     )
     frame["joint_margin_min_deg"] = np.min(margin_deg, axis=1)
+    frame["physical_reachable"] = frame["teacher_fk_residual_mm"] <= 3.0
+    frame["within_joint_bounds"] = frame["joint_margin_min_deg"] >= 0.0
+    frame["training_eligible"] = frame["physical_reachable"] & frame["within_joint_bounds"]
     for index in range(6):
         ordinal = index + 1
         frame[f"teacher_beta{ordinal}_rad"] = beta[:, index]

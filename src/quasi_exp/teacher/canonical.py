@@ -335,7 +335,10 @@ class CanonicalTeacher:
         previous: list[np.ndarray] = []
         total_corrector_iterations = 0
 
-        for index, point in enumerate(target):
+        pointwise_targets = (
+            () if policy.variant == TeacherVariant.T2 else enumerate(target)
+        )
+        for index, point in pointwise_targets:
             seeds: list[np.ndarray] = []
             if initial_path is not None:
                 seeds.append(initial_path[index])
@@ -387,7 +390,7 @@ class CanonicalTeacher:
             selected = (
                 np.asarray(initial_path, dtype=float).copy()
                 if initial_path is not None
-                else np.vstack(previous)
+                else np.tile(root, (len(target), 1))
             )
             graph_report = {"success": True, "mode": "direct_whole_trajectory"}
         else:
@@ -436,7 +439,9 @@ class CanonicalTeacher:
                 for right in range(left + 1, len(feasible))
             )
             multi_branch.append(distinct)
-        metrics["multi_branch_waypoint_ratio"] = float(np.mean(multi_branch))
+        metrics["multi_branch_waypoint_ratio"] = (
+            float(np.mean(multi_branch)) if multi_branch else 0.0
+        )
 
         chart_id = np.zeros(len(restored_beta), dtype=np.int64)
         if policy.variant == TeacherVariant.T4:

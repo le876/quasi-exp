@@ -46,11 +46,6 @@ from quasi_exp.teacher.forward import ForwardEnvironment
 FAMILY_ID = "c0273_a100_py210_pz330_s0243"
 BETA_COLUMNS = tuple(f"beta{index}_rad" for index in range(1, 7))
 TARGET_COLUMNS = ("x_target_m", "y_target_m", "z_target_m")
-STANDARD_BOUNDS_RAD = np.deg2rad(
-    np.asarray([[-5.0, 5.0], [-5.0, 5.0], [-10.0, 10.0], [-10.0, 10.0], [-15.0, 15.0], [-15.0, 15.0]])
-)
-
-
 def project_root_from(path: Path) -> Path:
     resolved = path.resolve()
     if ".worktrees" in resolved.parts:
@@ -106,7 +101,10 @@ def load_environment(project_root: Path, robot_config: Path) -> ForwardEnvironme
         lengths_m=inputs.lengths_m,
         p_end_local_m=inputs.p_end_local_m,
         theta_sign=float(config.get("kinematics", {}).get("theta_sign", -1.0)),
-        beta_bounds_rad=STANDARD_BOUNDS_RAD,
+        beta_bounds_rad=np.asarray(
+            [config["sampling"]["beta_ranges_rad"][f"beta{index}"] for index in range(1, 7)],
+            dtype=float,
+        ),
     )
 
 
@@ -215,7 +213,8 @@ def legacy_trajectory(
     acceleration = np.roll(beta, -1, axis=0) - 2 * beta + np.roll(beta, 1, axis=0)
     velocity_deg = np.rad2deg(np.sqrt(np.mean(np.square(velocity), axis=1)))
     acceleration_deg = np.rad2deg(np.sqrt(np.mean(np.square(acceleration), axis=1)))
-    margin = np.rad2deg(np.minimum(beta - STANDARD_BOUNDS_RAD[:, 0], STANDARD_BOUNDS_RAD[:, 1] - beta))
+    bounds = environment.bounds
+    margin = np.rad2deg(np.minimum(beta - bounds[:, 0], bounds[:, 1] - beta))
     metrics = {
         "residual_p95_mm": float(np.percentile(residual, 95)),
         "residual_max_mm": float(np.max(residual)),
@@ -259,6 +258,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("family-id differs from the frozen protocol config")
     family_path = project_root / "runs/true_ellipse_family_expansion_v5/02_pointwise/selected_families.csv"
     legacy_beta, legacy_source = legacy_path(project_root, args.radius_mm, args.phase_count)
+    legacy_source_radius_mm = float(legacy_source.parent.name[1:].replace("p", "."))
+    runtime = runtime_fingerprint()
     manifest = ExperimentManifest.create(
         protocol_id=str(protocol_config["protocol_id"]),
         teacher_variants=args.variants,
@@ -275,7 +276,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/canonical.py",
             Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/forward.py",
             Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/dataset.py",
+            Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/atlas.py",
+            Path(__file__).resolve().parents[2] / "src/quasi_exp/teacher/experiment.py",
         ),
+        runtime_fingerprint=runtime,
     )
     manifest_path = output / "manifest.json"
     if manifest_path.exists() and not args.force:
@@ -283,7 +287,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if existing != manifest.as_dict():
             raise RuntimeError("output contains a different protocol manifest; choose a new output or use --force")
     atomic_write_json(manifest_path, manifest.as_dict())
-    atomic_write_json(output / "runtime.json", runtime_fingerprint())
+    atomic_write_json(output / "runtime.json", runtime)
     environment = load_environment(project_root, Path(args.robot_config))
     family = load_family(project_root, args.family_id)
     targets = generate_targets(family, args.radius_mm, args.phase_count)
@@ -301,7 +305,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reusable = (
             center_path.exists()
             and report_path.exists()
-            and (args.preset == "smoke" or (variant_dir / "tube_report.json").exists())
+            and (
+                args.preset == "smoke"
+                or (
+                    (variant_dir / "tube_report.json").exists()
+                    and (variant_dir / "tube.parquet").exists()
+                )
+            )
         )
         if reusable and not args.force:
             report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -321,6 +331,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 traversal_direction=args.traversal_direction,
                 cyclic_cut=args.cyclic_cut,
             )
+            trajectory.provenance["legacy_source_radius_mm"] = legacy_source_radius_mm
+            trajectory.provenance["registered_baseline_available"] = bool(
+                np.isclose(legacy_source_radius_mm, float(args.radius_mm), atol=1.0e-9)
+            )
+            if not trajectory.provenance["registered_baseline_available"]:
+                trajectory = replace(trajectory, success=False)
         else:
             spec = TrajectorySpec(
                 trajectory_id=f"{args.family_id}@r{args.radius_mm:g}:center",
@@ -345,7 +361,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             trajectory.metrics["chart_overlap_gap_p95_deg"] = atlas.overlap_gap_p95_deg
             trajectory.metrics["chart_overlap_gate_pass"] = float(atlas.overlap_gate_pass)
         trajectory_frame(trajectory, environment).to_parquet(center_path, index=False)
-        gate = evaluate_centerline_gate(trajectory)
+        gate = evaluate_centerline_gate(
+            trajectory, thresholds=protocol_config["gates"]["centerline"]
+        )
+        if atlas is not None:
+            gate["checks"]["chart_overlap"] = bool(atlas.overlap_gate_pass)
+            gate["centerline_gate_pass"] = bool(all(gate["checks"].values()))
         report = {
             "variant": variant.value,
             "metrics": dict(trajectory.metrics),
@@ -357,7 +378,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         # Smoke validates the executable centerline chain. Pilot expands to
         # the registered 3x3 normal tube and writes one resumable curve/job.
-        if args.preset == "pilot":
+        if args.preset != "smoke":
             tube_frames: list[pd.DataFrame] = []
             tube_residuals: list[np.ndarray] = []
             tube_local_beta: list[np.ndarray] = []
@@ -418,7 +439,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }
             atomic_write_json(
                 variant_dir / "tube_report.json",
-                {"variant": variant.value, "metrics": tube_metrics, **evaluate_tube_gate(tube_metrics)},
+                {
+                    "variant": variant.value,
+                    "metrics": tube_metrics,
+                    **evaluate_tube_gate(
+                        tube_metrics, thresholds=protocol_config["gates"]["tube"]
+                    ),
+                },
             )
 
     summary = {
@@ -441,7 +468,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=default_project / "runs/trajectory_canonical_teacher_v10/pilot_a")
     parser.add_argument("--family-id", default=FAMILY_ID)
     parser.add_argument("--radius-mm", type=float, default=100.0)
-    parser.add_argument("--preset", choices=("smoke", "pilot"), default="smoke")
+    parser.add_argument("--preset", choices=("smoke", "pilot", "formal_single_family"), default="smoke")
     parser.add_argument("--phase-count", type=int)
     parser.add_argument("--tube-offsets-mm", type=float, nargs="+")
     parser.add_argument("--variants", nargs="+", choices=tuple(item.value for item in TeacherVariant))
@@ -450,10 +477,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cyclic-cut", type=int, default=0)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
+    registered = load_config(args.protocol_config)[args.preset]
     if args.phase_count is None:
-        args.phase_count = 24 if args.preset == "smoke" else 180
+        args.phase_count = int(registered["phase_count"])
     if args.tube_offsets_mm is None:
-        args.tube_offsets_mm = (0.0,) if args.preset == "smoke" else (-1.0, 0.0, 1.0)
+        args.tube_offsets_mm = tuple(float(value) for value in registered["tube_offsets_mm"])
     else:
         args.tube_offsets_mm = tuple(args.tube_offsets_mm)
     if args.variants is None:

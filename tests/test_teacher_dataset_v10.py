@@ -7,6 +7,7 @@ from quasi_exp.teacher.dataset import (
     CENTERLINE_GATE_V10,
     evaluate_centerline_gate,
     trajectory_frame,
+    evaluate_tube_gate,
 )
 
 
@@ -81,3 +82,12 @@ def test_centerline_gate_uses_the_registered_physical_thresholds() -> None:
     assert passed["centerline_gate_pass"] is True
     assert failed["centerline_gate_pass"] is False
     assert failed["checks"]["joint_margin_min"] is False
+
+
+def test_tube_gate_returns_a_complete_boolean_report() -> None:
+    report = evaluate_tube_gate(
+        {"success_rate": 1.0, "residual_p95_mm": 1.0, "residual_max_mm": 2.0,
+         "local_beta_rms_p95_deg": 0.5, "multi_branch_ratio": 0.0}
+    )
+    assert report["tube_gate_pass"] is True
+    assert all(report["checks"].values())

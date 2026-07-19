@@ -15,7 +15,6 @@ from quasi_exp.teacher.canonical import TeacherPolicy, TeacherVariant, _correct_
 from quasi_exp.teacher.experiment import atomic_write_json
 
 from run_trajectory_canonical_teacher_v10 import (
-    STANDARD_BOUNDS_RAD,
     load_environment,
     project_root_from,
     runtime_fingerprint,
@@ -28,8 +27,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     environment = load_environment(Path(args.project_root), Path(args.robot_config))
     rng = np.random.default_rng(int(args.seed))
     margin = np.deg2rad(float(args.sampling_margin_deg))
-    low = STANDARD_BOUNDS_RAD[:, 0] + margin
-    high = STANDARD_BOUNDS_RAD[:, 1] - margin
+    low = environment.bounds[:, 0] + margin
+    high = environment.bounds[:, 1] - margin
     source = rng.uniform(low, high, size=(int(args.sample_count), 6))
 
     jacobian_started = time.perf_counter()

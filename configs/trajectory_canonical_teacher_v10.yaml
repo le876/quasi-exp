@@ -2,6 +2,9 @@ protocol_id: trajectory-canonical-teacher-v10.2
 family_id: c0273_a100_py210_pz330_s0243
 joint_domain_id: standard_beta34_10deg_v1
 solver_seed: 20260720
+smoke:
+  phase_count: 24
+  tube_offsets_mm: [0.0]
 pilot:
   radii_mm: [75.0, 85.0, 92.5, 97.5, 100.0]
   phase_count: 180

@@ -28,7 +28,7 @@ def test_manifest_fingerprint_binds_protocol_inputs_and_raw_worker_bytes(tmp_pat
 
     assert manifest.input_sha256[str(worker.resolve())] == sha256_file(worker)
     assert len(manifest.protocol_sha256) == 64
-    assert manifest.raw_worker_bytes_sha256 == sha256_file(worker)
+    assert manifest.raw_input_bytes_sha256 == sha256_file(worker)
     assert manifest.worker_code_sha256[str(Path(__file__).resolve())] == sha256_file(__file__)
 
 

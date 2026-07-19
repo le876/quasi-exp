@@ -35,6 +35,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if not tf.config.list_physical_devices("GPU"):
         raise RuntimeError("Pilot C requires a TensorFlow GPU after gpu_preflight_v10")
     frame = pd.read_parquet(args.dataset)
+    if "training_eligible" in frame:
+        frame = frame[frame["training_eligible"].astype(bool)].reset_index(drop=True)
     splits = split_by_trajectory(frame, seed=args.seed)
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)

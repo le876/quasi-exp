@@ -23,8 +23,8 @@ import pandas as pd
 import true_ellipse_atlas_utils as atlas
 
 
-RADIAL_BUNDLE_STRATEGY_VERSION = 1
-SOLVER_STRATEGY_VERSION = "true-ellipse-radial-bundle-v6.1"
+RADIAL_BUNDLE_STRATEGY_VERSION = 2
+SOLVER_STRATEGY_VERSION = "true-ellipse-radial-bundle-v6.2"
 FORMAL_RADII_MM = (75.0, 80.0, 82.5, 85.0, 87.5, 90.0, 92.5, 95.0, 97.5, 100.0)
 FORMAL_CUT_INDICES = (0, 90, 180, 270)
 FORMAL_TUBE_OFFSETS_MM = (-5.0, -2.5, 0.0, 2.5, 5.0)
@@ -634,6 +634,11 @@ def correct_radial_predictor(
     compute_conditioning: bool = True,
     lambda_margin: float = 0.0,
     soft_margin_deg: float = 0.25,
+    stage_decision: Callable[
+        [pd.DataFrame, Mapping[str, Any]], Mapping[str, Any] | bool
+    ]
+    | None = None,
+    select_on_stage_acceptance: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Jointly correct all phases, with cyclic seam terms and radial anchors."""
     required_targets = {"angle_idx", *atlas.TARGET_XYZ_COLS}
@@ -680,6 +685,8 @@ def correct_radial_predictor(
         max_nfev=int(max_nfev),
         compute_conditioning=bool(compute_conditioning),
         stop_on_centerline_gate=True,
+        stage_decision=stage_decision,
+        select_on_stage_acceptance=bool(select_on_stage_acceptance),
     )
     restored = restore_angle_order(corrected)
     predictor_type = (
@@ -971,8 +978,34 @@ def generate_radial_candidate_layers(
     return filtered, report
 
 
-def candidate_graph_rescue(candidates: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+def candidate_graph_rescue(
+    candidates: pd.DataFrame,
+    *,
+    expected_angle_indices: Sequence[int],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Select a cyclic candidate path before applying the same joint corrector."""
+    expected = [int(value) for value in expected_angle_indices]
+    if not expected or len(expected) != len(set(expected)):
+        raise ValueError("candidate graph requires unique expected angle indices")
+    present = (
+        sorted(candidates["angle_idx"].astype(int).unique().tolist())
+        if "angle_idx" in candidates
+        else []
+    )
+    missing = sorted(set(expected) - set(present))
+    unexpected = sorted(set(present) - set(expected))
+    complete_input = bool(not missing and not unexpected)
+    if not complete_input:
+        return candidates.iloc[0:0].copy(), {
+            "success": False,
+            "reason": "incomplete_candidate_angle_layers",
+            "expected_angle_count": int(len(expected)),
+            "materialized_angle_count": int(len(present)),
+            "missing_angle_indices": missing,
+            "unexpected_angle_indices": unexpected,
+            "complete_angle_coverage": False,
+            "candidate_graph_gate_pass": False,
+        }
     selected, report = atlas.link_cyclic_branch_soft(
         candidates,
         lambda_velocity=1.0,
@@ -983,9 +1016,21 @@ def candidate_graph_rescue(candidates: pd.DataFrame) -> tuple[pd.DataFrame, dict
     )
     output = selected.sort_values("angle_idx", kind="stable").reset_index(drop=True) if len(selected) else selected
     report = dict(report)
+    output_angles = (
+        output["angle_idx"].astype(int).tolist() if "angle_idx" in output else []
+    )
+    complete_output = bool(output_angles == expected)
+    report.update(
+        {
+            "expected_angle_count": int(len(expected)),
+            "materialized_angle_count": int(len(output_angles)),
+            "missing_angle_indices": sorted(set(expected) - set(output_angles)),
+            "unexpected_angle_indices": sorted(set(output_angles) - set(expected)),
+            "complete_angle_coverage": complete_output,
+        }
+    )
     report["candidate_graph_gate_pass"] = bool(
         report.get("success", False)
-        and len(output)
-        and int(output["angle_idx"].nunique()) == len(output)
+        and complete_output
     )
-    return output, report
+    return (output if report["candidate_graph_gate_pass"] else output.iloc[0:0].copy()), report

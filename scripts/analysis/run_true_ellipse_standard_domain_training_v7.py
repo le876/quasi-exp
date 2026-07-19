@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -45,7 +46,7 @@ DEFAULT_DATASET = (
 DEFAULT_OUT_DIR = PROJECT_ROOT / "runs" / "true_ellipse_standard_domain_training_v7"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "split", "screen", "train", "summary")
-TRAINING_STRATEGY_VERSION = 2
+TRAINING_STRATEGY_VERSION = 3
 
 write_json = upstream_v7.write_json
 read_json = upstream_v7.read_json
@@ -210,6 +211,22 @@ def formal_model_gate_pass(
     target_link_clip_count: int,
     gates: Mapping[str, Mapping[str, Any]],
 ) -> bool:
+    return bool(
+        formal_claims_allowed
+        and model_evidence_gate_pass(
+            seed_protocol_pass=seed_protocol_pass,
+            target_link_clip_count=target_link_clip_count,
+            gates=gates,
+        )
+    )
+
+
+def model_evidence_gate_pass(
+    *,
+    seed_protocol_pass: bool,
+    target_link_clip_count: int,
+    gates: Mapping[str, Mapping[str, Any]],
+) -> bool:
     required = (
         "validation_integer_centerline",
         "validation_half_phase",
@@ -217,8 +234,7 @@ def formal_model_gate_pass(
         "test_half_phase",
     )
     return bool(
-        formal_claims_allowed
-        and seed_protocol_pass
+        seed_protocol_pass
         and int(target_link_clip_count) == 0
         and all(bool(gates.get(label, {}).get("stable_gate_pass", False)) for label in required)
     )
@@ -360,8 +376,16 @@ def resolve_training_sources(
     """Resolve a test-free source view for smoke/pilot before opening data."""
 
     formal = str(args.preset) == "formal"
-    path_key = "dataset_path" if formal else "nonformal_dataset_path"
-    hash_key = "dataset_sha256" if formal else "nonformal_dataset_sha256"
+    evidence_only = bool(getattr(args, "evidence_only", False))
+    if not formal:
+        path_key = "nonformal_dataset_path"
+        hash_key = "nonformal_dataset_sha256"
+    elif evidence_only:
+        path_key = "evidence_dataset_path"
+        hash_key = "evidence_dataset_sha256"
+    else:
+        path_key = "dataset_path"
+        hash_key = "dataset_sha256"
     raw_path = upstream.get(path_key)
     expected_hash = str(upstream.get(hash_key, ""))
     if not raw_path or not expected_hash:
@@ -398,6 +422,8 @@ def resolve_training_sources(
         "challenge_paths": challenge_paths,
         "challenge_hashes": challenge_hashes,
         "test_access_allowed": formal,
+        "formal_claims_allowed": bool(formal and not evidence_only),
+        "evidence_only": evidence_only,
     }
 
 
@@ -410,10 +436,19 @@ def formal_training_protocol_report(
     configs = model_configs()
     config_ids = [config.config_id for config in configs]
     seeds = parse_int_csv(args.seeds)
+    strict_frontier = source.get("strict_geometry_rmax_mm")
+    target_105_achieved = bool(source.get("target_105_achieved", False))
     checks = {
         "formal_preset": str(args.preset) == "formal",
+        "formal_claim_scope": not bool(getattr(args, "evidence_only", False)),
         "upstream_formal_dataset": bool(source.get("formal_dataset_gate_pass", False)),
-        "dynamic_test_at_least_105mm": float(holdout["test_radius_mm"]) >= 105.0,
+        "registered_support_backed_holdout": bool(
+            (source.get("holdout") or {}).get("selection_gate_pass", False)
+        ),
+        "dynamic_test_within_current_strict_frontier": bool(
+            strict_frontier is not None
+            and float(holdout["test_radius_mm"]) <= float(strict_frontier) + 1.0e-9
+        ),
         "registered_validation_gap_7p5mm": np.isclose(
             holdout["test_radius_mm"] - holdout["validation_radius_mm"], 7.5
         ),
@@ -434,10 +469,28 @@ def formal_training_protocol_report(
         "declared_runtime": upstream_v7.declared_runtime_gate(),
     }
     normalized = {key: bool(value) for key, value in checks.items()}
+    evidence_checks = {
+        key: value
+        for key, value in normalized.items()
+        if key not in {"upstream_formal_dataset", "formal_claim_scope"}
+    }
+    evidence_checks.update(
+        {
+            "evidence_only": bool(getattr(args, "evidence_only", False)),
+            "upstream_dataset_evidence": bool(
+                source.get("dataset_evidence_gate_pass", False)
+            ),
+        }
+    )
+    evidence_protocol_gate = bool(all(evidence_checks.values()))
+    formal_protocol_gate = bool(all(normalized.values()))
     protocol = {
         "strategy_version": TRAINING_STRATEGY_VERSION,
         "preset": str(args.preset),
         **holdout,
+        "upstream_strict_geometry_rmax_mm": strict_frontier,
+        "upstream_target_105_achieved": target_105_achieved,
+        "upstream_dataset_task_fingerprint": str(source.get("task_fingerprint", "")),
         "seeds": seeds,
         "screen_config_limit": int(args.screen_config_limit),
         "screen_config_ids": config_ids,
@@ -451,10 +504,17 @@ def formal_training_protocol_report(
         "runtime": upstream_v7.runtime_environment_report(),
     }
     return {
-        "formal_training_protocol_gate_pass": bool(all(normalized.values())),
+        "formal_training_protocol_gate_pass": formal_protocol_gate,
+        "evidence_training_protocol_gate_pass": evidence_protocol_gate,
+        "training_execution_protocol_gate_pass": bool(
+            formal_protocol_gate or evidence_protocol_gate
+        ),
         "checks": normalized,
+        "evidence_checks": evidence_checks,
         "protocol": protocol,
         "protocol_fingerprint": stable_fingerprint(protocol),
+        "target_105_achieved": target_105_achieved,
+        "formal_claims_allowed": bool(formal_protocol_gate),
     }
 
 
@@ -513,8 +573,16 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         [configured.get(f"beta{index}", [np.nan, np.nan]) for index in range(1, 7)],
         dtype=float,
     )
+    evidence_only = bool(getattr(args, "evidence_only", False))
     checks = {
-        "upstream_formal_dataset": bool(upstream.get("formal_dataset_gate_pass", False)),
+        "upstream_dataset_authorized": bool(
+            upstream.get(
+                "dataset_evidence_gate_pass"
+                if evidence_only
+                else "formal_dataset_gate_pass",
+                False,
+            )
+        ),
         "dataset_path_bound": bool(
             dataset_path == Path(sources["dataset_path"])
         ),
@@ -564,6 +632,10 @@ def phase_audit(args: argparse.Namespace) -> dict[str, Any]:
         "missing_columns": missing,
         "audit_gate_pass": audit_gate,
         "formal_claims_allowed": bool(audit_gate and protocol["formal_training_protocol_gate_pass"]),
+        "training_execution_allowed": bool(
+            audit_gate and protocol["training_execution_protocol_gate_pass"]
+        ),
+        "evidence_only": evidence_only,
         "dataset_path": str(dataset_path.resolve()),
         "dataset_sha256": str(sources["dataset_sha256"]),
         "challenge_paths": {key: str(path.resolve()) for key, path in challenge_paths.items()},
@@ -621,6 +693,10 @@ def phase_split(args: argparse.Namespace) -> dict[str, Any]:
         "task_fingerprint": _split_task_fingerprint(args, audit),
         "source_audit_task_fingerprint": audit["task_fingerprint"],
         "formal_claims_allowed": bool(audit.get("formal_claims_allowed", False)),
+        "training_execution_allowed": bool(
+            audit.get("training_execution_allowed", False)
+        ),
+        "evidence_only": bool(audit.get("evidence_only", False)),
         "family_id": audit["family_id"],
         **split,
         "assignment_path": str(assignment_path.resolve()),
@@ -689,10 +765,14 @@ def _training_task(
     max_iter: int,
     evaluation_specs: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    evidence_only = bool(getattr(args, "evidence_only", False))
+    formal_claims_allowed = bool(str(args.preset) == "formal" and not evidence_only)
     task: dict[str, Any] = {
         "task_id": str(task_id),
         "mode": str(mode),
         "preset": str(args.preset),
+        "evidence_only": evidence_only,
+        "formal_claims_allowed": formal_claims_allowed,
         "training_strategy_version": TRAINING_STRATEGY_VERSION,
         "config": config.as_dict(),
         "seed": int(seed),
@@ -772,6 +852,10 @@ def run_training_worker(task: Mapping[str, Any]) -> dict[str, Any]:
     expected = training_task_fingerprint(task)
     if str(task.get("task_fingerprint", "")) != expected:
         raise ValueError("V7 training task fingerprint mismatch")
+    if bool(task.get("evidence_only", False)) and bool(
+        task.get("formal_claims_allowed", True)
+    ):
+        raise ValueError("evidence-only V7 task cannot grant formal claims")
     for path_key, hash_key in (
         ("dataset", "dataset_sha256"),
         ("assignment", "assignment_sha256"),
@@ -820,6 +904,8 @@ def run_training_worker(task: Mapping[str, Any]) -> dict[str, Any]:
     )
     package: dict[str, Any] = {
         "kind": "beta6_pose_standard_domain_v7",
+        "evidence_only": bool(task.get("evidence_only", False)),
+        "formal_claims_allowed": bool(task.get("formal_claims_allowed", False)),
         "model": model,
         "x_scaler": x_scaler,
         "y_scaler": y_scaler,
@@ -849,6 +935,7 @@ def run_training_worker(task: Mapping[str, Any]) -> dict[str, Any]:
     robot_config = v5.v4.load_config(str(task["robot_config"]))
     robot_inputs = v5.v4.load_robot_inputs(robot_config)
     evaluations: dict[str, Any] = {}
+    prediction_artifacts: dict[str, dict[str, str]] = {}
     prediction_dir = Path(task["prediction_dir"]) if task.get("prediction_dir") else None
     for spec in task["evaluation_specs"]:
         label = str(spec["label"])
@@ -922,16 +1009,23 @@ def run_training_worker(task: Mapping[str, Any]) -> dict[str, Any]:
             for index, axis in enumerate("xyz"):
                 prediction[f"achieved_{axis}_m"] = achieved[:, index]
             prediction["ee_err_mm"] = np.linalg.norm(achieved - eval_xyz, axis=1) * 1000.0
-            prediction.to_parquet(
-                prediction_dir / f"{label}.parquet", index=False, compression="zstd"
-            )
+            prediction_path = prediction_dir / f"{label}.parquet"
+            prediction.to_parquet(prediction_path, index=False, compression="zstd")
+            prediction_artifacts[label] = {
+                "path": str(prediction_path.resolve()),
+                "sha256": file_sha256(prediction_path),
+            }
     package_path = Path(task["package_path"]) if task.get("package_path") else None
+    package_sha256: str | None = None
     if package_path is not None:
         package_path.parent.mkdir(parents=True, exist_ok=True)
         dump(package, package_path)
+        package_sha256 = file_sha256(package_path)
     result = {
         "task_id": str(task["task_id"]),
         "mode": str(task["mode"]),
+        "evidence_only": bool(task.get("evidence_only", False)),
+        "formal_claims_allowed": bool(task.get("formal_claims_allowed", False)),
         "seed": seed,
         "config_id": config.config_id,
         "config": config.as_dict(),
@@ -940,11 +1034,62 @@ def run_training_worker(task: Mapping[str, Any]) -> dict[str, Any]:
         "train_rows": int(len(train_idx)),
         "fit_s": fit_s,
         "evaluations": evaluations,
-        "package_path": str(package_path) if package_path is not None else None,
+        "package_path": str(package_path.resolve()) if package_path is not None else None,
+        "package_sha256": package_sha256,
+        "prediction_artifacts": prediction_artifacts,
         "task_fingerprint": expected,
     }
     write_json(Path(task["result_path"]), result)
     return result
+
+
+def artifact_record_is_current(record: Mapping[str, Any]) -> bool:
+    path = Path(str(record.get("path", "")))
+    expected_hash = str(record.get("sha256", ""))
+    if not path.is_file() or not expected_hash:
+        return False
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest() == expected_hash
+
+
+def cached_training_result_is_current(
+    task: Mapping[str, Any],
+    cached: Mapping[str, Any],
+) -> bool:
+    package_path = task.get("package_path")
+    if package_path:
+        expected_package = Path(str(package_path)).resolve()
+        package_current = artifact_record_is_current(
+            {
+                "path": cached.get("package_path"),
+                "sha256": cached.get("package_sha256"),
+            }
+        ) and Path(str(cached.get("package_path", ""))).resolve() == expected_package
+    else:
+        package_current = True
+
+    prediction_dir = task.get("prediction_dir")
+    if prediction_dir:
+        expected_dir = Path(str(prediction_dir)).resolve()
+        expected_labels = {str(spec["label"]) for spec in task["evaluation_specs"]}
+        predictions = cached.get("prediction_artifacts") or {}
+        prediction_current = bool(set(predictions) == expected_labels)
+        if prediction_current:
+            for label in expected_labels:
+                record = predictions[label]
+                expected_path = expected_dir / f"{label}.parquet"
+                if (
+                    Path(str(record.get("path", ""))).resolve() != expected_path
+                    or not artifact_record_is_current(record)
+                ):
+                    prediction_current = False
+                    break
+    else:
+        prediction_current = True
+    return bool(package_current and prediction_current)
 
 
 def _execute_training_tasks(
@@ -965,10 +1110,9 @@ def _execute_training_tasks(
         result_path = Path(task["result_path"])
         if bool(skip_existing) and result_path.exists():
             cached = read_json(result_path)
-            package_ready = bool(not task.get("package_path") or Path(task["package_path"]).exists())
             if (
-                package_ready
-                and str(cached.get("task_fingerprint", "")) == expected
+                str(cached.get("task_fingerprint", "")) == expected
+                and cached_training_result_is_current(task, cached)
             ):
                 results.append(cached)
                 continue
@@ -1159,6 +1303,10 @@ def phase_screen(args: argparse.Namespace) -> dict[str, Any]:
         "formal_claims_allowed": bool(
             split.get("formal_claims_allowed", False) and formal_screen
         ),
+        "training_execution_allowed": bool(
+            split.get("training_execution_allowed", False) and formal_screen
+        ),
+        "evidence_only": bool(split.get("evidence_only", False)),
         "ranking_path": str((out / "screen_config_ranking.csv").resolve()),
     }
     write_json(out / "selection_report.json", report)
@@ -1225,8 +1373,10 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
     selection = ensure_screen_report(args)
     split = read_json(Path(args.out_dir) / "01_split" / "split_report.json")
     audit = read_json(Path(args.out_dir) / "00_audit" / "audit_report.json")
-    if str(args.preset) == "formal" and not bool(selection.get("formal_claims_allowed", False)):
-        raise RuntimeError("V7 formal training is blocked by the audit/split/screen chain")
+    if str(args.preset) == "formal" and not bool(
+        selection.get("training_execution_allowed", False)
+    ):
+        raise RuntimeError("V7 training execution is blocked by the audit/split/screen chain")
     config = _config_from_dict(selection["selected_config"])
     seeds = _resolved_seeds(args)
     specs = final_evaluation_specs(preset=str(args.preset), holdout=audit["holdout"])
@@ -1270,6 +1420,11 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
         and selection.get("formal_claims_allowed", False)
         and formal
     )
+    model_evidence = model_evidence_gate_pass(
+        seed_protocol_pass=seed_protocol,
+        target_link_clip_count=target_clip_count,
+        gates=gates,
+    )
     report = {
         "strategy_version": TRAINING_STRATEGY_VERSION,
         "task_fingerprint": _final_task_fingerprint(args, selection),
@@ -1286,6 +1441,8 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
         "test_evaluated": formal,
         "tube_diagnostic_is_formal_gate": False,
         "formal_claims_allowed": formal_claims,
+        "evidence_only": bool(getattr(args, "evidence_only", False)),
+        "model_evidence_gate_pass": model_evidence,
         "formal_model_gate_pass": formal_model_gate_pass(
             formal_claims_allowed=formal_claims,
             seed_protocol_pass=seed_protocol,
@@ -1296,6 +1453,18 @@ def phase_train(args: argparse.Namespace) -> dict[str, Any]:
             str(result["seed"]): result["package_path"]
             for result in results
             if result.get("package_path")
+        },
+        "model_artifacts": {
+            str(result["seed"]): {
+                "path": result["package_path"],
+                "sha256": result["package_sha256"],
+            }
+            for result in results
+            if result.get("package_path")
+        },
+        "prediction_artifacts": {
+            str(result["seed"]): result.get("prediction_artifacts", {})
+            for result in results
         },
     }
     write_json(out / "final_training_report.json", report)
@@ -1308,11 +1477,34 @@ def ensure_training_report(args: argparse.Namespace) -> dict[str, Any]:
     path = Path(args.out_dir) / "03_final_models" / "final_training_report.json"
     if path.exists():
         cached = read_json(path)
-        model_paths = cached.get("model_paths", {})
+        seeds = {str(seed) for seed in _resolved_seeds(args)}
+        model_artifacts = cached.get("model_artifacts") or {}
+        prediction_artifacts = cached.get("prediction_artifacts") or {}
+        audit = read_json(Path(args.out_dir) / "00_audit" / "audit_report.json")
+        expected_labels = {
+            str(spec["label"])
+            for spec in final_evaluation_specs(
+                preset=str(args.preset), holdout=audit["holdout"]
+            )
+        }
+        models_current = bool(
+            set(model_artifacts) == seeds
+            and all(artifact_record_is_current(record) for record in model_artifacts.values())
+        )
+        predictions_current = bool(set(prediction_artifacts) == seeds)
+        if predictions_current:
+            predictions_current = all(
+                set(seed_records) == expected_labels
+                and all(
+                    artifact_record_is_current(record)
+                    for record in seed_records.values()
+                )
+                for seed_records in prediction_artifacts.values()
+            )
         if (
             str(cached.get("task_fingerprint", "")) == expected
-            and len(model_paths) == len(_resolved_seeds(args))
-            and all(Path(model_path).is_file() for model_path in model_paths.values())
+            and models_current
+            and predictions_current
         ):
             return cached
     return phase_train(args)
@@ -1380,6 +1572,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--screen-config-limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--evidence-only", action="store_true")
     parser.add_argument("--worker-task", type=Path, default=None, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 

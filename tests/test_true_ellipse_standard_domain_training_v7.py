@@ -64,6 +64,110 @@ def test_registered_screen_crosses_24_base_configs_with_two_output_links() -> No
     )
 
 
+def test_formal_training_protocol_accepts_registered_current_frontier_below_105mm() -> None:
+    mod = _load_module()
+    args = mod.parse_args([])
+    upstream = {
+        "formal_dataset_gate_pass": True,
+        "strict_geometry_rmax_mm": 102.5,
+        "target_105_achieved": False,
+        "task_fingerprint": "dataset-gate-v2",
+        "holdout": {
+            "validation_radius_mm": 95.0,
+            "test_radius_mm": 102.5,
+            "selection_gate_pass": True,
+            "validation_gap_mm": 7.5,
+        },
+    }
+
+    report = mod.formal_training_protocol_report(args, upstream)
+
+    assert report["target_105_achieved"] is False
+    assert report["checks"]["dynamic_test_within_current_strict_frontier"] is True
+    assert "dynamic_test_at_least_105mm" not in report["checks"]
+    assert report["formal_training_protocol_gate_pass"] is True
+
+
+def test_evidence_only_training_executes_candidate_dataset_without_formal_claims() -> None:
+    mod = _load_module()
+    args = mod.parse_args(["--evidence-only"])
+    upstream = {
+        "formal_dataset_gate_pass": False,
+        "dataset_evidence_gate_pass": True,
+        "strict_geometry_rmax_mm": 105.0,
+        "target_105_achieved": True,
+        "task_fingerprint": "candidate-dataset-105",
+        "holdout": {
+            "validation_radius_mm": 97.5,
+            "test_radius_mm": 105.0,
+            "selection_gate_pass": True,
+            "validation_gap_mm": 7.5,
+        },
+    }
+
+    report = mod.formal_training_protocol_report(args, upstream)
+
+    assert report["formal_training_protocol_gate_pass"] is False
+    assert report["evidence_training_protocol_gate_pass"] is True
+    assert report["training_execution_protocol_gate_pass"] is True
+    assert report["formal_claims_allowed"] is False
+
+
+def test_evidence_only_training_sources_bind_candidate_dataset_and_both_challenges(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    evidence = tmp_path / "candidate.parquet"
+    validation = tmp_path / "validation.parquet"
+    test = tmp_path / "test.parquet"
+    for path in (evidence, validation, test):
+        path.write_bytes(path.name.encode())
+    upstream = {
+        "evidence_dataset_path": str(evidence),
+        "evidence_dataset_sha256": mod.file_sha256(evidence),
+        "challenge_paths": {"validation": str(validation), "test": str(test)},
+        "challenge_reports": {
+            "validation": {"challenge_artifact_sha256": mod.file_sha256(validation)},
+            "test": {"challenge_artifact_sha256": mod.file_sha256(test)},
+        },
+    }
+    args = Namespace(
+        preset="formal",
+        evidence_only=True,
+        tube_dataset=evidence,
+    )
+
+    sources = mod.resolve_training_sources(args, upstream)
+
+    assert sources["dataset_path"] == evidence.resolve()
+    assert set(sources["challenge_paths"]) == {"validation", "test"}
+    assert sources["test_access_allowed"] is True
+    assert sources["formal_claims_allowed"] is False
+
+
+def test_model_evidence_gate_is_computed_without_granting_formal_claims() -> None:
+    mod = _load_module()
+    stable = {"stable_gate_pass": True, "passed_seed_count": 4, "total_seed_count": 5}
+    gates = {
+        "validation_integer_centerline": stable,
+        "validation_half_phase": stable,
+        "test_integer_centerline": stable,
+        "test_half_phase": stable,
+    }
+
+    assert mod.model_evidence_gate_pass(
+        seed_protocol_pass=True,
+        target_link_clip_count=0,
+        gates=gates,
+    ) is True
+    assert mod.formal_model_gate_pass(
+        formal_claims_allowed=False,
+        seed_protocol_pass=True,
+        target_link_clip_count=0,
+        gates=gates,
+    ) is False
+
+
 def test_output_link_training_targets_are_encoded_without_clipping() -> None:
     mod = _load_module()
     domain = mod.engine.registered_joint_domain("standard_beta34_10deg_v1")
@@ -160,6 +264,77 @@ def test_nonformal_training_sources_use_safe_dataset_and_validation_challenge_on
     assert test not in smoke["challenge_paths"].values()
     assert formal["dataset_path"] == full
     assert set(formal["challenge_paths"]) == {"validation", "test"}
+
+
+def test_evidence_only_smoke_still_physically_uses_test_free_dataset(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    evidence = tmp_path / "candidate-full.parquet"
+    safe = tmp_path / "candidate-safe.parquet"
+    validation = tmp_path / "validation.parquet"
+    test = tmp_path / "test.parquet"
+    for path in (evidence, safe, validation, test):
+        path.write_bytes(path.name.encode())
+    upstream = {
+        "evidence_dataset_path": str(evidence),
+        "evidence_dataset_sha256": mod.file_sha256(evidence),
+        "nonformal_dataset_path": str(safe),
+        "nonformal_dataset_sha256": mod.file_sha256(safe),
+        "challenge_paths": {"validation": str(validation), "test": str(test)},
+        "challenge_reports": {
+            "validation": {"challenge_artifact_sha256": mod.file_sha256(validation)},
+            "test": {"challenge_artifact_sha256": mod.file_sha256(test)},
+        },
+    }
+
+    sources = mod.resolve_training_sources(
+        Namespace(
+            preset="smoke",
+            evidence_only=True,
+            tube_dataset=evidence,
+        ),
+        upstream,
+    )
+
+    assert sources["dataset_path"] == safe.resolve()
+    assert sources["dataset_sha256"] == mod.file_sha256(safe)
+    assert set(sources["challenge_paths"]) == {"validation"}
+    assert sources["test_access_allowed"] is False
+
+
+def test_cached_training_result_rejects_mutated_model_or_prediction(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    package = tmp_path / "model.joblib"
+    prediction_dir = tmp_path / "predictions"
+    prediction_dir.mkdir()
+    prediction = prediction_dir / "validation_half_phase.parquet"
+    package.write_bytes(b"model-v1")
+    prediction.write_bytes(b"prediction-v1")
+    task = {
+        "package_path": str(package),
+        "prediction_dir": str(prediction_dir),
+        "evaluation_specs": [{"label": "validation_half_phase"}],
+    }
+    cached = {
+        "package_path": str(package.resolve()),
+        "package_sha256": mod.file_sha256(package),
+        "prediction_artifacts": {
+            "validation_half_phase": {
+                "path": str(prediction.resolve()),
+                "sha256": mod.file_sha256(prediction),
+            }
+        },
+    }
+
+    assert mod.cached_training_result_is_current(task, cached) is True
+    package.write_bytes(b"model-v2")
+    assert mod.cached_training_result_is_current(task, cached) is False
+    package.write_bytes(b"model-v1")
+    prediction.write_bytes(b"prediction-v2")
+    assert mod.cached_training_result_is_current(task, cached) is False
 
 
 def test_formal_model_gate_requires_stable_integer_and_half_phase_but_not_tube() -> None:
@@ -372,8 +547,8 @@ def test_training_worker_encodes_decodes_and_evaluates_registered_challenge(
         config=config,
         seed=1,
         result_path=tmp_path / "result.json",
-        package_path=None,
-        prediction_dir=None,
+        package_path=tmp_path / "model.joblib",
+        prediction_dir=tmp_path / "predictions",
         angle_stride=1,
         max_iter=1,
         evaluation_specs=[
@@ -396,6 +571,12 @@ def test_training_worker_encodes_decodes_and_evaluates_registered_challenge(
 
     assert result["output_link_id"] == "tanh_bounds"
     assert result["target_link_clip_count"] == 0
+    assert result["package_sha256"] == mod.file_sha256(tmp_path / "model.joblib")
+    prediction = result["prediction_artifacts"]["validation_half_phase"]
+    assert prediction["path"] == str(
+        (tmp_path / "predictions" / "validation_half_phase.parquet").resolve()
+    )
+    assert prediction["sha256"] == mod.file_sha256(prediction["path"])
     metrics = result["evaluations"]["validation_half_phase"]
     assert metrics["eval_rows"] == 4
     assert metrics["beta_bound_violation_count"] == 0

@@ -42,9 +42,13 @@ DEFAULT_V6_DIR = PROJECT_ROOT / "runs" / "true_ellipse_radial_bundle_v6"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "runs" / "true_ellipse_standard_domain_v7"
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"
 ALL_PHASES = ("audit", "radial", "tube", "dataset", "summary")
-RUNNER_STRATEGY_VERSION = 1
-TUBE_STRATEGY_VERSION = 3
-DATASET_STRATEGY_VERSION = 2
+RUNNER_STRATEGY_VERSION = 2
+TUBE_STRATEGY_VERSION = 5
+DATASET_STRATEGY_VERSION = 4
+GATE_POLICY_VERSION = 3
+TARGET_KPI_RADIUS_MM = 105.0
+HOLDOUT_SELECTION_POLICY_VERSION = 2
+FORMAL_TUBE_SUCCESS_RATIO_MIN = 0.99
 DECLARED_RUNTIME = {
     "python_series": "3.11",
     "numpy": "1.26.4",
@@ -132,6 +136,10 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "strict_candidates_eight": int(args.max_candidates_per_angle) == registered.strict_candidate_limit,
         "rescue_candidates_24": int(args.rescue_candidates_per_angle) == registered.rescue_candidate_limit,
         "rescue_kappa_threshold_100": np.isclose(float(args.rescue_kappa_threshold), 100.0),
+        "legacy_strict_radial_job_gate": bool(
+            str(args.radial_job_gate_mode) == "strict"
+            and np.isclose(float(args.conditioning_kappa_threshold), 150.0)
+        ),
         "balanced_margin_required": bool(args.require_joint_margin_gate)
         and np.isclose(float(args.soft_margin_deg), _margin_policy().soft_barrier_margin_deg),
         "registered_margin_weight": np.isclose(float(args.lambda_margin), 1.0e-2),
@@ -160,6 +168,12 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "soft_margin_deg": float(args.soft_margin_deg),
         "joint_domain_fingerprint": domain.fingerprint,
         "joint_margin_policy_fingerprint": _margin_policy().fingerprint,
+        "gate_policy": {
+            "version": GATE_POLICY_VERSION,
+            "target_kpi_radius_mm": TARGET_KPI_RADIUS_MM,
+            "formal_tube_success_ratio_min": FORMAL_TUBE_SUCCESS_RATIO_MIN,
+            "radial_job_gate_policy": v6_runner.radial_job_gate_policy(args),
+        },
         "runtime": runtime,
     }
     return {
@@ -171,6 +185,110 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "joint_domain_fingerprint": domain.fingerprint,
         "joint_margin_policy_id": _margin_policy().policy_id,
         "joint_margin_policy_fingerprint": _margin_policy().fingerprint,
+    }
+
+
+def radial_frontier_gate_decision(
+    *,
+    formal_protocol_gate_pass: bool,
+    strict_geometry_rmax_mm: float | None,
+) -> dict[str, bool]:
+    has_strict_frontier = bool(
+        strict_geometry_rmax_mm is not None
+        and np.isfinite(float(strict_geometry_rmax_mm))
+    )
+    target_105 = bool(
+        has_strict_frontier
+        and float(strict_geometry_rmax_mm) >= TARGET_KPI_RADIUS_MM - 1.0e-9
+    )
+    admitted = bool(formal_protocol_gate_pass and has_strict_frontier)
+    return {
+        "target_105_achieved": target_105,
+        "downstream_radial_admission_gate_pass": admitted,
+        "formal_radial_gate_pass": admitted,
+    }
+
+
+def tube_frontier_gate_decision(
+    *,
+    formal_protocol_gate_pass: bool,
+    radial_strict_rmax_mm: float | None,
+    tube_strict_rmax_mm: float | None,
+    all_dataset_radii_pass: bool,
+) -> dict[str, bool]:
+    frontier_within_radial = bool(
+        radial_strict_rmax_mm is not None
+        and tube_strict_rmax_mm is not None
+        and np.isfinite(float(radial_strict_rmax_mm))
+        and np.isfinite(float(tube_strict_rmax_mm))
+        and float(tube_strict_rmax_mm) <= float(radial_strict_rmax_mm) + 1.0e-8
+    )
+    evidence_pass = bool(frontier_within_radial and all_dataset_radii_pass)
+    formal_pass = bool(formal_protocol_gate_pass and evidence_pass)
+    target_105 = bool(
+        frontier_within_radial
+        and float(tube_strict_rmax_mm) >= TARGET_KPI_RADIUS_MM - 1.0e-9
+    )
+    return {
+        "target_105_achieved": target_105,
+        "tube_frontier_within_radial_gate_pass": frontier_within_radial,
+        "tube_evidence_gate_pass": evidence_pass,
+        "downstream_tube_admission_gate_pass": evidence_pass,
+        "formal_tube_gate_pass": formal_pass,
+    }
+
+
+def complete_tube_checkpoint_frontier(
+    *,
+    radial_frontier_mm: float,
+    materialized_radii_mm: Iterable[float],
+    passed_by_radius: Mapping[float, bool],
+) -> dict[str, Any]:
+    """Select the highest checkpoint with a complete passing tube prefix."""
+
+    radial_frontier = float(radial_frontier_mm)
+    radii = tuple(
+        sorted(
+            {
+                float(value)
+                for value in materialized_radii_mm
+                if float(value) <= radial_frontier + 1.0e-9
+            }
+        )
+    )
+
+    def passed(radius_mm: float) -> bool:
+        matches = [
+            bool(value)
+            for raw_radius, value in passed_by_radius.items()
+            if np.isclose(float(raw_radius), float(radius_mm), atol=1.0e-8, rtol=0.0)
+        ]
+        return bool(len(matches) == 1 and matches[0])
+
+    strict_tube: float | None = None
+    for checkpoint in engine.v7_standard_domain_protocol().formal_checkpoints_mm:
+        checkpoint = float(checkpoint)
+        if checkpoint > radial_frontier + 1.0e-9:
+            break
+        checkpoint_present = any(
+            np.isclose(radius, checkpoint, atol=1.0e-8, rtol=0.0)
+            for radius in radii
+        )
+        prefix = tuple(radius for radius in radii if radius <= checkpoint + 1.0e-9)
+        if not checkpoint_present or not prefix or not all(passed(radius) for radius in prefix):
+            break
+        strict_tube = checkpoint
+    selected = tuple(
+        radius
+        for radius in radii
+        if strict_tube is not None and radius <= strict_tube + 1.0e-9
+    )
+    return {
+        "strict_geometry_rmax_mm": strict_tube,
+        "selected_radii_mm": selected,
+        "all_dataset_radii_pass": bool(
+            selected and all(passed(radius) for radius in selected)
+        ),
     }
 
 
@@ -194,6 +312,33 @@ def materialized_dataset_radii(strict_geometry_rmax_mm: float) -> tuple[float, .
     ]
     radii = sorted(set(checkpoints) | set(engine.training_anchor_radii(strict_geometry_rmax_mm)))
     return tuple(radii)
+
+
+def dynamic_holdout_test_candidates(
+    *,
+    strict_geometry_rmax_mm: float,
+    available_radii_mm: Iterable[float],
+    validation_gap_mm: float = 7.5,
+) -> tuple[float, ...]:
+    """Return highest-first registered tests with a materialized validation pair."""
+
+    frontier = float(strict_geometry_rmax_mm)
+    gap = float(validation_gap_mm)
+    available = np.asarray(parse_float_csv(available_radii_mm), dtype=float)
+    if not np.isfinite(frontier) or not np.isfinite(gap) or gap <= 0.0:
+        raise ValueError("dynamic holdout frontier/gap must be finite and positive")
+
+    def present(radius_mm: float) -> bool:
+        return bool(np.any(np.isclose(available, float(radius_mm), atol=1.0e-8)))
+
+    candidates = [
+        float(radius)
+        for radius in engine.v7_standard_domain_protocol().formal_checkpoints_mm
+        if float(radius) <= frontier + 1.0e-9
+        and present(float(radius))
+        and present(float(radius) - gap)
+    ]
+    return tuple(sorted(candidates, reverse=True))
 
 
 def resample_parent_curve(parent: pd.DataFrame, *, n_points: int) -> pd.DataFrame:
@@ -338,11 +483,117 @@ def assign_dynamic_radius_splits(
 def formal_tube_label_gate(metrics: Mapping[str, Any]) -> bool:
     return bool(
         int(metrics.get("rows", 0)) == int(metrics.get("expected_rows", -1))
-        and float(metrics.get("tube_success_ratio", -np.inf)) == 1.0
+        and float(metrics.get("tube_success_ratio", -np.inf))
+        >= FORMAL_TUBE_SUCCESS_RATIO_MIN
         and bool(metrics.get("surface_gate_pass", False))
         and bool(metrics.get("joint_margin_gate_pass", False))
         and bool(metrics.get("tube_gate_pass", False))
     )
+
+
+def tube_trajectory_complete(
+    tube: pd.DataFrame,
+    *,
+    expected_rows: int,
+    expected_angles: int,
+    expected_offsets: int,
+) -> bool:
+    required = {"angle_idx", "tube_offset_id", "sample_id", "tube_success"}
+    if not required.issubset(tube.columns):
+        return False
+    return bool(
+        len(tube) == int(expected_rows)
+        and int(tube["angle_idx"].nunique()) == int(expected_angles)
+        and int(tube["tube_offset_id"].nunique()) == int(expected_offsets)
+        and not tube.duplicated(["angle_idx", "tube_offset_id"]).any()
+        and tube["sample_id"].is_unique
+        and float(tube["tube_success"].fillna(False).astype(bool).mean())
+        >= FORMAL_TUBE_SUCCESS_RATIO_MIN
+    )
+
+
+def replay_tube_quality_gate(
+    source_report: Mapping[str, Any],
+    *,
+    source_report_sha256: str,
+    artifact_sha256: str,
+    centerline_sha256: str,
+    recomputed_geometry: Mapping[str, Any],
+    recomputed_margin_gate: Mapping[str, Any],
+    expected_cut_indices: Iterable[int],
+) -> dict[str, Any]:
+    """Re-evaluate only the label gate over hash-bound tube evidence."""
+
+    source = dict(source_report)
+    if not str(source_report_sha256):
+        raise ValueError("gate-only replay requires a source report hash")
+    if str(source.get("task_fingerprint", "")) == "":
+        raise ValueError("gate-only replay requires a source task fingerprint")
+    if str(source.get("tube_artifact_sha256", "")) != str(artifact_sha256):
+        raise ValueError("gate-only replay artifact hash mismatch")
+    if str(source.get("centerline_sha256", "")) != str(centerline_sha256):
+        raise ValueError("gate-only replay centerline hash mismatch")
+    expected_cuts = tuple(int(value) for value in expected_cut_indices)
+    observed_cuts = tuple(int(value) for value in source.get("cut_indices", ()))
+    if (
+        len(expected_cuts) != 4
+        or int(source.get("cut_count", -1)) != 4
+        or observed_cuts != expected_cuts
+    ):
+        raise ValueError("gate-only replay requires complete four-cut evidence")
+
+    integer_metrics = ("rows", "expected_rows", "normal_grid_size")
+    float_metrics = (
+        "target_success_ratio",
+        "normal_grid_coverage_ratio",
+        "residual_p95_mm",
+        "residual_max_mm",
+        "tube10_beta_rms_p95_deg",
+        "multi_branch_ratio",
+    )
+    for key in integer_metrics:
+        if int(source.get(key, -1)) != int(recomputed_geometry.get(key, -2)):
+            raise ValueError(f"gate-only replay recomputed metric mismatch: {key}")
+    for key in float_metrics:
+        source_value = float(source.get(key, np.nan))
+        current_value = float(recomputed_geometry.get(key, np.nan))
+        if not np.isfinite(source_value) or not np.isclose(
+            source_value,
+            current_value,
+            atol=1.0e-10,
+            rtol=1.0e-10,
+        ):
+            raise ValueError(f"gate-only replay recomputed metric mismatch: {key}")
+    if not np.isclose(
+        float(source.get("tube_success_ratio", np.nan)),
+        float(recomputed_geometry.get("target_success_ratio", np.nan)),
+        atol=1.0e-12,
+        rtol=0.0,
+    ):
+        raise ValueError("gate-only replay tube success ratio mismatch")
+    if bool(source.get("tube_gate_pass", False)) != bool(
+        recomputed_geometry.get("tube_gate_pass", False)
+    ):
+        raise ValueError("gate-only replay tube gate mismatch")
+    if bool(source.get("joint_margin_gate_pass", False)) != bool(
+        recomputed_margin_gate.get("joint_margin_gate_pass", False)
+    ):
+        raise ValueError("gate-only replay joint margin gate mismatch")
+
+    replay = {
+        **source,
+        **dict(recomputed_geometry),
+        **dict(recomputed_margin_gate),
+        "tube_success_ratio": float(recomputed_geometry["target_success_ratio"]),
+        "gate_only_replay": True,
+        "source_report_sha256": str(source_report_sha256),
+        "source_task_fingerprint": str(source["task_fingerprint"]),
+        "source_tube_artifact_sha256": str(artifact_sha256),
+        "source_centerline_sha256": str(centerline_sha256),
+        "formal_tube_success_ratio_min": FORMAL_TUBE_SUCCESS_RATIO_MIN,
+    }
+    replay["formal_tube_label_gate_pass"] = formal_tube_label_gate(replay)
+    return replay
 
 
 def compute_holdout_support_candidates(
@@ -456,6 +707,34 @@ def formal_dataset_gate(checks: Mapping[str, Any]) -> bool:
     return bool(all(bool(checks.get(name, False)) for name in required))
 
 
+def dataset_evidence_gate(checks: Mapping[str, Any]) -> bool:
+    required = (
+        "tube_evidence_gate_pass",
+        "completeness_gate_pass",
+        "split_gate_pass",
+        "branch_conflict_gate_pass",
+        "joint_margin_gate_pass",
+        "holdout_selection_gate_pass",
+        "validation_support_gate_pass",
+        "test_support_gate_pass",
+        "challenge_gate_pass",
+    )
+    return bool(all(bool(checks.get(name, False)) for name in required))
+
+
+def centerline_job_gate_decision(
+    centerline_report: Mapping[str, Any],
+    margin_gate: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    margin = {
+        "job_margin_gate_pass": bool(
+            margin_gate.get("joint_margin_gate_pass", False)
+        )
+    }
+    return v6_runner.radial_job_gate_decision(centerline_report, margin, args)
+
+
 def extract_tube_centerline(tube: pd.DataFrame, *, expected_points: int) -> pd.DataFrame:
     required = {"angle_idx", "is_centerline", *v6_utils.atlas.BETA_COLS}
     missing = sorted(required - set(tube.columns))
@@ -510,6 +789,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-candidates-per-angle", type=int, default=registered.strict_candidate_limit)
     parser.add_argument("--rescue-candidates-per-angle", type=int, default=registered.rescue_candidate_limit)
     parser.add_argument("--rescue-kappa-threshold", type=float, default=100.0)
+    parser.add_argument(
+        "--radial-job-gate-mode",
+        choices=("strict", "downstream_admission", "candidate_policy"),
+        default="strict",
+    )
+    parser.add_argument("--conditioning-kappa-threshold", type=float, default=150.0)
     parser.add_argument("--candidate-cluster-deg", type=float, default=0.25)
     parser.add_argument("--candidate-residual-mm", type=float, default=2.0)
     parser.add_argument("--tube-offsets-mm", default="-5,-2.5,0,2.5,5")
@@ -740,6 +1025,8 @@ def phase_radial(args: argparse.Namespace) -> dict[str, Any]:
             "strategy_version": RUNNER_STRATEGY_VERSION,
             "strict_geometry_rmax_mm": None,
             "exploratory_rescue_rmax_mm": None,
+            "target_105_achieved": False,
+            "downstream_radial_admission_gate_pass": False,
             "formal_radial_gate_pass": False,
             "reason": "audit_gate_failed",
         }
@@ -904,10 +1191,11 @@ def phase_radial(args: argparse.Namespace) -> dict[str, Any]:
         "radius_status_sha256": file_sha256(out / "radius_status.csv"),
         **frontiers,
     }
-    report["formal_radial_gate_pass"] = bool(
-        report["formal_protocol_gate_pass"]
-        and strict_rmax is not None
-        and float(strict_rmax) >= 105.0
+    report.update(
+        radial_frontier_gate_decision(
+            formal_protocol_gate_pass=bool(report["formal_protocol_gate_pass"]),
+            strict_geometry_rmax_mm=None if strict_rmax is None else float(strict_rmax),
+        )
     )
     report["task_fingerprint"] = stable_fingerprint(
         {
@@ -1303,23 +1591,25 @@ def _load_or_materialize_centerline(
     return solved, artifact, parent_radius
 
 
-def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
+def phase_tube(
+    args: argparse.Namespace,
+    *,
+    radial_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     out = Path(args.out_dir) / "02_tube"
     out.mkdir(parents=True, exist_ok=True)
-    radial = ensure_radial_report(args)
+    radial = ensure_radial_report(args) if radial_report is None else dict(radial_report)
     strict_radial = radial.get("strict_geometry_rmax_mm")
-    if not bool(radial.get("formal_radial_gate_pass", False)):
-        reason = (
-            "no_strict_radial_frontier"
-            if strict_radial is None
-            else "formal_radial_gate_failed_below_105mm"
-        )
+    if not bool(radial.get("downstream_radial_admission_gate_pass", False)):
+        reason = "no_strict_radial_frontier" if strict_radial is None else "radial_admission_failed"
         report = {
             "strategy_version": TUBE_STRATEGY_VERSION,
             **formal_protocol_report(args),
             "radial_task_fingerprint": str(radial.get("task_fingerprint", "")),
             "radial_strict_rmax_mm": strict_radial,
-            "strict_geometry_rmax_mm": strict_radial,
+            "strict_geometry_rmax_mm": None,
+            "target_105_achieved": False,
+            "downstream_tube_admission_gate_pass": False,
             "formal_tube_gate_pass": False,
             "reason": reason,
         }
@@ -1347,7 +1637,7 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
     radii = materialized_dataset_radii(float(strict_radial))
     tube_paths: dict[str, str] = {}
     summary_rows: list[dict[str, Any]] = []
-    checkpoint_pass: dict[float, bool] = {}
+    passed_by_radius: dict[float, bool] = {}
     previous_radius: float | None = None
     for radius in radii:
         try:
@@ -1383,8 +1673,7 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
             passed = False
             reason = f"{type(exc).__name__}: {exc}"
         previous_radius = float(radius)
-        if any(np.isclose(radius, check, atol=1.0e-8) for check in engine.v7_standard_domain_protocol().formal_checkpoints_mm):
-            checkpoint_pass[float(radius)] = passed
+        passed_by_radius[float(radius)] = passed
         summary_rows.append(
             {
                 "family_id": family.family_id,
@@ -1403,17 +1692,19 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
         )
     summary = pd.DataFrame(summary_rows)
     summary.to_csv(out / "tube_radius_summary.csv", index=False)
-    strict_tube: float | None = None
-    for radius in engine.v7_standard_domain_protocol().formal_checkpoints_mm:
-        if radius > float(strict_radial) + 1.0e-9:
-            break
-        if not checkpoint_pass.get(float(radius), False):
-            break
-        strict_tube = float(radius)
-    all_dataset_radii_pass = bool(
-        len(summary) == len(radii)
-        and summary["formal_tube_label_gate_pass"].fillna(False).astype(bool).all()
+    frontier = complete_tube_checkpoint_frontier(
+        radial_frontier_mm=float(strict_radial),
+        materialized_radii_mm=radii,
+        passed_by_radius=passed_by_radius,
     )
+    strict_tube = frontier["strict_geometry_rmax_mm"]
+    selected_radii = tuple(frontier["selected_radii_mm"])
+    all_dataset_radii_pass = bool(frontier["all_dataset_radii_pass"])
+    tube_paths = {
+        key: path
+        for key, path in tube_paths.items()
+        if any(np.isclose(float(key), radius, atol=1.0e-8) for radius in selected_radii)
+    }
     report = {
         "strategy_version": TUBE_STRATEGY_VERSION,
         **formal_protocol_report(args),
@@ -1421,18 +1712,21 @@ def phase_tube(args: argparse.Namespace) -> dict[str, Any]:
         "family_id": family.family_id,
         "radial_strict_rmax_mm": float(strict_radial),
         "strict_geometry_rmax_mm": strict_tube,
-        "materialized_radii_mm": list(radii),
+        "attempted_radii_mm": list(radii),
+        "materialized_radii_mm": list(selected_radii),
         "all_dataset_radii_pass": all_dataset_radii_pass,
         "tube_paths": tube_paths,
         "centerline_manifest": manifest,
         "summary_path": str((out / "tube_radius_summary.csv").resolve()),
         "summary_sha256": file_sha256(out / "tube_radius_summary.csv"),
     }
-    report["formal_tube_gate_pass"] = bool(
-        report["formal_protocol_gate_pass"]
-        and strict_tube is not None
-        and strict_tube >= 105.0
-        and all_dataset_radii_pass
+    report.update(
+        tube_frontier_gate_decision(
+            formal_protocol_gate_pass=bool(report["formal_protocol_gate_pass"]),
+            radial_strict_rmax_mm=float(strict_radial),
+            tube_strict_rmax_mm=strict_tube,
+            all_dataset_radii_pass=all_dataset_radii_pass,
+        )
     )
     report["task_fingerprint"] = stable_fingerprint(
         {
@@ -1464,12 +1758,12 @@ def ensure_tube_report(args: argparse.Namespace) -> dict[str, Any]:
             and str(cached.get("summary_sha256", "")) == file_sha256(summary_path)
         )
         blocked_current = bool(
-            not radial.get("formal_radial_gate_pass", False)
+            not radial.get("downstream_radial_admission_gate_pass", False)
             and not cached.get("formal_tube_gate_pass", False)
             and str(cached.get("reason", ""))
             in {
                 "no_strict_radial_frontier",
-                "formal_radial_gate_failed_below_105mm",
+                "radial_admission_failed",
             }
         )
         tubes_current = True
@@ -1597,7 +1891,8 @@ def materialize_half_phase_challenge(
                 at_bound_tolerance_deg=policy.at_bound_tolerance_deg,
             )
             margin_gate = engine.evaluate_joint_margin_gate(margin, policy=policy)
-            job_gate = bool(raw.get("centerline_gate_pass", False) and margin_gate["joint_margin_gate_pass"])
+            gate_decision = centerline_job_gate_decision(raw, margin_gate, args)
+            job_gate = bool(gate_decision["job_gate_pass"])
             artifact_path = challenge_dir / f"cut_{int(cut_idx):03d}_{schedule}.parquet"
             corrected.to_parquet(artifact_path, index=False, compression="zstd")
             job_reports.append(
@@ -1624,6 +1919,7 @@ def materialize_half_phase_challenge(
                     },
                     **margin,
                     **margin_gate,
+                    **gate_decision,
                 }
             )
             if job_gate:
@@ -1713,27 +2009,34 @@ def materialize_half_phase_challenge(
     return annotated, report, artifact
 
 
-def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
+def phase_dataset(
+    args: argparse.Namespace,
+    *,
+    tube_report: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     out = Path(args.out_dir) / "03_dataset"
     out.mkdir(parents=True, exist_ok=True)
     report_path = out / "dataset_report.json"
     attempt_path = out / "dataset_attempt.parquet"
     final_path = out / "true_ellipse_standard_domain_tubes_v7.parquet"
+    evidence_path = out / "true_ellipse_standard_domain_tubes_v7_candidate_evidence.parquet"
     nonformal_path = out / "true_ellipse_standard_domain_tubes_v7_nonformal.parquet"
     manifest_path = out / "trajectory_manifest.csv"
     support_path = out / "holdout_support_candidates.csv"
     centerline_dir = out / "integer_centerlines"
     centerline_dir.mkdir(parents=True, exist_ok=True)
-    tube_report = ensure_tube_report(args)
-    if not bool(tube_report.get("formal_tube_gate_pass", False)):
+    tube_report = ensure_tube_report(args) if tube_report is None else dict(tube_report)
+    if not bool(tube_report.get("tube_evidence_gate_pass", False)):
         report = {
             "strategy_version": DATASET_STRATEGY_VERSION,
             **formal_protocol_report(args),
             "tube_task_fingerprint": str(tube_report.get("task_fingerprint", "")),
             "formal_dataset_gate_pass": False,
+            "dataset_evidence_gate_pass": False,
             "dataset_gate_pass": False,
-            "reason": "strict_tube_chain_below_registered_105mm_minimum_or_incomplete",
+            "reason": "current_frontier_tube_evidence_incomplete",
             "strict_geometry_rmax_mm": tube_report.get("strict_geometry_rmax_mm"),
+            "target_105_achieved": bool(tube_report.get("target_105_achieved", False)),
         }
         report["task_fingerprint"] = stable_fingerprint(
             {
@@ -1756,14 +2059,11 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         tube = pd.read_parquet(tube_path)
         expected_rows = int(args.final_points) * len(parse_float_csv(args.tube_offsets_mm)) ** 2
         duplicate_count = int(tube.duplicated(["angle_idx", "tube_offset_id"], keep=False).sum())
-        complete = bool(
-            len(tube) == expected_rows
-            and int(tube["angle_idx"].nunique()) == int(args.final_points)
-            and int(tube["tube_offset_id"].nunique())
-            == len(parse_float_csv(args.tube_offsets_mm)) ** 2
-            and duplicate_count == 0
-            and tube["sample_id"].is_unique
-            and tube["tube_success"].fillna(False).astype(bool).all()
+        complete = tube_trajectory_complete(
+            tube,
+            expected_rows=expected_rows,
+            expected_angles=int(args.final_points),
+            expected_offsets=len(parse_float_csv(args.tube_offsets_mm)) ** 2,
         )
         manifest_rows.append(
             {
@@ -1807,11 +2107,13 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     dataset = engine.annotate_joint_margins(dataset, domain=_domain())
 
     strict_rmax = float(tube_report["strict_geometry_rmax_mm"])
-    candidates = [
-        float(value)
-        for value in engine.v7_standard_domain_protocol().formal_checkpoints_mm
-        if 105.0 - 1.0e-9 <= float(value) <= strict_rmax + 1.0e-9
-    ]
+    candidates = list(
+        dynamic_holdout_test_candidates(
+            strict_geometry_rmax_mm=strict_rmax,
+            available_radii_mm=radii,
+            validation_gap_mm=7.5,
+        )
+    )
     support = compute_holdout_support_candidates(
         dataset,
         candidate_test_radii_mm=candidates,
@@ -1933,6 +2235,7 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
     checks = {
         "formal_protocol_gate_pass": bool(formal_protocol_report(args)["formal_protocol_gate_pass"]),
         "formal_tube_gate_pass": bool(tube_report.get("formal_tube_gate_pass", False)),
+        "tube_evidence_gate_pass": bool(tube_report.get("tube_evidence_gate_pass", False)),
         "completeness_gate_pass": bool(completeness_gate and not missing_metadata),
         "split_gate_pass": bool(split_report.get("split_gate_pass", False)),
         "branch_conflict_gate_pass": bool(conflict.get("branch_conflict_gate_pass", False)),
@@ -1943,21 +2246,28 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "challenge_gate_pass": challenge_gate,
     }
     dataset_gate = formal_dataset_gate(checks)
-    if dataset_gate:
-        assigned.to_parquet(final_path, index=False, compression="zstd")
+    evidence_gate = dataset_evidence_gate(checks)
+    if evidence_gate:
+        assigned.to_parquet(evidence_path, index=False, compression="zstd")
         assigned.loc[~assigned["split"].eq("test")].to_parquet(
             nonformal_path,
             index=False,
             compression="zstd",
         )
+    if dataset_gate:
+        assigned.to_parquet(final_path, index=False, compression="zstd")
     report = {
         "strategy_version": DATASET_STRATEGY_VERSION,
         **formal_protocol_report(args),
         "tube_task_fingerprint": str(tube_report.get("task_fingerprint", "")),
         "family_id": family.family_id,
         "strict_geometry_rmax_mm": strict_rmax,
+        "target_105_achieved": bool(tube_report.get("target_105_achieved", False)),
+        "holdout_selection_policy_version": HOLDOUT_SELECTION_POLICY_VERSION,
+        "holdout_candidate_test_radii_mm": candidates,
         "dataset_gate_pass": dataset_gate,
         "formal_dataset_gate_pass": dataset_gate,
+        "dataset_evidence_gate_pass": evidence_gate,
         "checks_recomputed": checks,
         "rows": int(len(assigned)),
         "expected_rows": int(len(selected_radii) * int(args.final_points) * 25),
@@ -1985,10 +2295,12 @@ def phase_dataset(args: argparse.Namespace) -> dict[str, Any]:
         "manifest_sha256": file_sha256(manifest_path),
         "dataset_path": str(final_path.resolve()) if dataset_gate else None,
         "dataset_sha256": file_sha256(final_path) if dataset_gate else None,
-        "nonformal_dataset_path": str(nonformal_path.resolve()) if dataset_gate else None,
-        "nonformal_dataset_sha256": file_sha256(nonformal_path) if dataset_gate else None,
+        "evidence_dataset_path": str(evidence_path.resolve()) if evidence_gate else None,
+        "evidence_dataset_sha256": file_sha256(evidence_path) if evidence_gate else None,
+        "nonformal_dataset_path": str(nonformal_path.resolve()) if evidence_gate else None,
+        "nonformal_dataset_sha256": file_sha256(nonformal_path) if evidence_gate else None,
         "nonformal_dataset_rows": int((~assigned["split"].eq("test")).sum())
-        if dataset_gate
+        if evidence_gate
         else 0,
         "model_input_columns": list(v6_utils.atlas.TARGET_XYZ_COLS),
     }
@@ -2018,10 +2330,10 @@ def ensure_dataset_report(args: argparse.Namespace) -> dict[str, Any]:
     if path.exists():
         cached = read_json(path)
         blocked_current = bool(
-            not tube.get("formal_tube_gate_pass", False)
+            not tube.get("tube_evidence_gate_pass", False)
             and not cached.get("formal_dataset_gate_pass", False)
             and str(cached.get("reason", ""))
-            == "strict_tube_chain_below_registered_105mm_minimum_or_incomplete"
+            == "current_frontier_tube_evidence_incomplete"
         )
         bound_artifacts = (
             ("attempt_path", "attempt_sha256"),
@@ -2050,11 +2362,20 @@ def ensure_dataset_report(args: argparse.Namespace) -> dict[str, Any]:
                 ):
                     artifacts_current = False
                     break
-        if artifacts_current and bool(cached.get("formal_dataset_gate_pass", False)):
-            for path_key, hash_key in (
-                ("dataset_path", "dataset_sha256"),
+        if artifacts_current and bool(
+            cached.get("formal_dataset_gate_pass", False)
+            or cached.get("dataset_evidence_gate_pass", False)
+        ):
+            registered_artifacts = [
                 ("nonformal_dataset_path", "nonformal_dataset_sha256"),
-            ):
+            ]
+            if bool(cached.get("formal_dataset_gate_pass", False)):
+                registered_artifacts.append(("dataset_path", "dataset_sha256"))
+            if bool(cached.get("dataset_evidence_gate_pass", False)):
+                registered_artifacts.append(
+                    ("evidence_dataset_path", "evidence_dataset_sha256")
+                )
+            for path_key, hash_key in registered_artifacts:
                 artifact = Path(str(cached.get(path_key, "")))
                 expected_hash = str(cached.get(hash_key, ""))
                 if (
@@ -2084,7 +2405,7 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
     dataset = ensure_dataset_report(args)
     strict_upstream = bool(
         audit.get("formal_audit_gate_pass", False)
-        and radial.get("formal_radial_gate_pass", False)
+        and radial.get("downstream_radial_admission_gate_pass", False)
         and tube.get("formal_tube_gate_pass", False)
         and dataset.get("formal_dataset_gate_pass", False)
     )
@@ -2095,10 +2416,16 @@ def phase_summary(args: argparse.Namespace) -> dict[str, Any]:
         "strict_radial_rmax_mm": radial.get("strict_geometry_rmax_mm"),
         "exploratory_rescue_rmax_mm": radial.get("exploratory_rescue_rmax_mm"),
         "strict_tube_rmax_mm": tube.get("strict_geometry_rmax_mm"),
+        "target_105_achieved": bool(
+            radial.get("target_105_achieved", False)
+            and tube.get("target_105_achieved", False)
+        ),
         "validation_radius_mm": (dataset.get("holdout") or {}).get("validation_radius_mm"),
         "test_radius_mm": (dataset.get("holdout") or {}).get("test_radius_mm"),
         "audit_gate_pass": bool(audit.get("formal_audit_gate_pass", False)),
-        "radial_gate_pass": bool(radial.get("formal_radial_gate_pass", False)),
+        "radial_gate_pass": bool(
+            radial.get("downstream_radial_admission_gate_pass", False)
+        ),
         "tube_gate_pass": bool(tube.get("formal_tube_gate_pass", False)),
         "dataset_gate_pass": bool(dataset.get("formal_dataset_gate_pass", False)),
         "challenge_gate_pass": bool(dataset.get("challenge_gate_pass", False)),

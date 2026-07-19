@@ -406,6 +406,9 @@ def test_joint_corrector_receives_the_rotated_full_predictor_and_positive_anchor
 
     monkeypatch.setattr(mod.atlas, "optimize_cyclic_trajectory", fake_optimize)
 
+    def stage_decision(_path, report):
+        return {"job_gate_pass": bool(report.get("centerline_gate_pass", False))}
+
     corrected, report = mod.correct_radial_predictor(
         targets,
         predictor,
@@ -418,6 +421,8 @@ def test_joint_corrector_receives_the_rotated_full_predictor_and_positive_anchor
         max_nfev=5,
         lambda_margin=0.01,
         soft_margin_deg=0.25,
+        stage_decision=stage_decision,
+        select_on_stage_acceptance=True,
     )
 
     passed_targets = captured["targets"]
@@ -428,6 +433,8 @@ def test_joint_corrector_receives_the_rotated_full_predictor_and_positive_anchor
     assert all(float(stage["lambda_anchor"]) > 0.0 for stage in captured["stages"])
     assert all(float(stage["lambda_margin"]) == 0.01 for stage in captured["stages"])
     assert all(float(stage["soft_margin_deg"]) == 0.25 for stage in captured["stages"])
+    assert captured["stage_decision"] is stage_decision
+    assert captured["select_on_stage_acceptance"] is True
     assert report["lambda_margin"] == 0.01
     assert corrected["angle_idx"].tolist() == [0, 1, 2, 3]
     assert report["full_predictor_path_used"] is True
@@ -459,6 +466,29 @@ def test_candidate_layer_filter_enforces_two_mm_quarter_degree_and_eight_candida
     assert filtered["xyz_residual_mm"].le(2.0).all()
     assert filtered.groupby("angle_idx").size().le(8).all()
     assert filtered.groupby("angle_idx").size().ge(1).all()
+
+
+def test_candidate_graph_rescue_fails_closed_when_any_expected_angle_layer_is_missing() -> None:
+    mod = _load_module()
+    rows = []
+    for angle_idx in (0, 2):
+        row = {
+            "angle_idx": angle_idx,
+            "xyz_residual_mm": 0.1,
+            "kappa": 10.0,
+        }
+        for column in mod.atlas.BETA_COLS:
+            row[column] = 0.001 * angle_idx
+        rows.append(row)
+
+    selected, report = mod.candidate_graph_rescue(
+        pd.DataFrame(rows), expected_angle_indices=(0, 1, 2)
+    )
+
+    assert selected.empty
+    assert report["candidate_graph_gate_pass"] is False
+    assert report["complete_angle_coverage"] is False
+    assert report["missing_angle_indices"] == [1]
 
 
 def test_rescue_seed_budget_expands_beyond_legacy_eight_candidate_mode() -> None:

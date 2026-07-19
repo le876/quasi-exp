@@ -6,7 +6,7 @@ import math
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -976,6 +976,35 @@ def trajectory_solution_frame(
     return frame
 
 
+def evaluate_conditioning_policy(
+    report: Mapping[str, Any],
+    *,
+    kappa_threshold: float,
+    sigma3_min_m: float = 0.0015,
+) -> dict[str, Any]:
+    """Evaluate one candidate conditioning policy without registering it.
+
+    The legacy strict gate continues to call this helper with a 150.0 kappa
+    threshold.  Larger thresholds are evidence-sweep candidates only.
+    """
+
+    threshold = float(kappa_threshold)
+    sigma_min = float(sigma3_min_m)
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("conditioning kappa threshold must be finite and positive")
+    if not np.isfinite(sigma_min) or sigma_min <= 0.0:
+        raise ValueError("conditioning sigma3 minimum must be finite and positive")
+    sigma_pass = bool(float(report.get("sigma3_p05_m", -np.inf)) >= sigma_min)
+    kappa_pass = bool(float(report.get("kappa_p95", np.inf)) <= threshold)
+    return {
+        "sigma3_min_m": sigma_min,
+        "kappa_threshold": threshold,
+        "sigma3_gate_pass": sigma_pass,
+        "kappa_gate_pass": kappa_pass,
+        "conditioning_policy_gate_pass": bool(sigma_pass and kappa_pass),
+    }
+
+
 def evaluate_centerline_gates(report: Mapping[str, Any]) -> dict[str, bool]:
     branch_gate = bool(
         float(report.get("residual_p95_mm", np.inf)) <= 2.0
@@ -989,16 +1018,68 @@ def evaluate_centerline_gates(report: Mapping[str, Any]) -> dict[str, bool]:
         and float(report.get("delta2_beta_p95_deg", np.inf)) <= 0.25
         and float(report.get("seam_beta_rms_deg", np.inf)) <= 0.75
     )
-    conditioning_gate = bool(
-        float(report.get("sigma3_p05_m", -np.inf)) >= 0.0015
-        and float(report.get("kappa_p95", np.inf)) <= 150.0
+    strict_conditioning = evaluate_conditioning_policy(
+        report,
+        kappa_threshold=150.0,
+        sigma3_min_m=0.0015,
     )
+    conditioning_gate = bool(strict_conditioning["conditioning_policy_gate_pass"])
+    downstream_conditioning_gate = bool(strict_conditioning["sigma3_gate_pass"])
     return {
         "branch_gate_pass": branch_gate,
         "canonical_gate_pass": canonical_gate,
         "conditioning_gate_pass": conditioning_gate,
+        "strict_conditioning_gate_pass": conditioning_gate,
+        "downstream_admission_conditioning_gate_pass": downstream_conditioning_gate,
         "centerline_gate_pass": bool(branch_gate and canonical_gate and conditioning_gate),
+        "downstream_admission_gate_pass": bool(
+            branch_gate and canonical_gate and downstream_conditioning_gate
+        ),
     }
+
+
+def select_trajectory_stage(
+    stage_outputs: Sequence[
+        tuple[str, pd.DataFrame, Mapping[str, Any], np.ndarray]
+    ],
+    *,
+    prefer_stage_acceptance: bool = True,
+) -> tuple[str, pd.DataFrame, Mapping[str, Any], np.ndarray]:
+    """Select the materialized stage accepted by the active job policy.
+
+    ``stage_acceptance_gate_pass`` is deliberately distinct from the legacy
+    ``centerline_gate_pass``.  Candidate conditioning policies can therefore
+    keep the concrete optimizer stage that passed their threshold instead of
+    falling through to a later, lower-residual but worse-conditioned stage.
+    """
+
+    if not stage_outputs:
+        raise ValueError("trajectory stage selection requires at least one output")
+    if prefer_stage_acceptance:
+        accepted = [
+            item
+            for item in stage_outputs
+            if bool(item[2].get("stage_acceptance_gate_pass", False))
+        ]
+        if accepted:
+            return accepted[-1]
+    centerline_pass = [
+        item for item in stage_outputs if bool(item[2].get("centerline_gate_pass", False))
+    ]
+    if centerline_pass:
+        return centerline_pass[-1]
+    tracking_pass = [
+        item for item in stage_outputs if bool(item[2].get("branch_gate_pass", False))
+    ]
+    if tracking_pass:
+        return tracking_pass[-1]
+    return min(
+        stage_outputs,
+        key=lambda item: (
+            float(item[2].get("residual_p95_mm", np.inf)),
+            float(item[2].get("residual_max_mm", np.inf)),
+        ),
+    )
 
 
 def optimize_cyclic_trajectory(
@@ -1013,6 +1094,11 @@ def optimize_cyclic_trajectory(
     max_nfev: int = 40,
     compute_conditioning: bool = True,
     stop_on_centerline_gate: bool = False,
+    stage_decision: Callable[
+        [pd.DataFrame, Mapping[str, Any]], Mapping[str, Any] | bool
+    ]
+    | None = None,
+    select_on_stage_acceptance: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     frame = _trajectory_targets_frame(targets)
     target_xyz = frame[TARGET_XYZ_COLS].to_numpy(dtype=float)
@@ -1097,24 +1183,36 @@ def optimize_cyclic_trajectory(
             }
         )
         stage_report.update(evaluate_centerline_gates(stage_report))
+        if stage_decision is None:
+            stage_accepted = bool(stage_report["centerline_gate_pass"])
+        else:
+            raw_decision = stage_decision(solution_frame, dict(stage_report))
+            if isinstance(raw_decision, Mapping):
+                stage_report.update(dict(raw_decision))
+                stage_accepted = bool(
+                    raw_decision.get(
+                        "stage_acceptance_gate_pass",
+                        raw_decision.get("job_gate_pass", False),
+                    )
+                )
+            else:
+                stage_accepted = bool(raw_decision)
+        stage_report["stage_acceptance_gate_pass"] = stage_accepted
         stage_outputs.append((name, solution_frame, stage_report, beta.copy()))
-        if bool(stop_on_centerline_gate) and bool(stage_report["centerline_gate_pass"]):
+        stop_gate = (
+            stage_accepted
+            if bool(select_on_stage_acceptance)
+            else bool(stage_report["centerline_gate_pass"])
+        )
+        if bool(stop_on_centerline_gate) and stop_gate:
             break
 
-    centerline_pass = [item for item in stage_outputs if item[2].get("centerline_gate_pass", False)]
-    tracking_pass = [item for item in stage_outputs if item[2].get("branch_gate_pass", False)]
-    if centerline_pass:
-        selected_name, selected_frame, selected_report, _selected_beta = centerline_pass[-1]
-    elif tracking_pass:
-        selected_name, selected_frame, selected_report, _selected_beta = tracking_pass[-1]
-    else:
-        selected_name, selected_frame, selected_report, _selected_beta = min(
+    selected_name, selected_frame, selected_report, _selected_beta = (
+        select_trajectory_stage(
             stage_outputs,
-            key=lambda item: (
-                float(item[2].get("residual_p95_mm", np.inf)),
-                float(item[2].get("residual_max_mm", np.inf)),
-            ),
+            prefer_stage_acceptance=bool(select_on_stage_acceptance),
         )
+    )
     report = dict(selected_report)
     report["selected_stage"] = selected_name
     report["stage_history"] = [dict(item[2]) for item in stage_outputs]

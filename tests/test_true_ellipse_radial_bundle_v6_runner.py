@@ -132,6 +132,98 @@ def test_radius_bundle_gate_honors_stricter_job_gate_when_present() -> None:
     assert decision["radial_bundle_gate_pass"] is False
 
 
+def test_radial_job_gate_can_admit_downstream_evidence_without_rewriting_strict_gate() -> None:
+    mod = _load_module()
+    correction = {
+        "centerline_gate_pass": False,
+        "strict_conditioning_gate_pass": False,
+        "downstream_admission_gate_pass": True,
+    }
+    margin = {"job_margin_gate_pass": True}
+
+    strict = mod.radial_job_gate_decision(
+        correction,
+        margin,
+        SimpleNamespace(radial_job_gate_mode="strict"),
+    )
+    downstream = mod.radial_job_gate_decision(
+        correction,
+        margin,
+        SimpleNamespace(radial_job_gate_mode="downstream_admission"),
+    )
+    margin_failure = mod.radial_job_gate_decision(
+        correction,
+        {"job_margin_gate_pass": False},
+        SimpleNamespace(radial_job_gate_mode="downstream_admission"),
+    )
+
+    assert strict["job_gate_pass"] is False
+    assert downstream["strict_centerline_gate_pass"] is False
+    assert downstream["downstream_admission_gate_pass"] is True
+    assert downstream["job_gate_pass"] is True
+    assert margin_failure["job_gate_pass"] is False
+
+
+def test_radial_job_gate_policy_fingerprint_binds_mode_and_candidate_threshold() -> None:
+    mod = _load_module()
+    strict = mod.radial_job_gate_policy(
+        SimpleNamespace(
+            radial_job_gate_mode="strict",
+            conditioning_kappa_threshold=150.0,
+        )
+    )
+    downstream = mod.radial_job_gate_policy(
+        SimpleNamespace(
+            radial_job_gate_mode="downstream_admission",
+            conditioning_kappa_threshold=150.0,
+        )
+    )
+    relaxed = mod.radial_job_gate_policy(
+        SimpleNamespace(
+            radial_job_gate_mode="downstream_admission",
+            conditioning_kappa_threshold=250.0,
+        )
+    )
+
+    assert strict["policy_fingerprint"] != downstream["policy_fingerprint"]
+    assert downstream["policy_fingerprint"] != relaxed["policy_fingerprint"]
+
+
+def test_candidate_policy_job_mode_applies_candidate_kappa_without_formalizing_it() -> None:
+    mod = _load_module()
+    correction = {
+        "centerline_gate_pass": False,
+        "branch_gate_pass": True,
+        "canonical_gate_pass": True,
+        "downstream_admission_gate_pass": True,
+        "sigma3_p05_m": 0.02,
+        "kappa_p95": 190.0,
+    }
+    margin = {"job_margin_gate_pass": True}
+
+    admitted = mod.radial_job_gate_decision(
+        correction,
+        margin,
+        SimpleNamespace(
+            radial_job_gate_mode="candidate_policy",
+            conditioning_kappa_threshold=200.0,
+        ),
+    )
+    rejected = mod.radial_job_gate_decision(
+        correction,
+        margin,
+        SimpleNamespace(
+            radial_job_gate_mode="candidate_policy",
+            conditioning_kappa_threshold=150.0,
+        ),
+    )
+
+    assert admitted["candidate_conditioning_gate_pass"] is True
+    assert admitted["job_gate_pass"] is True
+    assert rejected["candidate_conditioning_gate_pass"] is False
+    assert rejected["job_gate_pass"] is False
+
+
 def test_rescue_cache_fingerprint_binds_predictor_but_is_cut_independent() -> None:
     mod = _load_module()
     targets = pd.DataFrame(

@@ -84,6 +84,64 @@ def _joint_margin_decision(path: pd.DataFrame, args: argparse.Namespace) -> dict
     }
 
 
+def radial_job_gate_policy(args: argparse.Namespace) -> dict[str, Any]:
+    mode = str(getattr(args, "radial_job_gate_mode", "strict"))
+    if mode not in {"strict", "downstream_admission", "candidate_policy"}:
+        raise ValueError(f"unsupported radial job gate mode: {mode}")
+    kappa_threshold = float(getattr(args, "conditioning_kappa_threshold", 150.0))
+    if not np.isfinite(kappa_threshold) or kappa_threshold <= 0.0:
+        raise ValueError("conditioning kappa threshold must be finite and positive")
+    payload = {
+        "policy_version": 1,
+        "mode": mode,
+        "legacy_strict_kappa_threshold": 150.0,
+        "conditioning_kappa_threshold": kappa_threshold,
+        "admission_sigma3_min_m": 0.0015,
+    }
+    return {**payload, "policy_fingerprint": stable_fingerprint(payload)}
+
+
+def radial_job_gate_decision(
+    correction: Mapping[str, Any],
+    margin: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    policy = radial_job_gate_policy(args)
+    strict_centerline = bool(correction.get("centerline_gate_pass", False))
+    downstream_admission = bool(
+        correction.get("downstream_admission_gate_pass", False)
+    )
+    candidate_conditioning = v6.atlas.evaluate_conditioning_policy(
+        correction,
+        kappa_threshold=float(policy["conditioning_kappa_threshold"]),
+        sigma3_min_m=float(policy["admission_sigma3_min_m"]),
+    )
+    candidate_gate = bool(
+        correction.get("branch_gate_pass", False)
+        and correction.get("canonical_gate_pass", False)
+        and downstream_admission
+        and candidate_conditioning["conditioning_policy_gate_pass"]
+    )
+    selected_centerline = {
+        "strict": strict_centerline,
+        "downstream_admission": downstream_admission,
+        "candidate_policy": candidate_gate,
+    }[str(policy["mode"])]
+    margin_pass = bool(margin.get("job_margin_gate_pass", False))
+    return {
+        "radial_job_gate_mode": policy["mode"],
+        "radial_job_gate_policy_fingerprint": policy["policy_fingerprint"],
+        "strict_centerline_gate_pass": strict_centerline,
+        "downstream_admission_gate_pass": downstream_admission,
+        "candidate_conditioning_gate_pass": bool(
+            candidate_conditioning["conditioning_policy_gate_pass"]
+        ),
+        "candidate_centerline_gate_pass": candidate_gate,
+        "selected_centerline_gate_pass": bool(selected_centerline),
+        "job_gate_pass": bool(selected_centerline and margin_pass),
+    }
+
+
 def parse_float_csv(value: str | Iterable[float]) -> list[float]:
     if isinstance(value, str):
         return [float(part.strip()) for part in value.split(",") if part.strip()]
@@ -149,6 +207,13 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
             and int(args.family_search_top_formal) == 8
         ),
         "formal_seed": int(args.seed) == 20260715,
+        "legacy_strict_radial_job_gate": bool(
+            radial_job_gate_policy(args)["mode"] == "strict"
+            and np.isclose(
+                float(radial_job_gate_policy(args)["conditioning_kappa_threshold"]),
+                150.0,
+            )
+        ),
     }
     normalized = {key: bool(value) for key, value in checks.items()}
     protocol = {
@@ -175,6 +240,7 @@ def formal_protocol_report(args: argparse.Namespace) -> dict[str, Any]:
         "family_search_top_pointwise": int(args.family_search_top_pointwise),
         "family_search_top_formal": int(args.family_search_top_formal),
         "seed": int(args.seed),
+        "radial_job_gate_policy": radial_job_gate_policy(args),
     }
     return {
         "formal_protocol_gate_pass": bool(all(normalized.values())),
@@ -603,6 +669,7 @@ def _radius_bundle_task_fingerprint(
             "stop_after_first_failed_job": bool(
                 getattr(args, "stop_after_first_failed_job", False)
             ),
+            "radial_job_gate_policy": radial_job_gate_policy(args),
         }
     return stable_fingerprint(
         {
@@ -683,7 +750,8 @@ def _rescue_cache_fingerprint(
     ]
     return stable_fingerprint(
         {
-            "strategy": "shared_predictor_rescue_cache_v2",
+            "strategy": "shared_predictor_rescue_cache_v3",
+            "solver_strategy_version": v6.SOLVER_STRATEGY_VERSION,
             "targets": np.round(
                 targets[target_columns].to_numpy(dtype=float), 12
             ).tolist(),
@@ -749,10 +817,7 @@ def _correct_one_job(
         enriched = dict(correction)
         margin = _joint_margin_decision(corrected_path, args)
         enriched.update(margin)
-        enriched["job_gate_pass"] = bool(
-            enriched.get("centerline_gate_pass", False)
-            and margin["job_margin_gate_pass"]
-        )
+        enriched.update(radial_job_gate_decision(enriched, margin, args))
         return enriched
 
     for schedule in schedules:
@@ -769,6 +834,11 @@ def _correct_one_job(
             compute_conditioning=True,
             lambda_margin=lambda_margin,
             soft_margin_deg=soft_margin_deg,
+            stage_decision=apply_job_gate,
+            select_on_stage_acceptance=(
+                str(getattr(args, "radial_job_gate_mode", "strict"))
+                == "candidate_policy"
+            ),
         )
         correction_report = apply_job_gate(corrected, correction_report)
         corrected.to_parquet(job_dir / f"{schedule}.parquet", index=False, compression="zstd")
@@ -903,7 +973,10 @@ def _correct_one_job(
                     getattr(args, "rescue_kappa_threshold", -np.inf)
                 ),
             )
-            graph_path, graph_report = v6.candidate_graph_rescue(candidates)
+            graph_path, graph_report = v6.candidate_graph_rescue(
+                candidates,
+                expected_angle_indices=targets["angle_idx"].astype(int).tolist(),
+            )
             candidates.to_parquet(
                 cache_candidates_path,
                 index=False,
@@ -954,6 +1027,11 @@ def _correct_one_job(
                     compute_conditioning=True,
                     lambda_margin=lambda_margin,
                     soft_margin_deg=soft_margin_deg,
+                    stage_decision=apply_job_gate,
+                    select_on_stage_acceptance=(
+                        str(getattr(args, "radial_job_gate_mode", "strict"))
+                        == "candidate_policy"
+                    ),
                 )
                 correction_report = apply_job_gate(corrected, correction_report)
                 corrected.to_parquet(
@@ -2305,6 +2383,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--retry-steps-mm", default="0.5,0.25")
     parser.add_argument("--final-points", type=int, default=360)
     parser.add_argument("--max-candidates-per-angle", type=int, default=8)
+    parser.add_argument(
+        "--radial-job-gate-mode",
+        choices=("strict", "downstream_admission", "candidate_policy"),
+        default="strict",
+    )
+    parser.add_argument("--conditioning-kappa-threshold", type=float, default=150.0)
     parser.add_argument("--candidate-cluster-deg", type=float, default=0.25)
     parser.add_argument("--candidate-residual-mm", type=float, default=2.0)
     parser.add_argument("--tube-offsets-mm", default="-5,-2.5,0,2.5,5")

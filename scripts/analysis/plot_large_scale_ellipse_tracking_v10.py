@@ -46,6 +46,32 @@ class ScaleSpec:
     phase_count: int
 
 
+@dataclass(frozen=True)
+class VariantEvidence:
+    curve: pd.DataFrame
+    target: np.ndarray
+    achieved: np.ndarray
+    residual_mm: np.ndarray
+    phase_deg: np.ndarray
+    p95_mm: float
+    max_mm: float
+    report: dict
+    curve_path: Path
+    report_path: Path
+
+
+@dataclass(frozen=True)
+class LoadedScale:
+    spec: ScaleSpec
+    pose: dict
+    center: np.ndarray
+    major: np.ndarray
+    minor: np.ndarray
+    target: np.ndarray
+    variants: dict[str, VariantEvidence]
+    input_paths: tuple[Path, ...]
+
+
 SCALE_SPECS = (
     ScaleSpec("a0p500m", "formal", ("T3", "T4"), 180),
     ScaleSpec("a0p750m", "screen", ("T1", "T3", "T4"), 24),
@@ -148,7 +174,7 @@ def _camera_from_pose(pose: dict) -> tuple[float, float]:
     return elevation, azimuth
 
 
-def _load_scale(input_root: Path, spec: ScaleSpec) -> dict:
+def _load_scale(input_root: Path, spec: ScaleSpec) -> LoadedScale:
     scale_dir = input_root / spec.slug
     pose_path = scale_dir / "pose_report.json"
     pose = _read_json(pose_path)
@@ -158,7 +184,7 @@ def _load_scale(input_root: Path, spec: ScaleSpec) -> dict:
     if abs(float(np.dot(major, minor))) > 1.0e-6:
         raise ValueError(f"{spec.slug}: pose axes are not orthogonal")
 
-    variants: dict[str, dict] = {}
+    variants: dict[str, VariantEvidence] = {}
     input_paths = [pose_path]
     reference_target: np.ndarray | None = None
     for variant in spec.variants:
@@ -182,18 +208,18 @@ def _load_scale(input_root: Path, spec: ScaleSpec) -> dict:
         else:
             np.testing.assert_allclose(reference_target, target, rtol=0.0, atol=1.0e-10)
         phase_deg = np.mod(np.rad2deg(curve["phase_rad"].to_numpy(dtype=float)), 360.0)
-        variants[variant] = {
-            "curve": curve,
-            "target": target,
-            "achieved": achieved,
-            "residual_mm": residual,
-            "phase_deg": phase_deg,
-            "p95_mm": float(np.percentile(residual, 95)),
-            "max_mm": float(np.max(residual)),
-            "report": _read_json(report_path),
-            "curve_path": curve_path,
-            "report_path": report_path,
-        }
+        variants[variant] = VariantEvidence(
+            curve=curve,
+            target=target,
+            achieved=achieved,
+            residual_mm=residual,
+            phase_deg=phase_deg,
+            p95_mm=float(np.percentile(residual, 95)),
+            max_mm=float(np.max(residual)),
+            report=_read_json(report_path),
+            curve_path=curve_path,
+            report_path=report_path,
+        )
         input_paths.extend([curve_path, report_path])
     assert reference_target is not None
     target_plane = project_to_ellipse_plane(
@@ -209,22 +235,24 @@ def _load_scale(input_root: Path, spec: ScaleSpec) -> dict:
             f"{spec.slug}: target major semiaxis {actual_semimajor} disagrees with pose "
             f"{expected_semimajor}"
         )
-    return {
-        "spec": spec,
-        "pose": pose,
-        "center": center,
-        "major": major,
-        "minor": minor,
-        "target": reference_target,
-        "variants": variants,
-        "input_paths": input_paths,
-    }
+    return LoadedScale(
+        spec=spec,
+        pose=pose,
+        center=center,
+        major=major,
+        minor=minor,
+        target=reference_target,
+        variants=variants,
+        input_paths=tuple(input_paths),
+    )
 
 
-def _plot_intrinsic(ax: object, scale: dict, *, variants: Sequence[str]) -> None:
-    pose = scale["pose"]
+def _plot_intrinsic(
+    ax: object, scale: LoadedScale, *, variants: Sequence[str]
+) -> None:
+    pose = scale.pose
     target_plane = project_to_ellipse_plane(
-        scale["target"],
+        scale.target,
         center_m=pose["center_m"],
         major_direction=pose["major_direction"],
         minor_direction=pose["minor_direction"],
@@ -238,9 +266,9 @@ def _plot_intrinsic(ax: object, scale: dict, *, variants: Sequence[str]) -> None
         zorder=5,
     )
     for variant in variants:
-        record = scale["variants"][variant]
+        record = scale.variants[variant]
         achieved_plane = project_to_ellipse_plane(
-            record["achieved"],
+            record.achieved,
             center_m=pose["center_m"],
             major_direction=pose["major_direction"],
             minor_direction=pose["minor_direction"],
@@ -265,8 +293,8 @@ def _plot_intrinsic(ax: object, scale: dict, *, variants: Sequence[str]) -> None
     ax.grid(True, alpha=0.22)
 
 
-def _plot_world_3d(ax: object, scale: dict) -> None:
-    target = scale["target"]
+def _plot_world_3d(ax: object, scale: LoadedScale) -> None:
+    target = scale.target
     ax.plot(
         *_closed(target).T,
         color=TARGET_COLOR,
@@ -275,8 +303,8 @@ def _plot_world_3d(ax: object, scale: dict) -> None:
         label="target ellipse",
     )
     all_values = [target]
-    for variant, record in scale["variants"].items():
-        achieved = record["achieved"]
+    for variant, record in scale.variants.items():
+        achieved = record.achieved
         ax.plot(
             *_closed(achieved).T,
             color=VARIANT_COLORS[variant],
@@ -292,7 +320,7 @@ def _plot_world_3d(ax: object, scale: dict) -> None:
         )
         all_values.append(achieved)
     _set_3d_equal(ax, np.vstack(all_values))
-    elevation, azimuth = _camera_from_pose(scale["pose"])
+    elevation, azimuth = _camera_from_pose(scale.pose)
     ax.view_init(elev=elevation, azim=azimuth)
     ax.set_xlabel("x (m)", labelpad=2)
     ax.set_ylabel("y (m)", labelpad=2)
@@ -300,18 +328,24 @@ def _plot_world_3d(ax: object, scale: dict) -> None:
     ax.tick_params(labelsize=7, pad=0)
 
 
-def _plot_error(ax: object, scale: dict) -> None:
-    for variant, record in scale["variants"].items():
+def _plot_error(ax: object, scale: LoadedScale) -> None:
+    for variant, record in scale.variants.items():
         ax.plot(
-            record["phase_deg"],
-            record["residual_mm"],
+            record.phase_deg,
+            record.residual_mm,
             color=VARIANT_COLORS[variant],
             lw=1.35,
-            marker="o" if len(record["phase_deg"]) <= 24 else None,
+            marker="o" if len(record.phase_deg) <= 24 else None,
             ms=2.5,
             label=f"{variant} FK residual",
         )
-    ax.axhline(1.0, color="#777777", lw=0.9, ls="--", label="P95 gate 1 mm")
+    ax.axhline(
+        1.0,
+        color="#777777",
+        lw=0.9,
+        ls="--",
+        label="1 mm P95 reference (aggregate)",
+    )
     ax.axhline(3.0, color="#b23a48", lw=0.9, ls=":", label="max gate 3 mm")
     ax.set_yscale("symlog", linthresh=0.1, linscale=0.8)
     ax.set_xlim(0.0, 360.0)
@@ -321,11 +355,11 @@ def _plot_error(ax: object, scale: dict) -> None:
     ax.grid(True, which="both", alpha=0.22)
 
 
-def _plot_metric_bars(ax: object, scale: dict) -> None:
-    variants = list(scale["variants"])
+def _plot_metric_bars(ax: object, scale: LoadedScale) -> None:
+    variants = list(scale.variants)
     y = np.arange(len(variants), dtype=float)
-    p95 = [scale["variants"][variant]["p95_mm"] for variant in variants]
-    maximum = [scale["variants"][variant]["max_mm"] for variant in variants]
+    p95 = [scale.variants[variant].p95_mm for variant in variants]
+    maximum = [scale.variants[variant].max_mm for variant in variants]
     ax.barh(y - 0.17, p95, height=0.32, color="#76b7b2", label="P95")
     ax.barh(y + 0.17, maximum, height=0.32, color="#e15759", label="max")
     ax.set_yticks(y, labels=variants)
@@ -345,9 +379,9 @@ def _save_figure(fig: plt.Figure, path: Path) -> dict:
     return {"path": str(path.resolve()), "sha256": _sha256_file(path)}
 
 
-def _render_scale(scale: dict, output_path: Path) -> dict:
-    spec: ScaleSpec = scale["spec"]
-    major_m = float(scale["pose"]["major_semiaxis_m"])
+def _render_scale(scale: LoadedScale, output_path: Path) -> dict:
+    spec = scale.spec
+    major_m = float(scale.pose["major_semiaxis_m"])
     fig = plt.figure(figsize=(15.2, 9.6))
     intrinsic = fig.add_subplot(2, 2, 1)
     _plot_intrinsic(intrinsic, scale, variants=spec.variants)
@@ -388,20 +422,22 @@ def _render_scale(scale: dict, output_path: Path) -> dict:
     return _save_figure(fig, output_path)
 
 
-def _render_overview(scales: Sequence[dict], output_path: Path) -> tuple[dict, dict[str, str]]:
+def _render_overview(
+    scales: Sequence[LoadedScale], output_path: Path
+) -> tuple[dict, dict[str, str]]:
     fig = plt.figure(figsize=(15.0, 12.6))
     selected: dict[str, str] = {}
     for row, scale in enumerate(scales):
-        spec: ScaleSpec = scale["spec"]
+        spec = scale.spec
         best = min(
             spec.variants,
-            key=lambda variant: scale["variants"][variant]["p95_mm"],
+            key=lambda variant: scale.variants[variant].p95_mm,
         )
         selected[spec.slug] = best
         intrinsic = fig.add_subplot(len(scales), 2, row * 2 + 1)
         _plot_intrinsic(intrinsic, scale, variants=(best,))
         intrinsic.set_title(
-            f"a={float(scale['pose']['major_semiaxis_m']):.2f} m — target vs lowest-P95 {best}"
+            f"a={float(scale.pose['major_semiaxis_m']):.2f} m — target vs lowest-P95 {best}"
         )
         intrinsic.legend(frameon=False, fontsize=8, loc="best")
         error = fig.add_subplot(len(scales), 2, row * 2 + 2)
@@ -440,7 +476,7 @@ def render_tracking_evidence(
     scales = [_load_scale(source, spec) for spec in SCALE_SPECS]
     figures = []
     for scale in scales:
-        spec: ScaleSpec = scale["spec"]
+        spec = scale.spec
         figures.append(_render_scale(scale, output / f"{spec.slug}_teacher_tracking.png"))
     overview, selected = _render_overview(
         scales,
@@ -451,24 +487,22 @@ def render_tracking_evidence(
     input_hashes = {
         str(path.resolve()): _sha256_file(path)
         for scale in scales
-        for path in scale["input_paths"]
+        for path in scale.input_paths
     }
     scale_records = {}
     for scale in scales:
-        spec: ScaleSpec = scale["spec"]
+        spec = scale.spec
         scale_records[spec.slug] = {
-            "actual_major_semiaxis_m": float(scale["pose"]["major_semiaxis_m"]),
-            "actual_minor_semiaxis_m": float(scale["pose"]["minor_semiaxis_m"]),
+            "actual_major_semiaxis_m": float(scale.pose["major_semiaxis_m"]),
+            "actual_minor_semiaxis_m": float(scale.pose["minor_semiaxis_m"]),
             "evidence_tier": spec.evidence_tier,
             "phase_count": spec.phase_count,
             "variants": {
                 variant: {
-                    "teacher_fk_residual_p95_mm": scale["variants"][variant]["p95_mm"],
-                    "teacher_fk_residual_max_mm": scale["variants"][variant]["max_mm"],
+                    "teacher_fk_residual_p95_mm": scale.variants[variant].p95_mm,
+                    "teacher_fk_residual_max_mm": scale.variants[variant].max_mm,
                     "centerline_gate_pass": bool(
-                        scale["variants"][variant]["report"].get(
-                            "centerline_gate_pass", False
-                        )
+                        scale.variants[variant].report.get("centerline_gate_pass", False)
                     ),
                 }
                 for variant in spec.variants

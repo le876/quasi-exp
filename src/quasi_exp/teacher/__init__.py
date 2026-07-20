@@ -9,6 +9,12 @@ from .canonical import (
 )
 from .forward import ForwardEnvironment, ForwardValidationResult
 from .large_scale import EllipseChallenge
+from .region import (
+    CanonicalRegionTeacher,
+    EllipseFamilySpec,
+    TeacherSurface,
+    TubeCrossSection,
+)
 
 __all__ = [
     "CanonicalTeacher",
@@ -19,4 +25,8 @@ __all__ = [
     "TeacherTrajectory",
     "TeacherVariant",
     "TrajectorySpec",
+    "CanonicalRegionTeacher",
+    "EllipseFamilySpec",
+    "TeacherSurface",
+    "TubeCrossSection",
 ]

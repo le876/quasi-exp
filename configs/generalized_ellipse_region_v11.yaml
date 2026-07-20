@@ -1,0 +1,173 @@
+protocol_id: generalized-ellipse-region-v11.1
+source_fixed_point: 7a73f2acbdc8c90f7872bb2b20691d5a65abe434
+robot_config: configs/robot_rods_only_standard_100k.yaml
+v10_evidence_root: runs/trajectory_canonical_teacher_v10/07_large_scale_challenge
+output_root: runs/generalized_ellipse_region_v11
+
+seeds:
+  solver: 20260720
+  family: 20260721
+  cross_section: 20260722
+  anchor: 20260723
+  audit: 20260724
+  screen_train: [20260801, 20260802, 20260803]
+  formal_train: [20260810, 20260811, 20260812, 20260813, 20260814]
+  deployment: 20260820
+
+teacher_policy:
+  variant: T3
+  candidate_budget: 16
+  damping: 0.001
+  nullspace_weight: 0.001
+  safe_joint_margin_deg: 1.5
+  safe_margin_repulsion_step_deg: 0.0
+  max_corrector_iterations: 100
+  tracking_tolerance_mm: 1.0
+  lambda_velocity: 5.0
+  lambda_acceleration: 0.5
+  lambda_posture: 0.1
+  lambda_conditioning: 0.05
+
+family_domain:
+  count: 72
+  primary: {train: 14, validation: 5, virgin_test: 5}
+  reserves: {train: 28, validation: 10, virgin_test: 10}
+  major_semiaxis_m: [0.46, 0.50]
+  axis_ratio: [0.31, 0.36]
+  center_q1_mm: [-10.0, 10.0]
+  center_q2_mm: [-10.0, 10.0]
+  center_normal_mm: [-5.0, 5.0]
+  tilt_deg: [-3.0, 3.0]
+
+anchor:
+  proposal_phase_count: 24
+  screen_phase_count: 180
+  verify_phase_count: 720
+  center_proposals: 64
+  center_plane_proposals: 128
+  screen_candidate_limit: 41
+  verify_top_count: 3
+  center_q1_mm: [-20.0, 20.0]
+  center_q2_mm: [-20.0, 20.0]
+  center_normal_mm: [-10.0, 10.0]
+  tilt_deg: [-5.0, 5.0]
+  cuts: [0, 45, 90, 135]
+  directions: [forward, reverse]
+
+tube:
+  frontier_mm:
+    - [0.5, 0.5]
+    - [1.0, 1.0]
+    - [2.0, 1.0]
+    - [2.0, 2.0]
+    - [5.0, 2.0]
+    - [5.0, 5.0]
+  fallback_widths_mm: [0.5, 1.0, 2.0, 5.0]
+  screen_phase_count: 180
+  screen_cross_section_count: 9
+  dense_phase_count: 360
+  dense_cross_section_count: 49
+  audit_cross_section_count: 25
+  sweep_directions: [outward, inward]
+
+core:
+  phase_count: 720
+  cross_section_count: 81
+  coverage_probe_phase_count: 1440
+  coverage_probe_cross_section_count: 49
+
+pilot:
+  phase_count: 180
+  cross_section_count: 25
+
+formal:
+  phase_count: 720
+  cross_section_count: 25
+  nested_train_sizes: [20000, 50000, 100000, 200000, 252000]
+  sealed_eval_phase_count: 1440
+  sealed_eval_cross_section_count: 49
+
+gates:
+  teacher_surface:
+    success_rate: 1.0
+    residual_p95_mm: 1.0
+    residual_max_mm: 3.0
+    joint_margin_min_deg: 1.5
+    phase_beta_rms_p95_deg: 1.0
+    acceleration_beta_rms_p95_deg: 0.5
+    seam_beta_rms_max_deg: 1.0
+    surface_edge_beta_rms_p95_deg: 1.0
+  repeatability:
+    repeat_beta_rms_p95_deg: 0.2
+    reverse_cut_beta_rms_p95_deg: 0.5
+  local_consistency:
+    gap_5mm_p95_deg: 0.5
+    gap_10mm_p95_deg: 1.0
+  conflicts:
+    xyz_radius_mm: 2.0
+    beta_gap_threshold_deg: 1.0
+  coverage:
+    nearest_p95_mm: 3.0
+    nearest_max_mm: 5.0
+  student:
+    interpolation_p95_mm: 5.0
+    near_ood_p95_mm: 7.5
+    absolute_max_mm: 10.0
+    relative_max_fraction: 0.02
+    per_axis_mean_mm: 2.0
+    required_seed_passes: 4
+    seed_count: 5
+
+representation:
+  static_hidden_units: [128, 128, 64]
+  chart_count_range: [2, 4]
+  chart_repeat_ari_min: 0.99
+  chart_xyz_macro_f1_min: 0.98
+  ambiguous_voxel_max: 0
+
+training:
+  batch_size: 256
+  learning_rate: 0.001
+  lambda_fk: 0.1
+  max_epochs: 300
+  patience: 30
+
+smoke:
+  teacher_policy:
+    candidate_budget: 2
+    max_corrector_iterations: 20
+  anchor:
+    proposal_phase_count: 12
+    screen_phase_count: 12
+    verify_phase_count: 12
+    center_proposals: 2
+    center_plane_proposals: 2
+    screen_candidate_limit: 2
+    verify_top_count: 1
+    cuts: [0]
+    directions: [forward]
+  tube:
+    frontier_mm: [[0.5, 0.5]]
+    screen_phase_count: 12
+    screen_cross_section_count: 9
+    dense_phase_count: 12
+    dense_cross_section_count: 9
+    audit_cross_section_count: 9
+    sweep_directions: [outward]
+  core:
+    phase_count: 12
+    cross_section_count: 9
+    coverage_probe_phase_count: 24
+    coverage_probe_cross_section_count: 9
+  pilot:
+    phase_count: 12
+    cross_section_count: 9
+  formal:
+    phase_count: 12
+    cross_section_count: 9
+    nested_train_sizes: [100, 200]
+    sealed_eval_phase_count: 24
+    sealed_eval_cross_section_count: 9
+  training:
+    max_epochs: 2
+    patience: 1

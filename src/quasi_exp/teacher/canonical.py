@@ -71,6 +71,7 @@ class TeacherPolicy:
     lambda_conditioning: float = 0.01
     closure_weight: float = 5.0
     safe_joint_margin_deg: float = 1.5
+    safe_margin_repulsion_step_deg: float = 0.0
     max_corrector_iterations: int = 100
     tracking_tolerance_mm: float = 1.0
     solver_seed: int = 20260720
@@ -85,6 +86,10 @@ class TeacherPolicy:
             raise ValueError("beta_weights must contain six positive values")
         if self.damping < 0.0 or self.tracking_tolerance_mm <= 0.0:
             raise ValueError("damping and tracking tolerance must be valid")
+        if self.safe_joint_margin_deg <= 0.0:
+            raise ValueError("safe_joint_margin_deg must be positive")
+        if self.safe_margin_repulsion_step_deg < 0.0:
+            raise ValueError("safe_margin_repulsion_step_deg must be non-negative")
 
     @property
     def fingerprint(self) -> str:
@@ -235,11 +240,17 @@ def _correct_target(
     beta = np.clip(np.asarray(initial, dtype=float).reshape(6), bounds[:, 0], bounds[:, 1])
     tolerance_m = float(policy.tracking_tolerance_mm) / 1000.0
     max_step = math.radians(float(policy.max_step_deg))
+    safe_margin = math.radians(float(policy.safe_joint_margin_deg))
+    repulsion_cap = math.radians(float(policy.safe_margin_repulsion_step_deg))
     for iteration in range(int(policy.max_corrector_iterations)):
         xyz = np.asarray(environment.fk(beta.reshape(1, 6)), dtype=float).reshape(-1, 3)[0]
         error = np.asarray(target, dtype=float).reshape(3) - xyz
         residual = float(np.linalg.norm(error))
-        if residual <= tolerance_m:
+        lower_margin = beta - bounds[:, 0]
+        upper_margin = bounds[:, 1] - beta
+        margin = np.minimum(lower_margin, upper_margin)
+        margin_ok = bool(np.min(margin) >= safe_margin - 1.0e-10)
+        if residual <= tolerance_m and (repulsion_cap == 0.0 or margin_ok):
             return beta, residual * 1000.0, iteration, True
         jacobian = _environment_jacobian(environment, beta)
         pinv = weighted_damped_pinv(
@@ -252,6 +263,11 @@ def _correct_target(
         null_step = -float(policy.nullspace_weight) * (
             nullspace @ _posture_margin_gradient(beta, bounds)
         )
+        if repulsion_cap > 0.0:
+            deficit_fraction = np.clip((safe_margin - margin) / safe_margin, 0.0, 1.0)
+            inward_direction = np.where(lower_margin <= upper_margin, 1.0, -1.0)
+            repulsion = repulsion_cap * deficit_fraction * inward_direction
+            null_step += nullspace @ repulsion
         step = task_step + null_step
         step_norm = float(np.sqrt(np.mean(np.square(step))))
         if step_norm > max_step:

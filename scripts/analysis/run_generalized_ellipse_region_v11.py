@@ -743,6 +743,21 @@ def _run_anchor_verify_worker(task_file: Path) -> dict[str, Any]:
         cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
     )
     primary_frame = pd.read_parquet(primary_dir / "centerline.parquet")
+    if not bool(primary_report["gate_pass"]):
+        report = {
+            "candidate_id": candidate_id,
+            "teacher_gate_pass": False,
+            "repeat_beta_rms_p95_deg": None,
+            "reverse_cut_beta_rms_p95_deg": None,
+            "invariance_audit_status": "skipped_primary_teacher_gate_failed",
+            "full_gate_pass": False,
+            **{
+                key: float(value)
+                for key, value in primary_report["metrics"].items()
+            },
+        }
+        atomic_write_json(candidate_root / "summary.json", report)
+        return report
     repeat_dir = candidate_root / "repeat"
     _solve_centerline_artifact(
         family=family,
@@ -801,6 +816,7 @@ def _run_anchor_verify_worker(task_file: Path) -> dict[str, Any]:
             and repeat_gap["beta_gap_rms_p95_deg"] <= repeat_limit
             and reverse_cut_p95 <= reverse_limit
         ),
+        "invariance_audit_status": "completed",
         **{key: float(value) for key, value in primary_report["metrics"].items()},
     }
     atomic_write_json(candidate_root / "summary.json", report)
@@ -932,7 +948,26 @@ def run_anchor_stage(
     a4_trials.sort(
         key=lambda value: (trial_metadata[value]["proposal_score"], value)
     )
-    selected_ids.extend(a4_trials[: max(screen_limit - len(selected_ids), 0)])
+    # Stratify the joint search across geometries before spending a second
+    # branch trial on the same geometry.  A flat proposal-score sort would let
+    # all remaining slots collapse onto the single best A2 pose.
+    a4_priority = []
+    branch_variants = (
+        ("forward", configured_cuts[0]),
+        (
+            "reverse" if "reverse" in directions else directions[0],
+            configured_cuts[min(1, len(configured_cuts) - 1)],
+        ),
+    )
+    for geometry_index, geometry_id in enumerate(plane_ranked[:8]):
+        root_index = geometry_index % 4
+        for direction, cut in branch_variants:
+            trial_id = f"A4_{geometry_id}_r{root_index}_{direction}_c{cut:04d}"
+            if trial_id in lookup:
+                a4_priority.append(trial_id)
+    selected_ids.extend(
+        a4_priority[: max(screen_limit - len(selected_ids), 0)]
+    )
     selected_ids = selected_ids[:screen_limit]
     pd.DataFrame(
         [{"candidate_id": value, **trial_metadata[value]} for value in selected_ids]

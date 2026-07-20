@@ -21,10 +21,11 @@ from quasi_exp.teacher.large_scale import EllipseChallenge
 from quasi_exp.teacher.student import XYZ_COLUMNS
 from quasi_exp.teacher.student_tracking_tf import autoregressive_rollout
 from quasi_exp.teacher.tracking_gate import (
-    DEFAULT_TRACKING_RELATIVE_LIMIT,
     evaluate_relative_tracking_gate,
+    relative_tracking_point_fields,
     relative_tracking_gate_spec,
     require_relative_tracking_gate,
+    tracking_gate_threshold_mm,
 )
 
 from run_trajectory_canonical_teacher_v10 import load_environment, project_root_from, runtime_fingerprint
@@ -92,8 +93,7 @@ def _evaluate_unlabelled(
         **relative_gate,
         "joint_bounds_rate": float(np.mean(in_bounds)),
     }
-    frame = pd.DataFrame(
-        {
+    frame_fields: dict[str, Any] = {
             "phase_rad": phase,
             "target_x_m": target[:, 0],
             "target_y_m": target[:, 1],
@@ -102,12 +102,14 @@ def _evaluate_unlabelled(
             "achieved_y_m": achieved[:, 1],
             "achieved_z_m": achieved[:, 2],
             "tracking_residual_mm": residual,
-            "tracking_relative_error_pct": residual / (major_semiaxis_m * 10.0),
-            "within_tracking_gate": residual
-            <= relative_gate["tracking_gate_threshold_mm"],
             "within_joint_bounds": in_bounds,
-        }
+    }
+    frame_fields.update(
+        relative_tracking_point_fields(
+            residual, major_semiaxis_m=major_semiaxis_m
+        )
     )
+    frame = pd.DataFrame(frame_fields)
     for index in range(6):
         frame[f"predicted_beta{index + 1}_rad"] = beta[:, index]
     return metrics, frame
@@ -136,10 +138,8 @@ def plot_tracking(frame: pd.DataFrame, pose: dict[str, Any], title: str, output:
     achieved_face = np.column_stack([(achieved - center) @ major, (achieved - center) @ minor])
     phase = frame["phase_rad"].to_numpy(dtype=float)
     residual = frame["tracking_residual_mm"].to_numpy(dtype=float)
-    gate_threshold_mm = (
+    gate_threshold_mm = tracking_gate_threshold_mm(
         float(pose["major_semiaxis_m"])
-        * 1000.0
-        * DEFAULT_TRACKING_RELATIVE_LIMIT
     )
 
     fig = plt.figure(figsize=(18, 5.5), constrained_layout=True)
@@ -221,6 +221,8 @@ def main() -> None:
     if not selection_path.exists() or not final_path.exists():
         raise FileNotFoundError("frozen selection and five-seed final summary are required")
     selection = _load_json(selection_path)
+    require_relative_tracking_gate(selection, context=str(selection_path))
+    require_relative_tracking_gate(_load_json(final_path), context=str(final_path))
     with args.challenge_config.resolve().open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     gpus = tf.config.list_physical_devices("GPU")

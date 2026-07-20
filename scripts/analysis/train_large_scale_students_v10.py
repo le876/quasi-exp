@@ -26,6 +26,7 @@ from quasi_exp.teacher.student_tracking_tf import (
 )
 from quasi_exp.teacher.tracking_gate import (
     evaluate_relative_tracking_gate,
+    relative_tracking_point_fields,
     relative_tracking_gate_spec,
     require_relative_tracking_gate,
 )
@@ -407,10 +408,10 @@ def evaluate_prediction(
         result[f"predicted_beta{index + 1}_rad"] = prediction[:, index]
     result[["achieved_x_m", "achieved_y_m", "achieved_z_m"]] = achieved
     result["tracking_residual_mm"] = residual_mm
-    result["tracking_relative_error_pct"] = residual_mm / (major_semiaxis_m * 10.0)
-    result["within_tracking_gate"] = (
-        residual_mm <= relative_gate["tracking_gate_threshold_mm"]
-    )
+    for name, values in relative_tracking_point_fields(
+        residual_mm, major_semiaxis_m=major_semiaxis_m
+    ).items():
+        result[name] = values
     result["beta_rms_deg"] = beta_rms_deg
     result["within_joint_bounds"] = in_bounds
     return metric, result

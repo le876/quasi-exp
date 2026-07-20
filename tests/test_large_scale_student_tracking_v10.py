@@ -13,8 +13,10 @@ from quasi_exp.teacher.student import (
 )
 from quasi_exp.teacher.tracking_gate import (
     evaluate_relative_tracking_gate,
+    relative_tracking_point_fields,
     relative_tracking_gate_spec,
     require_relative_tracking_gate,
+    tracking_gate_threshold_mm,
 )
 
 
@@ -52,6 +54,7 @@ def test_relative_tracking_gate_uses_two_percent_of_actual_major_semiaxis() -> N
 
     assert half_metre["tracking_gate_threshold_mm"] == pytest.approx(10.0)
     assert three_quarter_metre["tracking_gate_threshold_mm"] == pytest.approx(15.0)
+    assert tracking_gate_threshold_mm(1.0) == pytest.approx(20.0)
     assert half_metre["tracking_gate_relative_limit"] == pytest.approx(0.02)
     assert half_metre["tracking_gate_limit_pct"] == pytest.approx(2.0)
 
@@ -88,6 +91,17 @@ def test_relative_tracking_protocol_rejects_legacy_absolute_gate_cache() -> None
 
     require_relative_tracking_gate(
         {"tracking_gate": relative_tracking_gate_spec()}, context="future report"
+    )
+
+
+def test_relative_tracking_point_fields_share_the_registered_unit_conversion() -> None:
+    fields = relative_tracking_point_fields(
+        [7.5, 15.0, 15.01], major_semiaxis_m=0.75
+    )
+
+    np.testing.assert_allclose(fields["tracking_relative_error_pct"], [1.0, 2.0, 2.0013333333])
+    np.testing.assert_array_equal(
+        fields["within_tracking_gate"], [True, True, False]
     )
 
 
@@ -285,3 +299,20 @@ def test_artifact_verifier_fails_closed_on_hash_mismatch(tmp_path) -> None:
     assert verify(artifact, digest)["sha256"] == digest
     with pytest.raises(RuntimeError, match="hash mismatch"):
         verify(artifact, "0" * 64)
+
+
+def test_artifact_verifier_does_not_rewrite_a_legacy_output_root(tmp_path) -> None:
+    deployment = tmp_path / "deployment"
+    deployment.mkdir()
+    summary = deployment / "deployment_summary.json"
+    summary.write_text(
+        '{"protocol_id":"large-scale-student-tracking-v10.1-deployment"}',
+        encoding="utf-8",
+    )
+
+    from scripts.analysis.verify_large_scale_student_artifacts_v10 import run
+
+    with pytest.raises(RuntimeError, match="fresh output root"):
+        run(summary)
+
+    assert not (tmp_path / "artifact_verification.json").exists()

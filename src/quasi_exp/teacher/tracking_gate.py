@@ -32,6 +32,60 @@ def require_relative_tracking_gate(payload: dict[str, Any], *, context: str) -> 
         )
 
 
+def _relative_tracking_error(
+    residual_mm: Iterable[float] | np.ndarray,
+    *,
+    major_semiaxis_m: float,
+    relative_limit: float,
+) -> tuple[np.ndarray, float, float]:
+    residual = np.asarray(list(residual_mm), dtype=float).reshape(-1)
+    semiaxis = float(major_semiaxis_m)
+    limit = float(relative_limit)
+    if residual.size == 0:
+        raise ValueError("tracking residuals must not be empty")
+    if not np.isfinite(semiaxis) or semiaxis <= 0.0:
+        raise ValueError("major_semiaxis_m must be finite and positive")
+    if not np.isfinite(limit) or limit <= 0.0:
+        raise ValueError("relative_limit must be finite and positive")
+    if not np.all(np.isfinite(residual)) or np.any(residual < 0.0):
+        raise ValueError("tracking residuals must be finite and non-negative")
+    return residual / (semiaxis * 1000.0), semiaxis, limit
+
+
+def tracking_gate_threshold_mm(
+    major_semiaxis_m: float,
+    *,
+    relative_limit: float = DEFAULT_TRACKING_RELATIVE_LIMIT,
+) -> float:
+    """Convert the registered scale-relative limit to a physical threshold."""
+
+    _relative, semiaxis, limit = _relative_tracking_error(
+        [0.0],
+        major_semiaxis_m=major_semiaxis_m,
+        relative_limit=relative_limit,
+    )
+    return semiaxis * 1000.0 * limit
+
+
+def relative_tracking_point_fields(
+    residual_mm: Iterable[float] | np.ndarray,
+    *,
+    major_semiaxis_m: float,
+    relative_limit: float = DEFAULT_TRACKING_RELATIVE_LIMIT,
+) -> dict[str, np.ndarray]:
+    """Return canonical per-phase relative error and pass/fail columns."""
+
+    relative, _semiaxis, limit = _relative_tracking_error(
+        residual_mm,
+        major_semiaxis_m=major_semiaxis_m,
+        relative_limit=relative_limit,
+    )
+    return {
+        "tracking_relative_error_pct": relative * 100.0,
+        "within_tracking_gate": relative <= limit,
+    }
+
+
 def evaluate_relative_tracking_gate(
     residual_mm: Iterable[float] | np.ndarray,
     *,
@@ -46,20 +100,11 @@ def evaluate_relative_tracking_gate(
     diagnostics and never override a failed worst-point check.
     """
 
-    residual = np.asarray(list(residual_mm), dtype=float).reshape(-1)
-    semiaxis = float(major_semiaxis_m)
-    limit = float(relative_limit)
-    if residual.size == 0:
-        raise ValueError("tracking residuals must not be empty")
-    if not np.isfinite(semiaxis) or semiaxis <= 0.0:
-        raise ValueError("major_semiaxis_m must be finite and positive")
-    if not np.isfinite(limit) or limit <= 0.0:
-        raise ValueError("relative_limit must be finite and positive")
-    if not np.all(np.isfinite(residual)) or np.any(residual < 0.0):
-        raise ValueError("tracking residuals must be finite and non-negative")
-
-    semiaxis_mm = semiaxis * 1000.0
-    relative = residual / semiaxis_mm
+    relative, semiaxis, limit = _relative_tracking_error(
+        residual_mm,
+        major_semiaxis_m=major_semiaxis_m,
+        relative_limit=relative_limit,
+    )
     within = relative <= limit
     return {
         "tracking_gate_id": TRACKING_GATE_ID,
@@ -67,7 +112,9 @@ def evaluate_relative_tracking_gate(
         "major_semiaxis_m": semiaxis,
         "tracking_gate_relative_limit": limit,
         "tracking_gate_limit_pct": limit * 100.0,
-        "tracking_gate_threshold_mm": semiaxis_mm * limit,
+        "tracking_gate_threshold_mm": tracking_gate_threshold_mm(
+            semiaxis, relative_limit=limit
+        ),
         "tracking_relative_error_p50_pct": float(np.percentile(relative, 50) * 100.0),
         "tracking_relative_error_p95_pct": float(np.percentile(relative, 95) * 100.0),
         "tracking_relative_error_max_pct": float(np.max(relative) * 100.0),

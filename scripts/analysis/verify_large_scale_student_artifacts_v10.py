@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
+from quasi_exp.teacher.tracking_gate import require_relative_tracking_gate
 
 
 def verify(path: str | Path, expected_sha256: str) -> dict[str, str]:
@@ -23,10 +24,15 @@ def verify(path: str | Path, expected_sha256: str) -> dict[str, str]:
 def run(summary_path: Path) -> dict[str, object]:
     with summary_path.open("r", encoding="utf-8") as handle:
         summary = json.load(handle)
+    require_relative_tracking_gate(summary, context=str(summary_path))
     root = summary_path.resolve().parents[1]
+    final_summary_path = root / "final/final_summary.json"
+    with final_summary_path.open("r", encoding="utf-8") as handle:
+        final_summary = json.load(handle)
+    require_relative_tracking_gate(final_summary, context=str(final_summary_path))
     checked = [
         verify(root / "screen/selection.json", summary["selection_sha256"]),
-        verify(root / "final/final_summary.json", summary["final_summary_sha256"]),
+        verify(final_summary_path, summary["final_summary_sha256"]),
         verify(root / "gpu_preflight.json", summary["gpu_preflight_sha256"]),
     ]
     for path, digest in summary["worker_code_sha256"].items():

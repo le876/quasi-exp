@@ -70,3 +70,49 @@ def test_stage_cache_is_invalidated_when_a_hashed_artifact_changes(tmp_path: Pat
     assert runner.read_valid_gate(gate_path) is not None
     artifact.write_bytes(b"mutated")
     assert runner.read_valid_gate(gate_path) is None
+
+
+def test_stage_cache_is_invalidated_when_execution_fingerprint_changes(
+    tmp_path: Path,
+) -> None:
+    runner = _runner_module()
+    gate_path = tmp_path / "gate.json"
+    runner._write_gate(
+        gate_path,
+        checks={"surface_complete": True},
+        cache_fingerprint="configuration-a",
+    )
+
+    assert (
+        runner.read_valid_gate(
+            gate_path, expected_fingerprint="configuration-a"
+        )
+        is not None
+    )
+    assert (
+        runner.read_valid_gate(
+            gate_path, expected_fingerprint="configuration-b"
+        )
+        is None
+    )
+
+
+def test_interpolation_families_are_midpoints_of_training_families() -> None:
+    runner = _runner_module()
+    source_root = Path(__file__).resolve().parents[1]
+    project_root = runner.project_root_from(source_root)
+    config = runner.load_protocol_config(
+        source_root / "configs/generalized_ellipse_region_v11.yaml",
+        preset="smoke",
+    )
+    baseline = runner._baseline_family(project_root, config)
+    catalog = runner.generate_family_catalog(
+        baseline, seed=int(config["seeds"]["family"])
+    )
+    train_ids = catalog.primary_ids("train")
+
+    interpolated = runner._interpolation_families(catalog, train_ids, count=5)
+
+    assert len(interpolated) == 5
+    assert all(family.metadata["construction"] == "train_family_midpoint_slerp" for family in interpolated)
+    assert all(family.family_id not in set(catalog.frame["family_id"]) for family in interpolated)

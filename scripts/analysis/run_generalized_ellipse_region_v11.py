@@ -25,7 +25,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 from scipy.stats import qmc
 import yaml
 
@@ -55,7 +55,6 @@ from quasi_exp.teacher.region_protocol import (
     FamilyCatalog,
     generate_family_catalog,
     nested_family_sample_indices,
-    promote_complete_families,
     require_boolean_gate_tree,
 )
 
@@ -86,6 +85,17 @@ STAGE_DIRS = {
     "formal": "06_formal",
     "train": "07_train",
     "evaluate": "08_evaluate",
+}
+STAGE_UPSTREAM = {
+    "protocol": None,
+    "anchor": "protocol",
+    "tube": "anchor",
+    "core": "tube",
+    "pilot": "core",
+    "representation": "pilot",
+    "formal": "representation",
+    "train": "formal",
+    "evaluate": "train",
 }
 BETA_COLUMNS = tuple(f"teacher_beta{index}_rad" for index in range(1, 7))
 XYZ_COLUMNS = ("target_x_m", "target_y_m", "target_z_m")
@@ -132,6 +142,89 @@ def _canonical_sha(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _array_sha(value: np.ndarray | None) -> str | None:
+    if value is None:
+        return None
+    array = np.ascontiguousarray(np.asarray(value, dtype=np.float64))
+    digest = hashlib.sha256()
+    digest.update(str(array.shape).encode("ascii"))
+    digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _frame_sha(frame: pd.DataFrame) -> str:
+    stable = frame.sort_index(axis=1).reset_index(drop=True)
+    digest = hashlib.sha256()
+    digest.update("\n".join(stable.columns.astype(str)).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(stable, index=False).values.tobytes())
+    return digest.hexdigest()
+
+
+def _policy_payload(policy: TeacherPolicy) -> dict[str, Any]:
+    return {
+        key: value.item() if isinstance(value, np.generic) else value
+        for key, value in vars(policy).items()
+    }
+
+
+def _stage_cache_fingerprint(
+    *,
+    config: Mapping[str, Any],
+    source_root: Path,
+    output: Path,
+    stage_name: str,
+) -> str:
+    source_files = (
+        source_root / "scripts/analysis/run_generalized_ellipse_region_v11.py",
+        source_root / "src/quasi_exp/teacher/canonical.py",
+        source_root / "src/quasi_exp/teacher/region.py",
+        source_root / "src/quasi_exp/teacher/region_audit.py",
+        source_root / "src/quasi_exp/teacher/region_protocol.py",
+    )
+    upstream_name = STAGE_UPSTREAM[stage_name]
+    upstream_gate = (
+        None
+        if upstream_name is None
+        else output / STAGE_DIRS[upstream_name] / "gate.json"
+    )
+    normalized_config = {
+        key: value for key, value in config.items() if key != "config_path"
+    }
+    return _canonical_sha(
+        {
+            "stage": stage_name,
+            "config": normalized_config,
+            "source_sha256": {
+                path.relative_to(source_root).as_posix(): sha256_file(path)
+                for path in source_files
+            },
+            "upstream_gate_sha256": (
+                sha256_file(upstream_gate)
+                if upstream_gate is not None and upstream_gate.is_file()
+                else None
+            ),
+        }
+    )
+
+
+def _read_stage_gate(
+    *,
+    config: Mapping[str, Any],
+    source_root: Path,
+    output: Path,
+    stage_name: str,
+) -> dict[str, Any] | None:
+    return read_valid_gate(
+        output / STAGE_DIRS[stage_name] / "gate.json",
+        expected_fingerprint=_stage_cache_fingerprint(
+            config=config,
+            source_root=source_root,
+            output=output,
+            stage_name=stage_name,
+        ),
+    )
+
+
 def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -143,13 +236,19 @@ def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
             temporary.unlink()
 
 
-def read_valid_gate(path: str | Path) -> dict[str, Any] | None:
+def read_valid_gate(
+    path: str | Path, *, expected_fingerprint: str | None = None
+) -> dict[str, Any] | None:
     gate_path = Path(path)
     if not gate_path.is_file():
         return None
     try:
         payload = json.loads(gate_path.read_text(encoding="utf-8"))
         require_boolean_gate_tree(payload)
+        if expected_fingerprint is not None and payload.get(
+            "cache_fingerprint"
+        ) != expected_fingerprint:
+            return None
         for relative, expected_sha in payload.get("artifact_sha256", {}).items():
             artifact = gate_path.parent / str(relative)
             if not artifact.is_file() or sha256_file(artifact) != str(expected_sha):
@@ -211,7 +310,10 @@ def run_protocol_stage(
 ) -> dict[str, Any]:
     stage = output / STAGE_DIRS["protocol"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="protocol"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -243,6 +345,9 @@ def run_protocol_stage(
             project_root
             / str(config["v10_evidence_root"])
             / "a0p500m/formal/T3/centerline.parquet"
+        ),
+        "v10_0p75m_dense_stress": sha256_file(
+            project_root / str(config["scale_stress_0p75m"])
         ),
     }
     manifest_payload = {
@@ -292,6 +397,7 @@ def run_protocol_stage(
         gate_path,
         checks=checks,
         protocol_id=str(config["protocol_id"]),
+        cache_fingerprint=cache_fingerprint,
         catalog_fingerprint=catalog.fingerprint,
         split_counts={key: int(value) for key, value in role_counts.items()},
     )
@@ -436,12 +542,25 @@ def _solve_centerline_artifact(
 ) -> tuple[Any, dict[str, Any]]:
     report_path = directory / "report.json"
     parquet_path = directory / "centerline.parquet"
-    cached = read_valid_gate(report_path)
-    if cached is not None and parquet_path.is_file():
-        return None, cached
     targets = family.centerline(phase_count=int(phase_count))
     if initial_beta is None:
         initial_beta = atlas.match_targets(targets).initial_beta_path_rad
+    cache_fingerprint = _canonical_sha(
+        {
+            "kind": "centerline_v11",
+            "family": _family_payload(family),
+            "phase_count": int(phase_count),
+            "target_sha256": _array_sha(targets),
+            "initial_beta_sha256": _array_sha(initial_beta),
+            "policy": _policy_payload(policy),
+            "teacher_gate": config["gates"]["teacher_surface"],
+            "traversal_direction": str(traversal_direction),
+            "cyclic_cut": int(cyclic_cut),
+        }
+    )
+    cached = read_valid_gate(report_path, expected_fingerprint=cache_fingerprint)
+    if cached is not None and parquet_path.is_file():
+        return None, cached
     trajectory = CanonicalTeacher(environment).solve(
         TrajectorySpec(
             trajectory_id=f"{family.family_id}:centerline",
@@ -464,6 +583,8 @@ def _solve_centerline_artifact(
         "family": _family_payload(family),
         "metrics": dict(trajectory.metrics),
         "provenance": dict(trajectory.provenance),
+        "cache_fingerprint": cache_fingerprint,
+        "artifact_sha256": {"centerline.parquet": sha256_file(parquet_path)},
         "checks": {key: bool(value) for key, value in original["checks"].items()},
         "gate_pass": bool(original["centerline_gate_pass"]),
     }
@@ -495,12 +616,17 @@ def run_anchor_stage(
     project_root: Path,
     output: Path,
 ) -> dict[str, Any]:
-    protocol_gate = read_valid_gate(output / STAGE_DIRS["protocol"] / "gate.json")
+    protocol_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="protocol"
+    )
     if protocol_gate is None or not protocol_gate["gate_pass"]:
         raise RuntimeError("anchor stage requires a passing protocol gate")
     stage = output / STAGE_DIRS["anchor"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="anchor"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -780,8 +906,31 @@ def run_anchor_stage(
     verification.to_csv(stage / "verification_ranking.csv", index=False)
     passing = verification[verification["full_gate_pass"]]
     selected_family = None
+    passing_anchor_payloads: list[dict[str, Any]] = []
     if not passing.empty:
-        selected_id = str(passing.iloc[0]["candidate_id"])
+        for passing_row in passing.head(
+            int(config["anchor"]["verify_top_count"])
+        ).itertuples(index=False):
+            passing_id = str(passing_row.candidate_id)
+            passing_anchor_payloads.append(
+                {
+                    "candidate_id": passing_id,
+                    "family": _family_payload(lookup[passing_id]),
+                    "centerline_path": (
+                        Path("verify") / passing_id / "primary" / "centerline.parquet"
+                    ).as_posix(),
+                    "joint_margin_min_deg": float(passing_row.joint_margin_min_deg),
+                    "residual_p95_mm": float(passing_row.residual_p95_mm),
+                    "repeat_beta_rms_p95_deg": float(
+                        passing_row.repeat_beta_rms_p95_deg
+                    ),
+                    "reverse_cut_beta_rms_p95_deg": float(
+                        passing_row.reverse_cut_beta_rms_p95_deg
+                    ),
+                }
+            )
+        atomic_write_json(stage / "passing_anchors.json", passing_anchor_payloads)
+        selected_id = str(passing_anchor_payloads[0]["candidate_id"])
         selected_family = lookup[selected_id]
         selected_dir = stage / "verify" / selected_id / "primary"
         shutil.copy2(selected_dir / "centerline.parquet", stage / "selected_centerline.parquet")
@@ -807,8 +956,11 @@ def run_anchor_stage(
         gate_path,
         checks=checks,
         proposal_count=int(len(proposals)),
+        cache_fingerprint=cache_fingerprint,
         screen_count=int(len(screen)),
         verification_count=int(len(verification)),
+        passing_anchor_count=int(len(passing_anchor_payloads)),
+        passing_anchor_ids=[row["candidate_id"] for row in passing_anchor_payloads],
         selected_family=(
             None if selected_family is None else _family_payload(selected_family)
         ),
@@ -862,7 +1014,24 @@ def _solve_surface_artifact(
 ) -> tuple[TeacherSurface | None, dict[str, Any]]:
     report_path = directory / "report.json"
     parquet_path = directory / "surface.parquet"
-    cached = read_valid_gate(report_path)
+    cache_fingerprint = _canonical_sha(
+        {
+            "kind": "surface_v11",
+            "family": _family_payload(family),
+            "phase_count": int(phase_count),
+            "cross_section_fingerprint": cross_section.fingerprint,
+            "radial_radius_mm": float(radial_radius_mm),
+            "plane_radius_mm": float(plane_radius_mm),
+            "centerline_seed_sha256": _array_sha(centerline_seed),
+            "policy": _policy_payload(policy),
+            "teacher_gate": config["gates"]["teacher_surface"],
+            "local_gate": config["gates"]["local_consistency"],
+            "sweep_directions": list(config["tube"]["sweep_directions"]),
+            "traversal_direction": str(traversal_direction),
+            "cyclic_cut": int(cyclic_cut),
+        }
+    )
+    cached = read_valid_gate(report_path, expected_fingerprint=cache_fingerprint)
     if cached is not None and parquet_path.is_file():
         return None, cached
     surface = CanonicalRegionTeacher(environment).solve_surface(
@@ -907,6 +1076,8 @@ def _solve_surface_artifact(
         "cross_section_fingerprint": cross_section.fingerprint,
         "metrics": {**dict(surface.metrics), **local},
         "provenance": dict(surface.provenance),
+        "cache_fingerprint": cache_fingerprint,
+        "artifact_sha256": {"surface.parquet": sha256_file(parquet_path)},
         "checks": {**gate["checks"], **local_checks},
         "gate_pass": bool(all({**gate["checks"], **local_checks}.values())),
     }
@@ -943,6 +1114,37 @@ def _load_selected_anchor(output: Path) -> tuple[EllipseFamilySpec, np.ndarray]:
     return family, centerline[list(BETA_COLUMNS)].to_numpy(dtype=float)
 
 
+def _load_passing_anchors(
+    output: Path,
+) -> tuple[tuple[str, EllipseFamilySpec, np.ndarray], ...]:
+    stage = output / STAGE_DIRS["anchor"]
+    payloads = json.loads((stage / "passing_anchors.json").read_text(encoding="utf-8"))
+    anchors = []
+    for payload in payloads:
+        frame = pd.read_parquet(stage / str(payload["centerline_path"])).sort_values(
+            "phase_idx", kind="stable"
+        )
+        anchors.append(
+            (
+                str(payload["candidate_id"]),
+                _family_from_payload(payload["family"]),
+                frame[list(BETA_COLUMNS)].to_numpy(dtype=float),
+            )
+        )
+    return tuple(anchors)
+
+
+def _load_region_anchor(output: Path) -> tuple[EllipseFamilySpec, np.ndarray]:
+    stage = output / STAGE_DIRS["tube"]
+    family = _family_from_payload(
+        json.loads((stage / "selected_region_anchor.json").read_text(encoding="utf-8"))
+    )
+    centerline = pd.read_parquet(stage / "selected_region_centerline.parquet").sort_values(
+        "phase_idx", kind="stable"
+    )
+    return family, centerline[list(BETA_COLUMNS)].to_numpy(dtype=float)
+
+
 def run_tube_stage(
     *,
     config: Mapping[str, Any],
@@ -950,86 +1152,110 @@ def run_tube_stage(
     project_root: Path,
     output: Path,
 ) -> dict[str, Any]:
-    anchor_gate = read_valid_gate(output / STAGE_DIRS["anchor"] / "gate.json")
+    anchor_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="anchor"
+    )
     if anchor_gate is None or not anchor_gate["gate_pass"]:
         raise RuntimeError("tube stage requires a passing 720-phase anchor gate")
     stage = output / STAGE_DIRS["tube"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="tube"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
     environment = load_environment(
         project_root, project_root / str(config["robot_config"])
     )
-    family, anchor_beta = _load_selected_anchor(output)
+    anchors = _load_passing_anchors(output)
+    if not anchors:
+        raise RuntimeError("tube stage requires at least one passing anchor")
+    anchor_lookup = {
+        anchor_id: (family, anchor_beta)
+        for anchor_id, family, anchor_beta in anchors
+    }
     master = TubeCrossSection.master(seed=int(config["seeds"]["cross_section"]))
     policy = _teacher_policy(config)
     candidates = [tuple(map(float, row)) for row in config["tube"]["frontier_mm"]]
     screen_rows = []
-    for radial, plane in candidates:
-        count = int(config["tube"]["screen_phase_count"])
-        cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
-        _surface, report = _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=radial,
-            plane_radius_mm=plane,
-            environment=environment,
-            policy=policy,
-            config=config,
-            directory=stage / "screen" / f"r{radial:g}_p{plane:g}",
-            centerline_seed=_subsample_cyclic(anchor_beta, count),
-        )
-        screen_rows.append(
-            {
-                "radial_radius_mm": radial,
-                "plane_radius_mm": plane,
-                "area_score_mm2": radial * plane,
-                "gate_pass": bool(report["gate_pass"]),
-                **{key: float(value) for key, value in report["metrics"].items()},
-            }
-        )
-    one_by_one = [
-        row
-        for row in screen_rows
-        if math.isclose(float(row["radial_radius_mm"]), 1.0)
-        and math.isclose(float(row["plane_radius_mm"]), 1.0)
-    ]
-    if one_by_one and not bool(one_by_one[0]["gate_pass"]):
-        tested = {(float(left), float(right)) for left, right in candidates}
-        widths = tuple(float(value) for value in config["tube"]["fallback_widths_mm"])
-        for radial in widths:
-            for plane in widths:
-                if (radial, plane) in tested:
-                    continue
-                count = int(config["tube"]["screen_phase_count"])
-                cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
-                _surface, report = _solve_surface_artifact(
-                    family=family,
-                    phase_count=count,
-                    cross_section=cross,
-                    radial_radius_mm=radial,
-                    plane_radius_mm=plane,
-                    environment=environment,
-                    policy=policy,
-                    config=config,
-                    directory=stage / "screen" / f"r{radial:g}_p{plane:g}",
-                    centerline_seed=_subsample_cyclic(anchor_beta, count),
-                )
-                screen_rows.append(
-                    {
-                        "radial_radius_mm": radial,
-                        "plane_radius_mm": plane,
-                        "area_score_mm2": radial * plane,
-                        "gate_pass": bool(report["gate_pass"]),
-                        **{
-                            key: float(value)
-                            for key, value in report["metrics"].items()
-                        },
-                    }
-                )
+    for anchor_id, family, anchor_beta in anchors:
+        anchor_rows = []
+        for radial, plane in candidates:
+            count = int(config["tube"]["screen_phase_count"])
+            cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
+            _surface, report = _solve_surface_artifact(
+                family=family,
+                phase_count=count,
+                cross_section=cross,
+                radial_radius_mm=radial,
+                plane_radius_mm=plane,
+                environment=environment,
+                policy=policy,
+                config=config,
+                directory=(
+                    stage / "anchors" / anchor_id / "screen" / f"r{radial:g}_p{plane:g}"
+                ),
+                centerline_seed=_subsample_cyclic(anchor_beta, count),
+            )
+            anchor_rows.append(
+                {
+                    "anchor_id": anchor_id,
+                    "radial_radius_mm": radial,
+                    "plane_radius_mm": plane,
+                    "area_score_mm2": radial * plane,
+                    "gate_pass": bool(report["gate_pass"]),
+                    **{key: float(value) for key, value in report["metrics"].items()},
+                }
+            )
+        one_by_one = [
+            row
+            for row in anchor_rows
+            if math.isclose(float(row["radial_radius_mm"]), 1.0)
+            and math.isclose(float(row["plane_radius_mm"]), 1.0)
+        ]
+        if one_by_one and not bool(one_by_one[0]["gate_pass"]):
+            tested = {(float(left), float(right)) for left, right in candidates}
+            widths = tuple(float(value) for value in config["tube"]["fallback_widths_mm"])
+            for radial in widths:
+                for plane in widths:
+                    if (radial, plane) in tested:
+                        continue
+                    count = int(config["tube"]["screen_phase_count"])
+                    cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
+                    _surface, report = _solve_surface_artifact(
+                        family=family,
+                        phase_count=count,
+                        cross_section=cross,
+                        radial_radius_mm=radial,
+                        plane_radius_mm=plane,
+                        environment=environment,
+                        policy=policy,
+                        config=config,
+                        directory=(
+                            stage
+                            / "anchors"
+                            / anchor_id
+                            / "screen"
+                            / f"r{radial:g}_p{plane:g}"
+                        ),
+                        centerline_seed=_subsample_cyclic(anchor_beta, count),
+                    )
+                    anchor_rows.append(
+                        {
+                            "anchor_id": anchor_id,
+                            "radial_radius_mm": radial,
+                            "plane_radius_mm": plane,
+                            "area_score_mm2": radial * plane,
+                            "gate_pass": bool(report["gate_pass"]),
+                            **{
+                                key: float(value)
+                                for key, value in report["metrics"].items()
+                            },
+                        }
+                    )
+        screen_rows.extend(anchor_rows)
     screen = pd.DataFrame(screen_rows)
     screen.to_csv(stage / "screen_frontier.csv", index=False)
     screen_pass = screen[screen["gate_pass"]].sort_values(
@@ -1040,6 +1266,8 @@ def run_tube_stage(
     dense_rows = []
     # Dense-audit all screen-pass contenders; no failed phase or point is removed.
     for row in screen_pass.itertuples(index=False):
+        anchor_id = str(row.anchor_id)
+        family, anchor_beta = anchor_lookup[anchor_id]
         radial = float(row.radial_radius_mm)
         plane = float(row.plane_radius_mm)
         count = int(config["tube"]["dense_phase_count"])
@@ -1053,11 +1281,19 @@ def run_tube_stage(
             environment=environment,
             policy=policy,
             config=config,
-            directory=stage / "dense" / f"r{radial:g}_p{plane:g}" / "primary",
+            directory=(
+                stage
+                / "anchors"
+                / anchor_id
+                / "dense"
+                / f"r{radial:g}_p{plane:g}"
+                / "primary"
+            ),
             centerline_seed=_subsample_cyclic(anchor_beta, count),
         )
         dense_rows.append(
             {
+                "anchor_id": anchor_id,
                 "radial_radius_mm": radial,
                 "plane_radius_mm": plane,
                 "area_score_mm2": radial * plane,
@@ -1079,15 +1315,19 @@ def run_tube_stage(
     selected = None
     repeat_gap = math.inf
     reverse_gap = math.inf
-    if not dense_pass.empty:
-        best = dense_pass.iloc[0]
+    for _index, best in dense_pass.iterrows():
+        anchor_id = str(best["anchor_id"])
+        family, anchor_beta = anchor_lookup[anchor_id]
         radial = float(best["radial_radius_mm"])
         plane = float(best["plane_radius_mm"])
         count = int(config["tube"]["dense_phase_count"])
         cross = master.prefix(int(config["tube"]["dense_cross_section_count"]))
-        primary_dir = stage / "dense" / f"r{radial:g}_p{plane:g}" / "primary"
+        candidate_root = (
+            stage / "anchors" / anchor_id / "dense" / f"r{radial:g}_p{plane:g}"
+        )
+        primary_dir = candidate_root / "primary"
         primary = pd.read_parquet(primary_dir / "surface.parquet")
-        repeat_dir = stage / "dense" / f"r{radial:g}_p{plane:g}" / "repeat"
+        repeat_dir = candidate_root / "repeat"
         _solve_surface_artifact(
             family=family,
             phase_count=count,
@@ -1103,7 +1343,7 @@ def run_tube_stage(
         repeat_gap = _surface_aligned_gap(
             primary, pd.read_parquet(repeat_dir / "surface.parquet")
         )["beta_gap_rms_p95_deg"]
-        reverse_dir = stage / "dense" / f"r{radial:g}_p{plane:g}" / "reverse_cut"
+        reverse_dir = candidate_root / "reverse_cut"
         _solve_surface_artifact(
             family=family,
             phase_count=count,
@@ -1129,6 +1369,8 @@ def run_tube_stage(
         )
         if repeat_pass and reverse_pass:
             selected = {
+                "anchor_id": anchor_id,
+                "anchor_family": _family_payload(family),
                 "radial_radius_mm": radial,
                 "plane_radius_mm": plane,
                 "phase_count": count,
@@ -1138,6 +1380,14 @@ def run_tube_stage(
             }
             atomic_write_json(stage / "selected_tube.json", selected)
             shutil.copy2(primary_dir / "surface.parquet", stage / "selected_surface.parquet")
+            atomic_write_json(stage / "selected_region_anchor.json", _family_payload(family))
+            source_centerline = next(
+                payload[2] for payload in anchors if payload[0] == anchor_id
+            )
+            centerline_frame = pd.DataFrame(source_centerline, columns=BETA_COLUMNS)
+            centerline_frame.insert(0, "phase_idx", np.arange(len(source_centerline)))
+            _atomic_parquet(centerline_frame, stage / "selected_region_centerline.parquet")
+            break
     half_pass = bool(
         not screen[
             np.isclose(screen["radial_radius_mm"], 0.5)
@@ -1147,7 +1397,7 @@ def run_tube_stage(
             np.isclose(screen["radial_radius_mm"], 0.5)
             & np.isclose(screen["plane_radius_mm"], 0.5),
             "gate_pass",
-        ].astype(bool).all()
+        ].astype(bool).any()
     )
     checks = {
         "minimum_0p5_by_0p5_tube_passes": half_pass,
@@ -1167,6 +1417,8 @@ def run_tube_stage(
         gate_path,
         checks=checks,
         selected_tube=selected,
+        cache_fingerprint=cache_fingerprint,
+        anchors_screened=int(len(anchors)),
         screen_candidate_count=int(len(screen)),
         dense_candidate_count=int(len(dense)),
     )
@@ -1183,17 +1435,22 @@ def _load_selected_tube(output: Path) -> dict[str, Any]:
 def run_core_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    tube_gate = read_valid_gate(output / STAGE_DIRS["tube"] / "gate.json")
+    tube_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="tube"
+    )
     if tube_gate is None or not tube_gate["gate_pass"]:
         raise RuntimeError("core stage requires a passing complete-tube gate")
     stage = output / STAGE_DIRS["core"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="core"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
     environment = load_environment(project_root, project_root / str(config["robot_config"]))
-    family, anchor_beta = _load_selected_anchor(output)
+    family, anchor_beta = _load_region_anchor(output)
     tube = _load_selected_tube(output)
     master = TubeCrossSection.master(seed=int(config["seeds"]["cross_section"]))
     cross = master.prefix(int(config["core"]["cross_section_count"]))
@@ -1290,6 +1547,7 @@ def run_core_stage(
         gate_path,
         checks=checks,
         rows=int(len(primary)),
+        cache_fingerprint=cache_fingerprint,
         teacher_report=report,
         coverage_report=coverage,
         invariance_report={"repeat": repeat_gap, "reverse_cut": reverse_gap},
@@ -1299,12 +1557,17 @@ def run_core_stage(
 def run_pilot_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    core_gate = read_valid_gate(output / STAGE_DIRS["core"] / "gate.json")
+    core_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="core"
+    )
     if core_gate is None or not core_gate["gate_pass"]:
         raise RuntimeError("pilot stage requires a passing core-tube gate")
     stage = output / STAGE_DIRS["pilot"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="pilot"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -1312,7 +1575,7 @@ def run_pilot_stage(
         output / STAGE_DIRS["protocol"] / "family_catalog.csv",
         seed=int(config["seeds"]["family"]),
     )
-    selected_anchor, _anchor_beta = _load_selected_anchor(output)
+    selected_anchor, _anchor_beta = _load_region_anchor(output)
     catalog = frozen_catalog.reanchor(selected_anchor)
     catalog.frame.to_csv(stage / "applied_family_catalog.csv", index=False)
     atomic_write_json(
@@ -1339,7 +1602,7 @@ def run_pilot_stage(
     quality["solved"] = False
     quality["complete_gate_pass"] = False
     report_metrics: dict[str, dict[str, Any]] = {}
-    quota = {"train": 14, "validation": 5, "virgin_test": 5}
+    quota = {"train": 14, "validation": 5}
     for role, required in quota.items():
         role_rows = catalog.frame[catalog.frame["role"].eq(role)].copy()
         role_rows["priority"] = np.where(
@@ -1374,21 +1637,53 @@ def run_pilot_stage(
             if report["gate_pass"]:
                 passed += 1
     quality.to_csv(stage / "family_quality.csv", index=False)
-    selection = None
-    try:
-        selection = promote_complete_families(catalog, quality)
-    except RuntimeError:
-        selection = None
+    selected_parts = []
+    for role, required in quota.items():
+        candidates = catalog.frame.merge(
+            quality[["family_id", "complete_gate_pass"]],
+            on="family_id",
+            how="left",
+            validate="one_to_one",
+        )
+        candidates = candidates[
+            candidates["role"].eq(role)
+            & candidates["complete_gate_pass"].astype(bool)
+        ].copy()
+        candidates["selection_priority"] = np.where(
+            candidates["is_primary"],
+            candidates["catalog_order"],
+            10_000 + candidates["reserve_rank"],
+        )
+        candidates = candidates.sort_values("selection_priority", kind="stable")
+        if len(candidates) >= required:
+            selected_parts.append(candidates.iloc[:required])
+    pending_test = catalog.frame[
+        catalog.frame["role"].eq("virgin_test")
+        & catalog.frame["is_primary"].astype(bool)
+    ].copy()
+    pending_test["complete_gate_pass"] = False
+    pending_test["selection_priority"] = pending_test["catalog_order"]
+    selection = (
+        pd.concat([*selected_parts, pending_test], ignore_index=True, sort=False)
+        if len(selected_parts) == 2 and len(pending_test) == 5
+        else None
+    )
     frames: list[pd.DataFrame] = []
     if selection is not None:
-        selection.to_csv(stage / "selected_families.csv", index=False)
-        for row in selection.itertuples(index=False):
+        selection["teacher_materialization_status"] = np.where(
+            selection["role"].eq("virgin_test"),
+            "sealed_pending_model_lock",
+            "pilot_gate_passed",
+        )
+        selection.drop(columns=["selection_priority"]).to_csv(
+            stage / "selected_families.csv", index=False
+        )
+        for row in selection[~selection["role"].eq("virgin_test")].itertuples(index=False):
             frame = pd.read_parquet(stage / "families" / str(row.family_id) / "surface.parquet")
             frame["role"] = str(row.role)
             frame["is_primary_family"] = bool(row.is_primary)
             frames.append(frame)
     train_validation = pd.DataFrame()
-    virgin = pd.DataFrame()
     conflict_report: dict[str, Any] = {
         "cross_family_pair_count": 0,
         "conflict_pair_count": 0,
@@ -1396,12 +1691,10 @@ def run_pilot_stage(
     }
     if frames:
         combined = pd.concat(frames, ignore_index=True, sort=False)
-        train_validation = combined[combined["role"].isin(["train", "validation"])].copy()
-        virgin = combined[combined["role"].eq("virgin_test")].copy()
+        train_validation = combined.copy()
         _atomic_parquet(
             train_validation, stage / "D_family_pilot_train_validation.parquet"
         )
-        _atomic_parquet(virgin, stage / "sealed/D_family_pilot_virgin_test.parquet")
         conflict_report, conflicts = audit_cross_family_conflicts(
             train_validation,
             xyz_radius_mm=float(config["gates"]["conflicts"]["xyz_radius_mm"]),
@@ -1415,32 +1708,39 @@ def run_pilot_stage(
         selection.groupby("role").size().to_dict() if selection is not None else {}
     )
     checks = {
-        "exact_14_5_5_complete_families": bool(
+        "exact_14_5_train_validation_plus_5_sealed_ids": bool(
             role_counts == {"train": 14, "validation": 5, "virgin_test": 5}
         ),
-        "all_selected_families_are_complete": bool(
+        "all_selected_train_validation_families_are_complete": bool(
             selection is not None
             and all(
                 bool(report_metrics[str(family_id)]["gate_pass"])
-                for family_id in selection["family_id"]
+                for family_id in selection.loc[
+                    ~selection["role"].eq("virgin_test"), "family_id"
+                ]
             )
         ),
-        "train_validation_and_test_stored_separately": bool(
+        "virgin_teacher_labels_not_materialized_before_lock": bool(
             not train_validation.empty
-            and not virgin.empty
-            and (stage / "sealed/D_family_pilot_virgin_test.parquet").is_file()
+            and not (stage / "sealed").exists()
+            and not any(
+                (stage / "families" / family_id).exists()
+                for family_id in selection.loc[
+                    selection["role"].eq("virgin_test"), "family_id"
+                ].astype(str)
+            )
         ),
         "conflict_audit_completed_on_train_validation_only": bool(
-            frames
-            and set(train_validation["family_id"]).isdisjoint(set(virgin["family_id"]))
+            frames and not train_validation["role"].eq("virgin_test").any()
         ),
     }
     return _write_gate(
         gate_path,
         checks=checks,
         selected_role_counts={key: int(value) for key, value in role_counts.items()},
+        cache_fingerprint=cache_fingerprint,
         train_validation_rows=int(len(train_validation)),
-        sealed_test_rows=int(len(virgin)),
+        sealed_test_rows=0,
         conflict_report=conflict_report,
     )
 
@@ -1448,12 +1748,20 @@ def run_pilot_stage(
 def run_representation_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    pilot_gate = read_valid_gate(output / STAGE_DIRS["pilot"] / "gate.json")
+    pilot_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="pilot"
+    )
     if pilot_gate is None or not pilot_gate["gate_pass"]:
         raise RuntimeError("representation stage requires a passing family-pilot gate")
     stage = output / STAGE_DIRS["representation"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config,
+        source_root=source_root,
+        output=output,
+        stage_name="representation",
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -1494,7 +1802,7 @@ def run_representation_stage(
             representation != "static" or int(conflict.get("conflict_pair_count", 1)) == 0
         ),
         "selected_representation_is_implementable": bool(
-            representation in {"static", "chart_expert", "stateful"}
+            representation == "static"
         ),
         "virgin_test_remains_sealed": True,
     }
@@ -1502,6 +1810,7 @@ def run_representation_stage(
         gate_path,
         checks=checks,
         representation=representation,
+        cache_fingerprint=cache_fingerprint,
         diagnostics=diagnostics,
     )
 
@@ -1509,18 +1818,25 @@ def run_representation_stage(
 def run_formal_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    representation_gate = read_valid_gate(
-        output / STAGE_DIRS["representation"] / "gate.json"
+    representation_gate = _read_stage_gate(
+        config=config,
+        source_root=source_root,
+        output=output,
+        stage_name="representation",
     )
     if representation_gate is None or not representation_gate["gate_pass"]:
         raise RuntimeError("formal dataset requires a locked implementable representation")
     stage = output / STAGE_DIRS["formal"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="formal"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
     selection = pd.read_csv(output / STAGE_DIRS["pilot"] / "selected_families.csv")
+    formal_selection = selection[selection["role"].isin(["train", "validation"])].copy()
     catalog = _catalog_from_csv(
         output / STAGE_DIRS["pilot"] / "applied_family_catalog.csv",
         seed=int(config["seeds"]["family"]),
@@ -1535,8 +1851,7 @@ def run_formal_stage(
     family_frames: list[pd.DataFrame] = []
     family_reports = []
     centerline_invariance = []
-    sentinel_invariance = []
-    for selected_row in selection.itertuples(index=False):
+    for selected_row in formal_selection.itertuples(index=False):
         family_id = str(selected_row.family_id)
         role = str(selected_row.role)
         family = catalog.family(family_id)
@@ -1579,65 +1894,16 @@ def run_formal_stage(
         centerline_invariance.append(
             {"family_id": family_id, "role": role, **gap}
         )
-        if role == "virgin_test":
-            repeat_surface_dir = stage / "families" / family_id / "surface_repeat"
-            reverse_surface_dir = stage / "families" / family_id / "surface_reverse_cut"
-            _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(
-                    config, seed=int(config["seeds"]["solver"]) + 1
-                ),
-                config=config,
-                directory=repeat_surface_dir,
-                centerline_seed=seed_path,
-            )
-            _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(config),
-                config=config,
-                directory=reverse_surface_dir,
-                centerline_seed=seed_path,
-                traversal_direction="reverse",
-                cyclic_cut=count // 4,
-            )
-            sentinel_invariance.append(
-                {
-                    "family_id": family_id,
-                    "repeat_beta_rms_p95_deg": _surface_aligned_gap(
-                        frame,
-                        pd.read_parquet(repeat_surface_dir / "surface.parquet"),
-                    )["beta_gap_rms_p95_deg"],
-                    "reverse_cut_beta_rms_p95_deg": _surface_aligned_gap(
-                        frame,
-                        pd.read_parquet(reverse_surface_dir / "surface.parquet"),
-                    )["beta_gap_rms_p95_deg"],
-                }
-            )
     quality = pd.DataFrame(family_reports)
     quality.to_csv(stage / "family_quality.csv", index=False)
     pd.DataFrame(centerline_invariance).to_csv(
         stage / "centerline_invariance.csv", index=False
     )
-    pd.DataFrame(sentinel_invariance).to_csv(
-        stage / "test_surface_invariance.csv", index=False
-    )
     combined = pd.concat(family_frames, ignore_index=True, sort=False)
     train = combined[combined["role"].eq("train")].copy()
     validation = combined[combined["role"].eq("validation")].copy()
-    virgin = combined[combined["role"].eq("virgin_test")].copy()
     _atomic_parquet(train, stage / "train/D_full_252k.parquet")
     _atomic_parquet(validation, stage / "validation/D_validation_90k.parquet")
-    _atomic_parquet(virgin, stage / "sealed/D_virgin_test_90k.parquet")
     sizes = tuple(
         min(int(value), len(train)) for value in config["formal"]["nested_train_sizes"]
     )
@@ -1662,33 +1928,26 @@ def run_formal_stage(
     repeat_limit = float(
         config["gates"]["repeatability"]["repeat_beta_rms_p95_deg"]
     )
-    reverse_limit = float(
-        config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"]
-    )
     checks = {
-        "exact_24_complete_families": bool(
-            len(quality) == 24 and quality["gate_pass"].astype(bool).all()
+        "exact_19_train_validation_families_complete": bool(
+            len(quality) == 19 and quality["gate_pass"].astype(bool).all()
         ),
-        "exact_14_5_5_group_split": bool(
+        "exact_14_5_group_split": bool(
             combined.groupby("role")["family_id"].nunique().to_dict()
-            == {"train": 14, "validation": 5, "virgin_test": 5}
+            == {"train": 14, "validation": 5}
         ),
         "formal_row_counts_match_protocol": bool(
             len(train) == 14 * count * len(cross.points)
             and len(validation) == 5 * count * len(cross.points)
-            and len(virgin) == 5 * count * len(cross.points)
         ),
         "all_centerline_repeats_pass": bool(
             centerline_invariance
             and max(row["beta_gap_rms_p95_deg"] for row in centerline_invariance)
             <= repeat_limit
         ),
-        "five_test_surface_sentinels_pass": bool(
-            len(sentinel_invariance) == 5
-            and max(row["repeat_beta_rms_p95_deg"] for row in sentinel_invariance)
-            <= repeat_limit
-            and max(row["reverse_cut_beta_rms_p95_deg"] for row in sentinel_invariance)
-            <= reverse_limit
+        "virgin_teacher_labels_remain_unopened": bool(
+            not (stage / "sealed").exists()
+            and not combined["role"].eq("virgin_test").any()
         ),
         "nested_subsets_include_all_14_train_families": bool(
             subset_manifest and all(row["family_count"] == 14 for row in subset_manifest)
@@ -1697,9 +1956,10 @@ def run_formal_stage(
     return _write_gate(
         gate_path,
         checks=checks,
+        cache_fingerprint=cache_fingerprint,
         train_rows=int(len(train)),
         validation_rows=int(len(validation)),
-        sealed_test_rows=int(len(virgin)),
+        sealed_test_rows=0,
         nested_subsets=subset_manifest,
     )
 
@@ -1742,6 +2002,22 @@ def _student_gate(
     return {"checks": checks, "gate_pass": bool(all(checks.values()))}
 
 
+def _model_cache_fingerprint(
+    *, train: pd.DataFrame, validation: pd.DataFrame, config: Mapping[str, Any], seed: int
+) -> str:
+    return _canonical_sha(
+        {
+            "kind": "static_student_v11",
+            "train_sha256": _frame_sha(train),
+            "validation_sha256": _frame_sha(validation),
+            "seed": int(seed),
+            "representation": config["representation"],
+            "training": config["training"],
+            "student_gate": config["gates"]["student"],
+        }
+    )
+
+
 def _train_one_static_model(
     *,
     train: pd.DataFrame,
@@ -1760,6 +2036,9 @@ def _train_one_static_model(
         packed_targets,
     )
 
+    cache_fingerprint = _model_cache_fingerprint(
+        train=train, validation=validation, config=config, seed=seed
+    )
     tf.keras.backend.clear_session()
     tf.keras.utils.set_random_seed(int(seed))
     geometry = StudentGeometry(
@@ -1833,6 +2112,8 @@ def _train_one_static_model(
         "checks": gate["checks"],
         "gate_pass": gate["gate_pass"],
         "model_sha256": sha256_file(model_path),
+        "cache_fingerprint": cache_fingerprint,
+        "artifact_sha256": {"model.keras": sha256_file(model_path)},
     }
     atomic_write_json(directory / "report.json", report)
     return report
@@ -1841,7 +2122,9 @@ def _train_one_static_model(
 def run_train_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    formal_gate = read_valid_gate(output / STAGE_DIRS["formal"] / "gate.json")
+    formal_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="formal"
+    )
     if formal_gate is None or not formal_gate["gate_pass"]:
         raise RuntimeError("training requires a passing formal-dataset gate")
     representation = json.loads(
@@ -1856,7 +2139,10 @@ def run_train_stage(
         )
     stage = output / STAGE_DIRS["train"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="train"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -1880,7 +2166,12 @@ def run_train_stage(
         reports = []
         for seed in seeds:
             directory = stage / "learning_curve" / str(subset["name"]) / f"seed_{seed}"
-            cached_report = read_valid_gate(directory / "report.json")
+            model_fingerprint = _model_cache_fingerprint(
+                train=train, validation=validation, config=config, seed=seed
+            )
+            cached_report = read_valid_gate(
+                directory / "report.json", expected_fingerprint=model_fingerprint
+            )
             report = (
                 cached_report
                 if cached_report is not None and (directory / "model.keras").is_file()
@@ -1929,7 +2220,15 @@ def run_train_stage(
         atomic_write_json(stage / "MODEL_LOCKED.json", prelock)
         for seed in seeds:
             directory = stage / "final" / f"seed_{seed}"
-            cached_report = read_valid_gate(directory / "report.json")
+            model_fingerprint = _model_cache_fingerprint(
+                train=final_train,
+                validation=validation,
+                config=config,
+                seed=seed,
+            )
+            cached_report = read_valid_gate(
+                directory / "report.json", expected_fingerprint=model_fingerprint
+            )
             report = (
                 cached_report
                 if cached_report is not None and (directory / "model.keras").is_file()
@@ -1967,6 +2266,7 @@ def run_train_stage(
     return _write_gate(
         gate_path,
         checks=checks,
+        cache_fingerprint=cache_fingerprint,
         selected_learning_curve_point=selected,
         final_training_reports=final_reports,
     )
@@ -2043,15 +2343,243 @@ def _category_families(
     raise ValueError(f"unknown evaluation category: {category}")
 
 
+def _interpolation_families(
+    catalog: FamilyCatalog, train_family_ids: Sequence[str], *, count: int = 5
+) -> tuple[EllipseFamilySpec, ...]:
+    ids = tuple(str(value) for value in train_family_ids)
+    if len(ids) < 2:
+        raise ValueError("family interpolation requires at least two train families")
+    families = []
+    for index in range(int(count)):
+        left = catalog.family(ids[index % len(ids)])
+        right = catalog.family(ids[(index + len(ids) // 2) % len(ids)])
+        left_rotation = np.column_stack(
+            [left.major_direction, left.minor_direction, left.plane_normal]
+        )
+        right_rotation = np.column_stack(
+            [right.major_direction, right.minor_direction, right.plane_normal]
+        )
+        rotation = Slerp(
+            [0.0, 1.0], Rotation.from_matrix(np.stack([left_rotation, right_rotation]))
+        )([0.5]).as_matrix()[0]
+        major = 0.5 * (left.major_semiaxis_m + right.major_semiaxis_m)
+        ratio = 0.5 * (left.axis_ratio + right.axis_ratio)
+        families.append(
+            EllipseFamilySpec(
+                family_id=f"INTERP_{index:02d}_{left.family_id}_{right.family_id}",
+                center_m=0.5 * (left.center_m + right.center_m),
+                major_direction=rotation[:, 0],
+                minor_direction=rotation[:, 1],
+                major_semiaxis_m=major,
+                minor_semiaxis_m=major * ratio,
+                metadata={"construction": "train_family_midpoint_slerp"},
+            )
+        )
+    return tuple(families)
+
+
+def _materialize_sealed_test_after_lock(
+    *,
+    config: Mapping[str, Any],
+    project_root: Path,
+    output: Path,
+    stage: Path,
+    catalog: FamilyCatalog,
+    environment: Any,
+) -> tuple[tuple[str, ...], pd.DataFrame, dict[str, Any]]:
+    if not (output / STAGE_DIRS["train"] / "MODEL_LOCKED.json").is_file():
+        raise PermissionError("sealed teacher materialization requires MODEL_LOCKED")
+    tube = _load_selected_tube(output)
+    atlas = _reachability_atlas(project_root, config)
+    count = int(config["formal"]["phase_count"])
+    cross = TubeCrossSection.master(seed=int(config["seeds"]["cross_section"])).prefix(
+        int(config["formal"]["cross_section_count"])
+    )
+    candidates = catalog.frame[catalog.frame["role"].eq("virgin_test")].copy()
+    candidates["priority"] = np.where(
+        candidates["is_primary"],
+        candidates["catalog_order"],
+        10_000 + candidates["reserve_rank"],
+    )
+    candidates = candidates.sort_values("priority", kind="stable")
+    selected = []
+    frames = []
+    audit_rows = []
+    repeat_limit = float(
+        config["gates"]["repeatability"]["repeat_beta_rms_p95_deg"]
+    )
+    reverse_limit = float(
+        config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"]
+    )
+    for row in candidates.itertuples(index=False):
+        if len(selected) >= 5:
+            break
+        family_id = str(row.family_id)
+        family = catalog.family(family_id)
+        seed_path = atlas.match_targets(
+            family.centerline(phase_count=count)
+        ).initial_beta_path_rad
+        candidate_dir = stage / "sealed_teacher/candidates" / family_id
+        _surface, primary_report = _solve_surface_artifact(
+            family=family,
+            phase_count=count,
+            cross_section=cross,
+            radial_radius_mm=float(tube["radial_radius_mm"]),
+            plane_radius_mm=float(tube["plane_radius_mm"]),
+            environment=environment,
+            policy=_teacher_policy(config),
+            config=config,
+            directory=candidate_dir / "primary",
+            centerline_seed=seed_path,
+        )
+        full_pass = bool(primary_report["gate_pass"])
+        repeat_gap = math.inf
+        reverse_gap = math.inf
+        if full_pass:
+            _solve_surface_artifact(
+                family=family,
+                phase_count=count,
+                cross_section=cross,
+                radial_radius_mm=float(tube["radial_radius_mm"]),
+                plane_radius_mm=float(tube["plane_radius_mm"]),
+                environment=environment,
+                policy=_teacher_policy(
+                    config, seed=int(config["seeds"]["solver"]) + 1
+                ),
+                config=config,
+                directory=candidate_dir / "repeat",
+                centerline_seed=seed_path,
+            )
+            _solve_surface_artifact(
+                family=family,
+                phase_count=count,
+                cross_section=cross,
+                radial_radius_mm=float(tube["radial_radius_mm"]),
+                plane_radius_mm=float(tube["plane_radius_mm"]),
+                environment=environment,
+                policy=_teacher_policy(config),
+                config=config,
+                directory=candidate_dir / "reverse_cut",
+                centerline_seed=seed_path,
+                traversal_direction="reverse",
+                cyclic_cut=count // 4,
+            )
+            primary = pd.read_parquet(candidate_dir / "primary/surface.parquet")
+            repeat_gap = _surface_aligned_gap(
+                primary, pd.read_parquet(candidate_dir / "repeat/surface.parquet")
+            )["beta_gap_rms_p95_deg"]
+            reverse_gap = _surface_aligned_gap(
+                primary,
+                pd.read_parquet(candidate_dir / "reverse_cut/surface.parquet"),
+            )["beta_gap_rms_p95_deg"]
+            full_pass = bool(
+                repeat_gap <= repeat_limit and reverse_gap <= reverse_limit
+            )
+        audit_rows.append(
+            {
+                "family_id": family_id,
+                "teacher_gate_pass": bool(primary_report["gate_pass"]),
+                "repeat_beta_rms_p95_deg": repeat_gap,
+                "reverse_cut_beta_rms_p95_deg": reverse_gap,
+                "full_gate_pass": full_pass,
+            }
+        )
+        if full_pass:
+            selected.append(family_id)
+            frame = pd.read_parquet(candidate_dir / "primary/surface.parquet")
+            frame["role"] = "virgin_test"
+            frames.append(frame)
+    audit = pd.DataFrame(audit_rows)
+    audit.to_csv(stage / "sealed_teacher/family_quality.csv", index=False)
+    dataset = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    if not dataset.empty:
+        _atomic_parquet(dataset, stage / "sealed_teacher/D_virgin_test_90k.parquet")
+    report = {
+        "opened_after_model_lock": True,
+        "selected_family_ids": selected,
+        "selected_count": int(len(selected)),
+        "rows": int(len(dataset)),
+        "expected_rows": int(5 * count * len(cross.points)),
+        "teacher_gate_pass": bool(
+            len(selected) == 5 and len(dataset) == 5 * count * len(cross.points)
+        ),
+    }
+    atomic_write_json(stage / "sealed_teacher/report.json", report)
+    return tuple(selected), dataset, report
+
+
+def _validate_evaluation_family_surfaces(
+    *,
+    category_families: Mapping[str, Sequence[EllipseFamilySpec]],
+    config: Mapping[str, Any],
+    project_root: Path,
+    stage: Path,
+    environment: Any,
+) -> dict[str, Any]:
+    # ``output`` is stage.parent; keep the teacher validation physically under
+    # the post-lock evaluation stage so it cannot leak into model selection.
+    output = stage.parent
+    tube = _load_selected_tube(output)
+    atlas = _reachability_atlas(project_root, config)
+    phase_count = int(config["pilot"]["phase_count"])
+    cross = TubeCrossSection.master(seed=int(config["seeds"]["audit"])).prefix(
+        int(config["pilot"]["cross_section_count"])
+    )
+    rows = []
+    for category, families in category_families.items():
+        for family in families:
+            seed_path = atlas.match_targets(
+                family.centerline(phase_count=phase_count)
+            ).initial_beta_path_rad
+            _surface, report = _solve_surface_artifact(
+                family=family,
+                phase_count=phase_count,
+                cross_section=cross,
+                radial_radius_mm=float(tube["radial_radius_mm"]),
+                plane_radius_mm=float(tube["plane_radius_mm"]),
+                environment=environment,
+                policy=_teacher_policy(config),
+                config=config,
+                directory=stage / "category_teacher" / category / family.family_id,
+                centerline_seed=seed_path,
+            )
+            rows.append(
+                {
+                    "category": category,
+                    "family_id": family.family_id,
+                    "gate_pass": bool(report["gate_pass"]),
+                }
+            )
+    frame = pd.DataFrame(rows)
+    frame.to_csv(stage / "category_teacher_quality.csv", index=False)
+    report = {
+        "family_count": int(len(frame)),
+        "all_category_families_teacher_valid": bool(
+            not frame.empty and frame["gate_pass"].astype(bool).all()
+        ),
+        "per_category": {
+            str(category): bool(group["gate_pass"].astype(bool).all())
+            for category, group in frame.groupby("category")
+        },
+    }
+    atomic_write_json(stage / "category_teacher_report.json", report)
+    return report
+
+
 def run_evaluate_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
-    train_gate = read_valid_gate(output / STAGE_DIRS["train"] / "gate.json")
+    train_gate = _read_stage_gate(
+        config=config, source_root=source_root, output=output, stage_name="train"
+    )
     if train_gate is None or not train_gate["gate_pass"]:
         raise RuntimeError("sealed evaluation requires a passing model-lock gate")
     stage = output / STAGE_DIRS["evaluate"]
     gate_path = stage / "gate.json"
-    cached = read_valid_gate(gate_path)
+    cache_fingerprint = _stage_cache_fingerprint(
+        config=config, source_root=source_root, output=output, stage_name="evaluate"
+    )
+    cached = read_valid_gate(gate_path, expected_fingerprint=cache_fingerprint)
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
@@ -2062,11 +2590,16 @@ def run_evaluate_stage(
         seed=int(config["seeds"]["family"]),
     )
     selection = pd.read_csv(output / STAGE_DIRS["pilot"] / "selected_families.csv")
-    selected_test = tuple(
-        selection.loc[selection["role"].eq("virgin_test"), "family_id"].astype(str)
-    )
-    catalog.authorized_family_ids(
-        "sealed_evaluation", unseal_token=catalog.seal_token
+    environment = load_environment(project_root, project_root / str(config["robot_config"]))
+    selected_test, _sealed_dataset, sealed_teacher_report = (
+        _materialize_sealed_test_after_lock(
+            config=config,
+            project_root=project_root,
+            output=output,
+            stage=stage,
+            catalog=catalog,
+            environment=environment,
+        )
     )
     sealed_role_ids = set(
         catalog.frame.loc[
@@ -2075,6 +2608,17 @@ def run_evaluate_stage(
     )
     if not set(selected_test).issubset(sealed_role_ids):
         raise PermissionError("selected test promotion is not in the sealed role")
+    if len(selected_test) != 5:
+        return _write_gate(
+            gate_path,
+            checks={
+                "sealed_test_opened_after_model_lock": True,
+                "exactly_five_teacher_valid_virgin_families": False,
+            },
+            cache_fingerprint=cache_fingerprint,
+            sealed_teacher_report=sealed_teacher_report,
+            stop_reason="fewer_than_five_teacher_valid_virgin_families",
+        )
     tube = _load_selected_tube(output)
     count = int(config["formal"]["sealed_eval_phase_count"])
     cross = TubeCrossSection.master(seed=int(config["seeds"]["audit"])).prefix(
@@ -2087,17 +2631,37 @@ def run_evaluate_stage(
         "axis_ratio_ood",
         "exact_0p5m_unseen_family",
     )
+    train_family_ids = tuple(
+        selection.loc[selection["role"].eq("train"), "family_id"].astype(str)
+    )
+    category_family_map: dict[str, tuple[EllipseFamilySpec, ...]] = {
+        "family_interpolation": _interpolation_families(
+            catalog, train_family_ids, count=5
+        )
+    }
+    for category in categories[1:]:
+        category_family_map[category] = tuple(
+            _category_families(catalog.family(family_id), category=category)
+            for family_id in selected_test
+        )
+    category_teacher_report = _validate_evaluation_family_surfaces(
+        category_families=category_family_map,
+        config=config,
+        project_root=project_root,
+        stage=stage,
+        environment=environment,
+    )
     target_sets = {}
     for category in categories:
         target_sets[category] = pd.concat(
             [
                 _evaluation_targets(
-                    _category_families(catalog.family(family_id), category=category),
+                    family,
                     cross_section=cross,
                     phase_count=count,
                     tube=tube,
                 )
-                for family_id in selected_test
+                for family in category_family_map[category]
             ],
             ignore_index=True,
         )
@@ -2115,7 +2679,6 @@ def run_evaluate_stage(
         tube=tube,
     )
     required_categories = set(categories) | {"tube_boundary"}
-    environment = load_environment(project_root, project_root / str(config["robot_config"]))
     seeds = tuple(int(value) for value in config["seeds"]["formal_train"])
     per_seed = []
     for seed in seeds:
@@ -2172,11 +2735,7 @@ def run_evaluate_stage(
     atomic_write_json(stage / "sealed_evaluation.json", per_seed)
     # The 0.75 m artifact is opened only after model lock and is never part of
     # any check above.  It remains a descriptive scale stress test.
-    stress_path = (
-        project_root
-        / str(config["v10_evidence_root"])
-        / "a0p750m/pose_targets.parquet"
-    )
+    stress_path = project_root / str(config["scale_stress_0p75m"])
     stress = pd.read_parquet(stress_path)
     stress_xyz = stress[["target_x_m", "target_y_m", "target_z_m"]].to_numpy(dtype=np.float32)
     stress_reports = []
@@ -2198,7 +2757,11 @@ def run_evaluate_stage(
         stage / "scale_stress_0p75m.json",
         {
             "used_for_model_selection": False,
-            "known_teacher_gap_count": 22,
+            "rows": int(len(stress)),
+            "eligible_teacher_rows": int(stress["label_eligible"].astype(bool).sum()),
+            "known_teacher_gap_count": int((~stress["label_eligible"].astype(bool)).sum()),
+            "teacher_residual_max_mm": float(stress["teacher_fk_residual_mm"].max()),
+            "teacher_joint_margin_min_deg": float(stress["joint_margin_min_deg"].min()),
             "reports": stress_reports,
         },
     )
@@ -2206,6 +2769,14 @@ def run_evaluate_stage(
     checks = {
         "sealed_test_opened_after_model_lock": bool(
             (output / STAGE_DIRS["train"] / "MODEL_LOCKED.json").is_file()
+            and bool(sealed_teacher_report["opened_after_model_lock"])
+        ),
+        "exactly_five_teacher_valid_virgin_families": bool(
+            sealed_teacher_report["teacher_gate_pass"]
+            and int(sealed_teacher_report["selected_count"]) == 5
+        ),
+        "all_evaluation_category_families_teacher_valid": bool(
+            category_teacher_report["all_category_families_teacher_valid"]
         ),
         "all_required_categories_reported": bool(
             all(required_categories.issubset(set(row["categories"])) for row in per_seed)
@@ -2225,8 +2796,11 @@ def run_evaluate_stage(
     return _write_gate(
         gate_path,
         checks=checks,
+        cache_fingerprint=cache_fingerprint,
         seed_all_category_pass_count=pass_count,
         seed_reports=per_seed,
+        sealed_teacher_report=sealed_teacher_report,
+        category_teacher_report=category_teacher_report,
         scale_stress_file="scale_stress_0p75m.json",
     )
 

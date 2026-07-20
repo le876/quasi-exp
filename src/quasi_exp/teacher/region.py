@@ -405,6 +405,14 @@ class CanonicalRegionTeacher:
             return None
 
         def solve_node(node_index: int) -> None:
+            available_neighbours = [
+                index for index in neighbours[node_index] if solved[index]
+            ]
+            neighbor_anchor = (
+                np.mean(beta[available_neighbours], axis=0)
+                if available_neighbours
+                else None
+            )
             initial = initializer(node_index)
             trajectory = self._trajectory_teacher.solve(
                 TrajectorySpec(
@@ -422,6 +430,7 @@ class CanonicalRegionTeacher:
                 policy,
                 root_beta=np.asarray(root_beta, dtype=float),
                 initial_beta_path=initial,
+                neighbor_anchor_path=neighbor_anchor,
             )
             beta[node_index] = trajectory.beta_rad
             theta[node_index] = trajectory.theta_rad

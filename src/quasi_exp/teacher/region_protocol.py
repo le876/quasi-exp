@@ -35,11 +35,11 @@ def _canonical_frame_hash(frame: pd.DataFrame) -> str:
 class FamilyCatalog:
     """Immutable family parameters and pre-label role assignments."""
 
-    frame: pd.DataFrame
+    _frame: pd.DataFrame
     seed: int
 
     def __post_init__(self) -> None:
-        frame = self.frame.copy().reset_index(drop=True)
+        frame = self._frame.copy(deep=True).reset_index(drop=True)
         required = {
             "family_id",
             "role",
@@ -72,12 +72,18 @@ class FamilyCatalog:
         }
         if actual != expected:
             raise ValueError(f"family catalog role quotas differ: {actual}")
-        object.__setattr__(self, "frame", frame)
+        object.__setattr__(self, "_frame", frame)
         object.__setattr__(self, "seed", int(self.seed))
 
     @property
+    def frame(self) -> pd.DataFrame:
+        """Return a defensive copy so callers cannot rewrite sealed roles."""
+
+        return self._frame.copy(deep=True)
+
+    @property
     def fingerprint(self) -> str:
-        return _canonical_frame_hash(self.frame)
+        return _canonical_frame_hash(self._frame)
 
     @property
     def seal_token(self) -> str:
@@ -85,8 +91,8 @@ class FamilyCatalog:
         return hashlib.sha256(encoded).hexdigest()
 
     def primary_ids(self, role: str) -> tuple[str, ...]:
-        selected = self.frame[
-            self.frame["role"].eq(str(role)) & self.frame["is_primary"].eq(True)
+        selected = self._frame[
+            self._frame["role"].eq(str(role)) & self._frame["is_primary"].eq(True)
         ]
         return tuple(selected.sort_values("catalog_order")["family_id"].astype(str))
 
@@ -105,7 +111,7 @@ class FamilyCatalog:
         raise ValueError(f"unknown family access purpose: {purpose}")
 
     def family(self, family_id: str) -> EllipseFamilySpec:
-        rows = self.frame[self.frame["family_id"].astype(str).eq(str(family_id))]
+        rows = self._frame[self._frame["family_id"].astype(str).eq(str(family_id))]
         if len(rows) != 1:
             raise KeyError(f"unknown family id: {family_id}")
         row = rows.iloc[0]
@@ -134,10 +140,10 @@ class FamilyCatalog:
             "tilt_q2_deg",
             "tilt_normal_deg",
         }
-        missing = sorted(required - set(self.frame.columns))
+        missing = sorted(required - set(self._frame.columns))
         if missing:
             raise ValueError(f"family catalog lacks relative design fields: {missing}")
-        frame = self.frame.copy()
+        frame = self._frame.copy(deep=True)
         axes = np.column_stack(
             [anchor.major_direction, anchor.minor_direction, anchor.plane_normal]
         )

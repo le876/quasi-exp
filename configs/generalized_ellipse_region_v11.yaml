@@ -2,6 +2,7 @@ protocol_id: generalized-ellipse-region-v11.1
 source_fixed_point: 7a73f2acbdc8c90f7872bb2b20691d5a65abe434
 robot_config: configs/robot_rods_only_standard_100k.yaml
 v10_evidence_root: runs/trajectory_canonical_teacher_v10/07_large_scale_challenge
+scale_stress_0p75m: runs/gpt5pro_handoffs/Q09/v10_0p75m_dense_teacher.parquet
 output_root: runs/generalized_ellipse_region_v11
 
 seeds:
@@ -21,6 +22,8 @@ teacher_policy:
   nullspace_weight: 0.001
   safe_joint_margin_deg: 1.5
   safe_margin_repulsion_step_deg: 0.0
+  surface_neighbor_weight: 0.1
+  surface_neighbor_scale_deg: 1.0
   max_corrector_iterations: 100
   tracking_tolerance_mm: 1.0
   lambda_velocity: 5.0

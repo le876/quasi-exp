@@ -48,6 +48,11 @@ def test_family_catalog_is_frozen_deterministic_and_has_role_specific_reserves()
     assert catalog.frame["major_semiaxis_m"].between(0.46, 0.50).all()
     assert catalog.frame["axis_ratio"].between(0.31, 0.36).all()
 
+    exposed = catalog.frame
+    exposed.loc[0, "role"] = "virgin_test"
+    assert catalog.frame.loc[0, "role"] == "train"
+    assert catalog.fingerprint == repeated.fingerprint
+
 
 def test_sealed_test_ids_are_not_available_to_model_selection() -> None:
     catalog = generate_family_catalog(_baseline(), seed=20260721)

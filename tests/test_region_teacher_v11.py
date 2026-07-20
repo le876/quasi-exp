@@ -165,3 +165,44 @@ def test_v11_corrector_can_use_nullspace_to_recover_safe_joint_margin() -> None:
 
     assert surface.complete
     assert surface.metrics["joint_margin_min_deg"] >= 1.9
+
+
+def test_surface_neighbor_anchor_is_part_of_whole_trajectory_objective() -> None:
+    from quasi_exp.teacher.canonical import CanonicalTeacher, TrajectorySpec
+
+    environment = _RedundantEnvironment()
+    target = np.column_stack(
+        [
+            np.linspace(-0.01, 0.01, 12),
+            np.zeros(12),
+            np.zeros(12),
+        ]
+    )
+    initial = np.zeros((12, 6))
+    initial[:, 0] = target[:, 0]
+    neighbour = np.zeros((12, 6))
+    neighbour[:, 3] = target[:, 0]
+    policy = TeacherPolicy(
+        variant=TeacherVariant.T2,
+        candidate_budget=1,
+        tracking_tolerance_mm=0.01,
+        surface_neighbor_weight=10.0,
+        max_corrector_iterations=40,
+    )
+
+    trajectory = CanonicalTeacher(environment).solve(
+        TrajectorySpec(
+            trajectory_id="surface-coupled",
+            family_id="F",
+            radius_mm=10.0,
+            target_xyz_m=target,
+        ),
+        policy,
+        root_beta=np.zeros(6),
+        initial_beta_path=initial,
+        neighbor_anchor_path=neighbour,
+    )
+
+    assert trajectory.success
+    assert np.mean(np.abs(trajectory.beta_rad[:, 3] - target[:, 0])) < 1.0e-3
+    assert trajectory.provenance["surface_neighbor_coupled"] is True

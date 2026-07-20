@@ -72,6 +72,8 @@ class TeacherPolicy:
     closure_weight: float = 5.0
     safe_joint_margin_deg: float = 1.5
     safe_margin_repulsion_step_deg: float = 0.0
+    surface_neighbor_weight: float = 0.0
+    surface_neighbor_scale_deg: float = 1.0
     max_corrector_iterations: int = 100
     tracking_tolerance_mm: float = 1.0
     solver_seed: int = 20260720
@@ -90,6 +92,8 @@ class TeacherPolicy:
             raise ValueError("safe_joint_margin_deg must be positive")
         if self.safe_margin_repulsion_step_deg < 0.0:
             raise ValueError("safe_margin_repulsion_step_deg must be non-negative")
+        if self.surface_neighbor_weight < 0.0 or self.surface_neighbor_scale_deg <= 0.0:
+            raise ValueError("surface-neighbor weight/scale must be non-negative/positive")
 
     @property
     def fingerprint(self) -> str:
@@ -328,6 +332,7 @@ class CanonicalTeacher:
         *,
         root_beta: np.ndarray,
         initial_beta_path: np.ndarray | None = None,
+        neighbor_anchor_path: np.ndarray | None = None,
     ) -> TeacherTrajectory:
         original_target = np.asarray(spec.target_xyz_m, dtype=float)
         order = np.roll(np.arange(len(original_target)), -int(spec.cyclic_cut))
@@ -345,6 +350,16 @@ class CanonicalTeacher:
             if not np.isfinite(initial_path).all():
                 raise ValueError("initial_beta_path must contain finite values")
             initial_path = initial_path[order]
+        neighbor_anchor = None
+        if neighbor_anchor_path is not None:
+            neighbor_anchor = np.asarray(neighbor_anchor_path, dtype=float)
+            if neighbor_anchor.shape != (len(original_target), 6):
+                raise ValueError(
+                    f"neighbor_anchor_path must have shape ({len(original_target)}, 6)"
+                )
+            if not np.isfinite(neighbor_anchor).all():
+                raise ValueError("neighbor_anchor_path must contain finite values")
+            neighbor_anchor = neighbor_anchor[order]
         rng = np.random.default_rng(int(policy.solver_seed))
         candidate_layers: list[np.ndarray] = []
         residual_layers: list[np.ndarray] = []
@@ -421,7 +436,9 @@ class CanonicalTeacher:
                 selected = np.vstack(previous)
 
         if policy.variant in {TeacherVariant.T2, TeacherVariant.T3, TeacherVariant.T4}:
-            selected = self._optimize_trajectory(target, selected, policy)
+            selected = self._optimize_trajectory(
+                target, selected, policy, neighbor_anchor=neighbor_anchor
+            )
 
         corrected: list[np.ndarray] = []
         for point, initial in zip(target, selected):
@@ -487,6 +504,9 @@ class CanonicalTeacher:
                 "solver_seed": int(policy.solver_seed),
                 "traversal_direction": spec.traversal_direction,
                 "cyclic_cut": int(spec.cyclic_cut),
+                "surface_neighbor_coupled": bool(
+                    neighbor_anchor is not None and policy.surface_neighbor_weight > 0.0
+                ),
             },
             success=success,
             candidate_diagnostics={
@@ -500,6 +520,8 @@ class CanonicalTeacher:
         target: np.ndarray,
         initial: np.ndarray,
         policy: TeacherPolicy,
+        *,
+        neighbor_anchor: np.ndarray | None = None,
     ) -> np.ndarray:
         bounds = np.asarray(self._environment.bounds, dtype=float).reshape(6, 2)
         count = len(target)
@@ -549,6 +571,13 @@ class CanonicalTeacher:
                     math.sqrt(float(policy.lambda_conditioning))
                     * np.asarray(conditioning, dtype=float)
                 )
+            if neighbor_anchor is not None and policy.surface_neighbor_weight > 0.0:
+                surface_scale = math.radians(float(policy.surface_neighbor_scale_deg))
+                parts.append(
+                    math.sqrt(float(policy.surface_neighbor_weight))
+                    * (beta - neighbor_anchor).reshape(-1)
+                    / surface_scale
+                )
             safe_margin = math.radians(float(policy.safe_joint_margin_deg))
             lower_margin = beta - bounds[:, 0][None, :]
             upper_margin = bounds[:, 1][None, :] - beta
@@ -573,6 +602,8 @@ class CanonicalTeacher:
             residual_count += count * 6
         if policy.lambda_conditioning > 0.0:
             residual_count += len(conditioning_indices)
+        if neighbor_anchor is not None and policy.surface_neighbor_weight > 0.0:
+            residual_count += count * 6
         residual_count += count * 6
         residual_count += 6
         sparsity = lil_matrix((residual_count, count * 6), dtype=np.int8)
@@ -597,6 +628,13 @@ class CanonicalTeacher:
             for point_index in conditioning_indices:
                 sparsity[row, point_index * 6 : (point_index + 1) * 6] = 1
                 row += 1
+        if neighbor_anchor is not None and policy.surface_neighbor_weight > 0.0:
+            for point_index in range(count):
+                sparsity[
+                    row : row + 6,
+                    point_index * 6 : (point_index + 1) * 6,
+                ] = 1
+                row += 6
         for point_index in range(count):
             sparsity[row : row + 6, point_index * 6 : (point_index + 1) * 6] = 1
             row += 6

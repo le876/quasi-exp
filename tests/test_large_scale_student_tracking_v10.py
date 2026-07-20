@@ -11,6 +11,11 @@ from quasi_exp.teacher.student import (
     materialize_phase_splits,
     periodic_beta_interpolation,
 )
+from quasi_exp.teacher.tracking_gate import (
+    evaluate_relative_tracking_gate,
+    relative_tracking_gate_spec,
+    require_relative_tracking_gate,
+)
 
 
 try:
@@ -37,6 +42,53 @@ from quasi_exp.teacher.student_tracking_tf import (
     student_loss_terms,
 )
 from scripts.analysis.verify_large_scale_student_artifacts_v10 import verify
+
+
+def test_relative_tracking_gate_uses_two_percent_of_actual_major_semiaxis() -> None:
+    half_metre = evaluate_relative_tracking_gate([1.0, 9.9], major_semiaxis_m=0.5)
+    three_quarter_metre = evaluate_relative_tracking_gate(
+        [1.0, 14.9], major_semiaxis_m=0.75
+    )
+
+    assert half_metre["tracking_gate_threshold_mm"] == pytest.approx(10.0)
+    assert three_quarter_metre["tracking_gate_threshold_mm"] == pytest.approx(15.0)
+    assert half_metre["tracking_gate_relative_limit"] == pytest.approx(0.02)
+    assert half_metre["tracking_gate_limit_pct"] == pytest.approx(2.0)
+
+
+def test_relative_tracking_gate_is_fail_closed_on_worst_trajectory_point() -> None:
+    metrics = evaluate_relative_tracking_gate(
+        [1.0, 5.0, 10.01], major_semiaxis_m=0.5
+    )
+
+    assert metrics["tracking_gate_aggregation"] == "trajectory_max"
+    assert metrics["tracking_relative_error_max_pct"] == pytest.approx(2.002)
+    assert metrics["tracking_within_gate_rate"] == pytest.approx(2.0 / 3.0)
+    assert metrics["tracking_gate_pass"] is False
+
+
+@pytest.mark.parametrize(
+    ("residual_mm", "major_semiaxis_m"),
+    [([], 0.5), ([1.0], 0.0), ([np.nan], 0.5), ([-1.0], 0.5)],
+)
+def test_relative_tracking_gate_rejects_invalid_physical_inputs(
+    residual_mm, major_semiaxis_m
+) -> None:
+    with pytest.raises(ValueError):
+        evaluate_relative_tracking_gate(
+            residual_mm, major_semiaxis_m=major_semiaxis_m
+        )
+
+
+def test_relative_tracking_protocol_rejects_legacy_absolute_gate_cache() -> None:
+    with pytest.raises(RuntimeError, match="fresh output root"):
+        require_relative_tracking_gate(
+            {"tracking_success_rate_3mm": 1.0}, context="historical report"
+        )
+
+    require_relative_tracking_gate(
+        {"tracking_gate": relative_tracking_gate_spec()}, context="future report"
+    )
 
 
 def test_periodic_initial_path_interpolates_across_the_cyclic_seam() -> None:

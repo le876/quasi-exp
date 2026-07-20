@@ -20,6 +20,12 @@ from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 from quasi_exp.teacher.large_scale import EllipseChallenge
 from quasi_exp.teacher.student import XYZ_COLUMNS
 from quasi_exp.teacher.student_tracking_tf import autoregressive_rollout
+from quasi_exp.teacher.tracking_gate import (
+    DEFAULT_TRACKING_RELATIVE_LIMIT,
+    evaluate_relative_tracking_gate,
+    relative_tracking_gate_spec,
+    require_relative_tracking_gate,
+)
 
 from run_trajectory_canonical_teacher_v10 import load_environment, project_root_from, runtime_fingerprint
 from train_large_scale_students_v10 import Candidate, _fit_fixed_epochs, _geometry
@@ -66,6 +72,8 @@ def _evaluate_unlabelled(
     phase: np.ndarray,
     beta: np.ndarray,
     environment: Any,
+    *,
+    major_semiaxis_m: float,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     achieved = environment.fk(beta)
     residual = np.linalg.norm(achieved - target, axis=1) * 1000.0
@@ -73,12 +81,15 @@ def _evaluate_unlabelled(
     in_bounds = np.all(
         (beta >= bounds[:, 0][None, :]) & (beta <= bounds[:, 1][None, :]), axis=1
     )
+    relative_gate = evaluate_relative_tracking_gate(
+        residual, major_semiaxis_m=major_semiaxis_m
+    )
     metrics = {
         "interstitial_phase_count": int(len(target)),
         "tracking_residual_p50_mm": float(np.percentile(residual, 50)),
         "tracking_residual_p95_mm": float(np.percentile(residual, 95)),
         "tracking_residual_max_mm": float(np.max(residual)),
-        "tracking_success_rate_3mm": float(np.mean(residual <= 3.0)),
+        **relative_gate,
         "joint_bounds_rate": float(np.mean(in_bounds)),
     }
     frame = pd.DataFrame(
@@ -91,6 +102,9 @@ def _evaluate_unlabelled(
             "achieved_y_m": achieved[:, 1],
             "achieved_z_m": achieved[:, 2],
             "tracking_residual_mm": residual,
+            "tracking_relative_error_pct": residual / (major_semiaxis_m * 10.0),
+            "within_tracking_gate": residual
+            <= relative_gate["tracking_gate_threshold_mm"],
             "within_joint_bounds": in_bounds,
         }
     )
@@ -122,6 +136,11 @@ def plot_tracking(frame: pd.DataFrame, pose: dict[str, Any], title: str, output:
     achieved_face = np.column_stack([(achieved - center) @ major, (achieved - center) @ minor])
     phase = frame["phase_rad"].to_numpy(dtype=float)
     residual = frame["tracking_residual_mm"].to_numpy(dtype=float)
+    gate_threshold_mm = (
+        float(pose["major_semiaxis_m"])
+        * 1000.0
+        * DEFAULT_TRACKING_RELATIVE_LIMIT
+    )
 
     fig = plt.figure(figsize=(18, 5.5), constrained_layout=True)
     ax0 = fig.add_subplot(1, 3, 1)
@@ -147,7 +166,13 @@ def plot_tracking(frame: pd.DataFrame, pose: dict[str, Any], title: str, output:
 
     ax2 = fig.add_subplot(1, 3, 3)
     ax2.plot(phase, residual, color="#7b3294", linewidth=1.4)
-    ax2.axhline(3.0, color="#444444", linestyle="--", linewidth=1.2, label="3 mm")
+    ax2.axhline(
+        gate_threshold_mm,
+        color="#444444",
+        linestyle="--",
+        linewidth=1.2,
+        label=f"2% of major semiaxis ({gate_threshold_mm:g} mm)",
+    )
     ax2.set_xlabel("Phase (rad)")
     ax2.set_ylabel("FK tracking residual (mm)")
     ax2.set_title("Interstitial phase error")
@@ -186,6 +211,11 @@ def main() -> None:
     parser.add_argument("--fallback-epochs", type=int, default=180)
     args = parser.parse_args()
     output_root = args.output_root.resolve()
+    existing_summary_path = output_root / "deployment/deployment_summary.json"
+    if existing_summary_path.exists():
+        require_relative_tracking_gate(
+            _load_json(existing_summary_path), context=str(existing_summary_path)
+        )
     selection_path = output_root / "screen/selection.json"
     final_path = output_root / "final/final_summary.json"
     if not selection_path.exists() or not final_path.exists():
@@ -261,7 +291,13 @@ def main() -> None:
                 )
             else:
                 beta = np.asarray(model.predict(target, verbose=0), dtype=float)
-            metrics, prediction = _evaluate_unlabelled(target, phase, beta, environment)
+            metrics, prediction = _evaluate_unlabelled(
+                target,
+                phase,
+                beta,
+                environment,
+                major_semiaxis_m=float(pose["major_semiaxis_m"]),
+            )
             prediction_path = scope_dir / f"{slug}_interstitial_predictions.parquet"
             prediction.to_parquet(prediction_path, index=False, compression="zstd")
             plot_path = scope_dir / f"{slug}_tracking.png"
@@ -296,7 +332,8 @@ def main() -> None:
         reports.append(report)
         tf.keras.backend.clear_session()
     manifest = {
-        "protocol_id": "large-scale-student-tracking-v10.1-deployment",
+        "protocol_id": "large-scale-student-tracking-v10.2-relative-gate-deployment",
+        "tracking_gate": relative_tracking_gate_spec(),
         "runtime": runtime_fingerprint(),
         "selection_sha256": sha256_file(selection_path),
         "final_summary_sha256": sha256_file(final_path),
@@ -308,6 +345,9 @@ def main() -> None:
             ),
             str((repo_root / "src/quasi_exp/teacher/student_tracking_tf.py").resolve()): sha256_file(
                 repo_root / "src/quasi_exp/teacher/student_tracking_tf.py"
+            ),
+            str((repo_root / "src/quasi_exp/teacher/tracking_gate.py").resolve()): sha256_file(
+                repo_root / "src/quasi_exp/teacher/tracking_gate.py"
             ),
         },
         "reports": reports,

@@ -39,7 +39,7 @@ def run(summary_path: Path) -> dict[str, object]:
             if not plot.is_file() or not plot.with_suffix(".pdf").is_file():
                 raise FileNotFoundError(f"missing PNG/PDF tracking plot pair: {plot}")
     result: dict[str, object] = {
-        "protocol_id": "large-scale-student-tracking-v10.1-artifact-verification",
+        "protocol_id": "large-scale-student-tracking-v10.2-relative-gate-artifact-verification",
         "verification_pass": True,
         "hashed_artifact_count": len(checked),
         "checked": checked,

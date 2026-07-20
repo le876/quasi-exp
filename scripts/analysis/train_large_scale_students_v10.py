@@ -24,6 +24,11 @@ from quasi_exp.teacher.student_tracking_tf import (
     make_cyclic_windows,
     packed_targets,
 )
+from quasi_exp.teacher.tracking_gate import (
+    evaluate_relative_tracking_gate,
+    relative_tracking_gate_spec,
+    require_relative_tracking_gate,
+)
 
 from run_trajectory_canonical_teacher_v10 import load_environment, project_root_from, runtime_fingerprint
 
@@ -321,12 +326,42 @@ def _prediction_variants(
 def _aggregate_variant_metrics(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     if len(metrics) == 1:
         return dict(metrics[0])
+    gate_identity = {
+        (
+            row["tracking_gate_id"],
+            row["major_semiaxis_m"],
+            row["tracking_gate_relative_limit"],
+            row["tracking_gate_threshold_mm"],
+        )
+        for row in metrics
+    }
+    if len(gate_identity) != 1:
+        raise ValueError("rollout variants must use one identical tracking gate")
+    gate_id, major_semiaxis_m, relative_limit, threshold_mm = gate_identity.pop()
     return {
         "rows": int(metrics[0]["rows"]),
         "tracking_residual_p50_mm": float(max(row["tracking_residual_p50_mm"] for row in metrics)),
         "tracking_residual_p95_mm": float(max(row["tracking_residual_p95_mm"] for row in metrics)),
         "tracking_residual_max_mm": float(max(row["tracking_residual_max_mm"] for row in metrics)),
-        "tracking_success_rate_3mm": float(min(row["tracking_success_rate_3mm"] for row in metrics)),
+        "tracking_gate_id": gate_id,
+        "tracking_gate_aggregation": "trajectory_max",
+        "major_semiaxis_m": float(major_semiaxis_m),
+        "tracking_gate_relative_limit": float(relative_limit),
+        "tracking_gate_limit_pct": float(relative_limit) * 100.0,
+        "tracking_gate_threshold_mm": float(threshold_mm),
+        "tracking_relative_error_p50_pct": float(
+            max(row["tracking_relative_error_p50_pct"] for row in metrics)
+        ),
+        "tracking_relative_error_p95_pct": float(
+            max(row["tracking_relative_error_p95_pct"] for row in metrics)
+        ),
+        "tracking_relative_error_max_pct": float(
+            max(row["tracking_relative_error_max_pct"] for row in metrics)
+        ),
+        "tracking_within_gate_rate": float(
+            min(row["tracking_within_gate_rate"] for row in metrics)
+        ),
+        "tracking_gate_pass": bool(all(row["tracking_gate_pass"] for row in metrics)),
         "beta_rms_p95_deg": float(max(row["beta_rms_p95_deg"] for row in metrics)),
         "beta_rms_max_deg": float(max(row["beta_rms_max_deg"] for row in metrics)),
         "joint_bounds_rate": float(min(row["joint_bounds_rate"] for row in metrics)),
@@ -339,6 +374,8 @@ def evaluate_prediction(
     frame: pd.DataFrame,
     beta_pred: np.ndarray,
     environment: Any,
+    *,
+    major_semiaxis_m: float,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     ordered = frame.sort_values("phase_idx", kind="stable").reset_index(drop=True)
     prediction = np.asarray(beta_pred, dtype=float).reshape(len(ordered), 6)
@@ -351,12 +388,15 @@ def evaluate_prediction(
     in_bounds = np.all(
         (prediction >= bounds[:, 0][None, :]) & (prediction <= bounds[:, 1][None, :]), axis=1
     )
+    relative_gate = evaluate_relative_tracking_gate(
+        residual_mm, major_semiaxis_m=major_semiaxis_m
+    )
     metric = {
         "rows": int(len(ordered)),
         "tracking_residual_p50_mm": float(np.percentile(residual_mm, 50)),
         "tracking_residual_p95_mm": float(np.percentile(residual_mm, 95)),
         "tracking_residual_max_mm": float(np.max(residual_mm)),
-        "tracking_success_rate_3mm": float(np.mean(residual_mm <= 3.0)),
+        **relative_gate,
         "beta_rms_p95_deg": float(np.percentile(beta_rms_deg, 95)),
         "beta_rms_max_deg": float(np.max(beta_rms_deg)),
         "joint_bounds_rate": float(np.mean(in_bounds)),
@@ -367,6 +407,10 @@ def evaluate_prediction(
         result[f"predicted_beta{index + 1}_rad"] = prediction[:, index]
     result[["achieved_x_m", "achieved_y_m", "achieved_z_m"]] = achieved
     result["tracking_residual_mm"] = residual_mm
+    result["tracking_relative_error_pct"] = residual_mm / (major_semiaxis_m * 10.0)
+    result["within_tracking_gate"] = (
+        residual_mm <= relative_gate["tracking_gate_threshold_mm"]
+    )
     result["beta_rms_deg"] = beta_rms_deg
     result["within_joint_bounds"] = in_bounds
     return metric, result
@@ -389,7 +433,9 @@ def _train_one(
     report_path = output / "report.json"
     if report_path.exists():
         with report_path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            cached = json.load(handle)
+        require_relative_tracking_gate(cached, context=str(report_path))
+        return cached
     print(
         f"[train] scope={scope} candidate={candidate.candidate_id} seed={seed}",
         flush=True,
@@ -429,7 +475,15 @@ def _train_one(
         window_size=window_size,
     )
     variant_results = [
-        (name, *evaluate_prediction(validation_0p5, beta, _ENVIRONMENT_HOLDER[0]))
+        (
+            name,
+            *evaluate_prediction(
+                validation_0p5,
+                beta,
+                _ENVIRONMENT_HOLDER[0],
+                major_semiaxis_m=0.5,
+            ),
+        )
         for name, beta in variants
     ]
     metrics = _aggregate_variant_metrics([row[1] for row in variant_results])
@@ -444,6 +498,7 @@ def _train_one(
         "seed": int(seed),
         "selection_data": "0.5m_validation_only",
         "stress_0p75_evaluated_during_selection": False,
+        "tracking_gate": relative_tracking_gate_spec(),
         "history": history,
         "validation_0p5": metrics,
         "rollout_variants": {name: value for name, value, _prediction in variant_results},
@@ -503,7 +558,10 @@ def run_screen(args: argparse.Namespace, tf: Any, environment: Any, output_root:
         .agg(
             tracking_residual_p95_mm=("tracking_residual_p95_mm", "median"),
             tracking_residual_max_mm=("tracking_residual_max_mm", "median"),
-            tracking_success_rate_3mm=("tracking_success_rate_3mm", "median"),
+            tracking_relative_error_p95_pct=("tracking_relative_error_p95_pct", "median"),
+            tracking_relative_error_max_pct=("tracking_relative_error_max_pct", "median"),
+            tracking_within_gate_rate=("tracking_within_gate_rate", "median"),
+            tracking_gate_pass_rate=("tracking_gate_pass", "mean"),
             joint_bounds_rate=("joint_bounds_rate", "median"),
         )
     )
@@ -522,7 +580,8 @@ def run_screen(args: argparse.Namespace, tf: Any, environment: Any, output_root:
         "selection_metrics": aggregate.iloc[0].to_dict(),
     }
     selection = {
-        "protocol_id": "large-scale-student-tracking-v10.1",
+        "protocol_id": "large-scale-student-tracking-v10.2-relative-gate",
+        "tracking_gate": relative_tracking_gate_spec(),
         "selection_locked": True,
         "selection_benchmark": "0.5m_validation_only",
         "sealed_test_opened": False,
@@ -539,6 +598,7 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
         raise FileNotFoundError("screen selection must be frozen before sealed-test evaluation")
     with selection_path.open("r", encoding="utf-8") as handle:
         selection = json.load(handle)
+    require_relative_tracking_gate(selection, context=str(selection_path))
     if not selection.get("selection_locked") or selection.get("sealed_test_opened"):
         raise RuntimeError("invalid selection state before sealed-test evaluation")
     train_0p5 = _eligible(_read_split(output_root, "a0p500m", "train"))
@@ -580,7 +640,9 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
             report_path = out / "report.json"
             if report_path.exists():
                 with report_path.open("r", encoding="utf-8") as handle:
-                    final_reports.append(json.load(handle))
+                    cached = json.load(handle)
+                require_relative_tracking_gate(cached, context=str(report_path))
+                final_reports.append(cached)
                 continue
             out.mkdir(parents=True, exist_ok=True)
             init_model = None
@@ -626,7 +688,15 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
                     window_size=args.window_size,
                 )
                 variant_results = [
-                    (name, *evaluate_prediction(test[scale], beta, environment))
+                    (
+                        name,
+                        *evaluate_prediction(
+                            test[scale],
+                            beta,
+                            environment,
+                            major_semiaxis_m={"a0p500m": 0.5, "a0p750m": 0.75}[scale],
+                        ),
+                    )
                     for name, beta in variants
                 ]
                 metrics = _aggregate_variant_metrics([row[1] for row in variant_results])
@@ -644,6 +714,7 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
                 "candidate": asdict(candidate),
                 "seed": seed,
                 "history": history,
+                "tracking_gate": relative_tracking_gate_spec(),
                 "sealed_test_evaluations": evaluations,
             }
             atomic_write_json(report_path, report)
@@ -662,13 +733,17 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
             residual_p95_min_mm=("tracking_residual_p95_mm", "min"),
             residual_p95_max_mm=("tracking_residual_p95_mm", "max"),
             residual_max_median_mm=("tracking_residual_max_mm", "median"),
-            success_rate_median=("tracking_success_rate_3mm", "median"),
+            relative_error_p95_median_pct=("tracking_relative_error_p95_pct", "median"),
+            relative_error_max_median_pct=("tracking_relative_error_max_pct", "median"),
+            within_relative_gate_rate_median=("tracking_within_gate_rate", "median"),
+            tracking_gate_pass_rate=("tracking_gate_pass", "mean"),
             joint_bounds_rate_median=("joint_bounds_rate", "median"),
         )
     )
     summary_rows.to_csv(output_root / "final/final_summary.csv", index=False)
     summary = {
-        "protocol_id": "large-scale-student-tracking-v10.1",
+        "protocol_id": "large-scale-student-tracking-v10.2-relative-gate",
+        "tracking_gate": relative_tracking_gate_spec(),
         "selection_sha256": sha256_file(selection_path),
         "sealed_test_opened_after_selection": True,
         "final_seed_count": len(FINAL_SEEDS),

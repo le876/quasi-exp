@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Mapping
 
 import numpy as np
 import pandas as pd
+
+from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 
 
 class StudentKind(str, Enum):
@@ -26,6 +29,121 @@ class StudentArrays:
     features: np.ndarray
     targets: np.ndarray
     chart_labels: np.ndarray | None = None
+
+
+def periodic_beta_interpolation(
+    frame: pd.DataFrame,
+    *,
+    phase_count: int,
+) -> np.ndarray:
+    """Interpolate a cyclic teacher beta path onto an endpoint-free grid."""
+
+    missing = {"phase_rad", *BETA_COLUMNS} - set(frame.columns)
+    if missing:
+        raise ValueError(f"teacher initialisation frame is missing columns: {sorted(missing)}")
+    ordered = frame.sort_values("phase_rad", kind="stable")
+    phase = ordered["phase_rad"].to_numpy(dtype=float)
+    if len(phase) < 4 or not np.isfinite(phase).all():
+        raise ValueError("teacher initialisation requires at least four finite phases")
+    query = np.linspace(0.0, 2.0 * np.pi, int(phase_count), endpoint=False)
+    return np.column_stack(
+        [
+            np.interp(
+                query,
+                phase,
+                ordered[column].to_numpy(dtype=float),
+                period=2.0 * np.pi,
+            )
+            for column in BETA_COLUMNS
+        ]
+    )
+
+
+def assign_dense_phase_split(
+    frame: pd.DataFrame,
+    *,
+    expected_phase_count: int = 720,
+    residual_limit_mm: float = 3.0,
+) -> pd.DataFrame:
+    """Assign the frozen interleaved train/validation/test split.
+
+    Only finite, in-bounds teacher labels at or below the registered residual
+    limit may be consumed by training.  Validation and test labels remain
+    ineligible for fitting even when their teacher solution is valid.
+    """
+
+    required = {"phase_idx", "teacher_fk_residual_mm", "within_joint_bounds"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"dense student frame is missing columns: {sorted(missing)}")
+    ordered = frame.sort_values("phase_idx", kind="stable").reset_index(drop=True).copy()
+    expected = int(expected_phase_count)
+    phase = ordered["phase_idx"].to_numpy(dtype=np.int64)
+    if len(ordered) != expected or not np.array_equal(phase, np.arange(expected)):
+        raise ValueError(f"dense student frame must contain phase_idx 0..{expected - 1}")
+    residual = ordered["teacher_fk_residual_mm"].to_numpy(dtype=float)
+    eligible = (
+        np.isfinite(residual)
+        & (residual <= float(residual_limit_mm))
+        & ordered["within_joint_bounds"].astype(bool).to_numpy()
+    )
+    modulo = phase % 4
+    ordered["split"] = np.where(
+        modulo % 2 == 0,
+        "train",
+        np.where(modulo == 1, "validation", "test"),
+    )
+    ordered["label_eligible"] = eligible
+    ordered["used_for_training"] = eligible & ordered["split"].eq("train").to_numpy()
+    return ordered
+
+
+def materialize_phase_splits(
+    frame: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+) -> dict[str, object]:
+    """Write train/validation/test labels as separately hashed artifacts."""
+
+    required = {"phase_idx", "split", "label_eligible", "used_for_training"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"assigned student frame is missing columns: {sorted(missing)}")
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    names = {
+        "train": "train.parquet",
+        "validation": "validation.parquet",
+        "test": "sealed_test.parquet",
+    }
+    paths: dict[str, Path] = {}
+    counts: dict[str, int] = {}
+    for split, filename in names.items():
+        part = frame.loc[frame["split"].astype(str).eq(split)].copy()
+        if part.empty:
+            raise ValueError(f"student split {split} is empty")
+        path = output / filename
+        part.to_parquet(path, index=False, compression="zstd")
+        paths[split] = path
+        counts[split] = int(len(part))
+    if set(frame.loc[frame["used_for_training"].astype(bool), "split"]) != {"train"}:
+        raise ValueError("used_for_training contains validation or test labels")
+    report: dict[str, object] = {
+        "split_counts": counts,
+        "eligible_counts": {
+            split: int(
+                frame.loc[frame["split"].astype(str).eq(split), "label_eligible"]
+                .astype(bool)
+                .sum()
+            )
+            for split in names
+        },
+        "split_paths": {split: str(path.resolve()) for split, path in paths.items()},
+        "split_sha256": {split: sha256_file(path) for split, path in paths.items()},
+        "sealed_test_label_access": "post_selection_only",
+    }
+    atomic_write_json(output / "split_report.json", report)
+    return report
 
 
 def split_by_trajectory(

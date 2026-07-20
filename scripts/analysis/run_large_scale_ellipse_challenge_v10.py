@@ -164,7 +164,12 @@ def _solve_centerline(
     local_atlas = None
     atlas_report: dict[str, Any] | None = None
     if variant == TeacherVariant.T4:
-        local_atlas = build_local_atlas(trajectory, environment, policy)
+        local_atlas = build_local_atlas(
+            trajectory,
+            environment,
+            policy,
+            stride=max(1, len(targets) // 15),
+        )
         trajectory = replace(trajectory, chart_id=local_atlas.phase_chart_ids)
         trajectory.metrics["chart_overlap_gap_p95_deg"] = local_atlas.overlap_gap_p95_deg
         trajectory.metrics["chart_overlap_gate_pass"] = float(local_atlas.overlap_gate_pass)
@@ -410,6 +415,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 seed=int(config["solver_seed"]) + challenge_index * 100 + restart,
                 max_iterations=int(pose_config["max_iterations"]),
                 population_size=int(pose_config["population_size"]),
+                beta_bounds_rad=environment.bounds,
+                safe_joint_margin_deg=float(pose_config["safe_joint_margin_deg"]),
+                joint_margin_penalty_mm_per_deg=float(
+                    pose_config["joint_margin_penalty_mm_per_deg"]
+                ),
             )
             for restart in range(int(pose_config["restarts"]))
         ]
@@ -506,7 +516,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 minor_direction=fit.minor_direction,
                 phase_count=int(formal["phase_count"]),
             )
-            formal_match = atlas.match_targets(formal_targets)
+            formal_match = atlas.match_targets(
+                formal_targets, beta_bounds_rad=environment.bounds
+            )
             for variant_name in formal["variants"]:
                 variant = TeacherVariant(str(variant_name))
                 variant_dir = challenge_dir / "formal" / variant.value

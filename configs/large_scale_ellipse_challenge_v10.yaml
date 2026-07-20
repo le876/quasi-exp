@@ -1,4 +1,4 @@
-protocol_id: large-scale-ellipse-challenge-v10.1
+protocol_id: large-scale-ellipse-challenge-v10.2
 challenge_definition: actual_3d_major_semiaxis
 major_semiaxes_m: [0.5, 0.75, 1.0]
 minor_to_major_ratio: 0.3373339499411772
@@ -16,6 +16,8 @@ pose_search:
   restarts: 3
   max_iterations: 160
   population_size: 12
+  safe_joint_margin_deg: 1.5
+  joint_margin_penalty_mm_per_deg: 20.0
 teacher_screen:
   # T1 is a mechanism ablation.  T3 is the conservative generalized
   # V7-structure comparator (graph + whole-trajectory correction) because an

@@ -113,3 +113,39 @@ def test_pose_search_finds_a_known_reachable_ellipse_in_a_synthetic_atlas():
     assert fit.match.metrics["nearest_distance_p95_mm"] <= 5.0
     assert fit.match.metrics["nearest_distance_max_mm"] <= 5.0
     assert np.isclose(fit.center_m[0], 0.7, atol=5.0e-3)
+
+
+def test_pose_search_prefers_a_safe_joint_margin_witness_over_an_exact_boundary_witness():
+    challenge = EllipseChallenge.from_major_semiaxis_m(0.1)
+    unsafe = challenge.generate_targets(
+        center_m=np.asarray([0.7, 0.0, 0.0]),
+        major_direction=np.asarray([0.0, 1.0, 0.0]),
+        minor_direction=np.asarray([0.0, 0.0, 1.0]),
+        phase_count=96,
+    )
+    safe = unsafe + np.asarray([0.01, 0.0, 0.0])
+    atlas = ReachabilityAtlas(
+        xyz_m=np.vstack([unsafe, safe]),
+        beta_rad=np.vstack(
+            [
+                np.ones((len(unsafe), 6), dtype=float),
+                np.zeros((len(safe), 6), dtype=float),
+            ]
+        ),
+    )
+    bounds = np.tile(np.asarray([-1.0, 1.0]), (6, 1))
+
+    fit = fit_ellipse_pose_to_atlas(
+        challenge,
+        atlas,
+        phase_count=24,
+        seed=11,
+        max_iterations=80,
+        population_size=10,
+        beta_bounds_rad=bounds,
+        safe_joint_margin_deg=1.5,
+        joint_margin_penalty_mm_per_deg=20.0,
+    )
+
+    assert fit.match.metrics["nearest_joint_margin_min_deg"] >= 50.0
+    assert np.isclose(fit.center_m[0], 0.71, atol=5.0e-3)

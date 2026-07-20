@@ -137,7 +137,12 @@ class ReachabilityAtlas:
         object.__setattr__(self, "xyz_m", xyz.copy())
         object.__setattr__(self, "beta_rad", beta.copy())
 
-    def match_targets(self, target_xyz_m: np.ndarray) -> AtlasMatch:
+    def match_targets(
+        self,
+        target_xyz_m: np.ndarray,
+        *,
+        beta_bounds_rad: np.ndarray | None = None,
+    ) -> AtlasMatch:
         target = np.asarray(target_xyz_m, dtype=float)
         if target.ndim != 2 or target.shape[1] != 3 or len(target) == 0:
             raise ValueError("target_xyz_m must have shape (N, 3) with N > 0")
@@ -149,6 +154,26 @@ class ReachabilityAtlas:
             "nearest_distance_p95_mm": float(np.percentile(distance_mm, 95)),
             "nearest_distance_max_mm": float(np.max(distance_mm)),
         }
+        if beta_bounds_rad is not None:
+            bounds = np.asarray(beta_bounds_rad, dtype=float)
+            if bounds.shape != (6, 2) or not np.isfinite(bounds).all():
+                raise ValueError("beta_bounds_rad must have finite shape (6, 2)")
+            selected_beta = self.beta_rad[np.asarray(indices, dtype=np.int64)]
+            margin_deg = np.rad2deg(
+                np.min(
+                    np.minimum(
+                        selected_beta - bounds[:, 0][None, :],
+                        bounds[:, 1][None, :] - selected_beta,
+                    ),
+                    axis=1,
+                )
+            )
+            metrics.update(
+                {
+                    "nearest_joint_margin_min_deg": float(np.min(margin_deg)),
+                    "nearest_joint_margin_p05_deg": float(np.percentile(margin_deg, 5)),
+                }
+            )
         return AtlasMatch(
             initial_beta_path_rad=self.beta_rad[np.asarray(indices, dtype=np.int64)].copy(),
             nearest_distance_mm=distance_mm,
@@ -179,6 +204,9 @@ def fit_ellipse_pose_to_atlas(
     seed: int = 20260720,
     max_iterations: int = 120,
     population_size: int = 10,
+    beta_bounds_rad: np.ndarray | None = None,
+    safe_joint_margin_deg: float = 1.5,
+    joint_margin_penalty_mm_per_deg: float = 20.0,
 ) -> EllipsePoseFit:
     """Fit ellipse center/orientation to a finite FK reachability atlas.
 
@@ -195,6 +223,19 @@ def fit_ellipse_pose_to_atlas(
     xyz_min = np.min(atlas.xyz_m, axis=0)
     xyz_max = np.max(atlas.xyz_m, axis=0)
     tree = cKDTree(atlas.xyz_m)
+    bounds_rad = None
+    if beta_bounds_rad is not None:
+        bounds_rad = np.asarray(beta_bounds_rad, dtype=float)
+        if bounds_rad.shape != (6, 2) or not np.isfinite(bounds_rad).all():
+            raise ValueError("beta_bounds_rad must have finite shape (6, 2)")
+        if np.any(bounds_rad[:, 0] > bounds_rad[:, 1]):
+            raise ValueError("beta_bounds_rad must contain ordered bounds")
+    safe_margin = float(safe_joint_margin_deg)
+    margin_weight = float(joint_margin_penalty_mm_per_deg)
+    if not math.isfinite(safe_margin) or safe_margin < 0.0:
+        raise ValueError("safe_joint_margin_deg must be finite and non-negative")
+    if not math.isfinite(margin_weight) or margin_weight < 0.0:
+        raise ValueError("joint_margin_penalty_mm_per_deg must be finite and non-negative")
 
     def pose(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         center = np.asarray(values[:3], dtype=float)
@@ -209,9 +250,25 @@ def fit_ellipse_pose_to_atlas(
             minor_direction=minor,
             phase_count=count,
         )
-        distance_m, _indices = tree.query(target, k=1)
+        distance_m, indices = tree.query(target, k=1)
         distance_mm = np.asarray(distance_m, dtype=float) * 1000.0
-        return float(np.percentile(distance_mm, 95) + 0.25 * np.max(distance_mm))
+        score = float(np.percentile(distance_mm, 95) + 0.25 * np.max(distance_mm))
+        if bounds_rad is not None and margin_weight > 0.0:
+            selected_beta = atlas.beta_rad[np.asarray(indices, dtype=np.int64)]
+            margin_deg = np.rad2deg(
+                np.min(
+                    np.minimum(
+                        selected_beta - bounds_rad[:, 0][None, :],
+                        bounds_rad[:, 1][None, :] - selected_beta,
+                    ),
+                    axis=1,
+                )
+            )
+            deficit = np.maximum(safe_margin - margin_deg, 0.0)
+            score += margin_weight * float(
+                np.percentile(deficit, 95) + 0.25 * np.max(deficit)
+            )
+        return score
 
     bounds = [
         (float(xyz_min[index]), float(xyz_max[index])) for index in range(3)
@@ -239,7 +296,7 @@ def fit_ellipse_pose_to_atlas(
         major_direction=major,
         minor_direction=minor,
         target_xyz_m=target,
-        match=atlas.match_targets(target),
+        match=atlas.match_targets(target, beta_bounds_rad=bounds_rad),
         objective_mm=float(result.fun),
         optimizer_success=bool(result.success),
         optimizer_message=str(result.message),

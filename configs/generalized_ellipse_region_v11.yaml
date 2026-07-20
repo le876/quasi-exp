@@ -51,6 +51,7 @@ anchor:
   screen_candidate_limit: 41
   verify_top_count: 3
   parallel_workers: 4
+  verify_parallel_workers: 3
   center_q1_mm: [-20.0, 20.0]
   center_q2_mm: [-20.0, 20.0]
   center_normal_mm: [-10.0, 10.0]
@@ -156,6 +157,7 @@ smoke:
     screen_candidate_limit: 2
     verify_top_count: 1
     parallel_workers: 2
+    verify_parallel_workers: 1
     cuts: [0]
     directions: [forward]
   tube:

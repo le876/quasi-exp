@@ -703,6 +703,110 @@ def _run_anchor_screen_worker(task_file: Path) -> dict[str, Any]:
     return report
 
 
+def _run_anchor_verify_worker(task_file: Path) -> dict[str, Any]:
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    project_root = Path(task["project_root"]).resolve()
+    config = load_protocol_config(task["config_path"], preset=str(task["preset"]))
+    family = _family_from_payload(task["family"])
+    trial = task["trial"]
+    candidate_id = str(task["candidate_id"])
+    count = int(task["phase_count"])
+    candidate_root = Path(task["directory"])
+    environment = load_environment(
+        project_root, project_root / str(config["robot_config"])
+    )
+    atlas = _reachability_atlas(project_root, config)
+    target = family.centerline(phase_count=count)
+    primary_initial = atlas.match_targets(target).initial_beta_path_rad
+    root_count = min(8, len(atlas.xyz_m))
+    _distance, root_indices = cKDTree(atlas.xyz_m).query(target[0], k=root_count)
+    root_indices = np.atleast_1d(root_indices)
+    primary_initial[0] = atlas.beta_rad[
+        int(root_indices[int(trial["root_index"]) % len(root_indices)])
+    ]
+    primary_policy = _teacher_policy(
+        config,
+        seed=int(config["seeds"]["solver"])
+        + int(trial["policy_seed_offset"]),
+    )
+    primary_dir = candidate_root / "primary"
+    _trajectory, primary_report = _solve_centerline_artifact(
+        family=family,
+        phase_count=count,
+        environment=environment,
+        atlas=atlas,
+        policy=primary_policy,
+        config=config,
+        directory=primary_dir,
+        initial_beta=primary_initial,
+        traversal_direction=str(trial["direction"]),
+        cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
+    )
+    primary_frame = pd.read_parquet(primary_dir / "centerline.parquet")
+    repeat_dir = candidate_root / "repeat"
+    _solve_centerline_artifact(
+        family=family,
+        phase_count=count,
+        environment=environment,
+        atlas=atlas,
+        policy=_teacher_policy(config, seed=int(config["seeds"]["solver"]) + 1),
+        config=config,
+        directory=repeat_dir,
+        initial_beta=primary_initial,
+        traversal_direction=str(trial["direction"]),
+        cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
+    )
+    repeat_gap = _aligned_beta_gap(
+        primary_frame, pd.read_parquet(repeat_dir / "centerline.parquet")
+    )
+    audit_gaps = []
+    for direction in tuple(config["anchor"]["directions"]):
+        for configured_cut in tuple(int(value) for value in config["anchor"]["cuts"]):
+            cut = configured_cut % count
+            if str(direction) == "forward" and cut == 0:
+                continue
+            variant_dir = candidate_root / f"{direction}_cut{cut:04d}"
+            _solve_centerline_artifact(
+                family=family,
+                phase_count=count,
+                environment=environment,
+                atlas=atlas,
+                policy=primary_policy,
+                config=config,
+                directory=variant_dir,
+                initial_beta=primary_initial,
+                traversal_direction=str(direction),
+                cyclic_cut=cut,
+            )
+            audit_gaps.append(
+                _aligned_beta_gap(
+                    primary_frame,
+                    pd.read_parquet(variant_dir / "centerline.parquet"),
+                )["beta_gap_rms_p95_deg"]
+            )
+    reverse_cut_p95 = max(audit_gaps, default=0.0)
+    repeat_limit = float(
+        config["gates"]["repeatability"]["repeat_beta_rms_p95_deg"]
+    )
+    reverse_limit = float(
+        config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"]
+    )
+    report = {
+        "candidate_id": candidate_id,
+        "teacher_gate_pass": bool(primary_report["gate_pass"]),
+        "repeat_beta_rms_p95_deg": repeat_gap["beta_gap_rms_p95_deg"],
+        "reverse_cut_beta_rms_p95_deg": reverse_cut_p95,
+        "full_gate_pass": bool(
+            primary_report["gate_pass"]
+            and repeat_gap["beta_gap_rms_p95_deg"] <= repeat_limit
+            and reverse_cut_p95 <= reverse_limit
+        ),
+        **{key: float(value) for key, value in primary_report["metrics"].items()},
+    }
+    atomic_write_json(candidate_root / "summary.json", report)
+    return report
+
+
 def run_anchor_stage(
     *,
     config: Mapping[str, Any],
@@ -883,109 +987,39 @@ def run_anchor_stage(
     verify_ids = screen.head(int(config["anchor"]["verify_top_count"]))[
         "candidate_id"
     ].astype(str)
-    verify_rows = []
+    verify_task_files = []
     for candidate_id in verify_ids:
         family = lookup[candidate_id]
         trial = trial_metadata[candidate_id]
         count = int(config["anchor"]["verify_phase_count"])
-        target = family.centerline(phase_count=count)
-        primary_initial = atlas.match_targets(target).initial_beta_path_rad
-        root_count = min(8, len(atlas.xyz_m))
-        _distance, root_indices = cKDTree(atlas.xyz_m).query(target[0], k=root_count)
-        root_indices = np.atleast_1d(root_indices)
-        primary_initial[0] = atlas.beta_rad[
-            int(root_indices[int(trial["root_index"]) % len(root_indices)])
-        ]
-        primary_policy = _teacher_policy(
-            config,
-            seed=int(config["seeds"]["solver"])
-            + int(trial["policy_seed_offset"]),
-        )
-        primary_dir = stage / "verify" / candidate_id / "primary"
-        primary_trajectory, primary_report = _solve_centerline_artifact(
-            family=family,
-            phase_count=count,
-            environment=environment,
-            atlas=atlas,
-            policy=primary_policy,
-            config=config,
-            directory=primary_dir,
-            initial_beta=primary_initial,
-            traversal_direction=str(trial["direction"]),
-            cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
-        )
-        primary_frame = pd.read_parquet(primary_dir / "centerline.parquet")
-        audit_gaps = []
-        directions = tuple(config["anchor"]["directions"])
-        cuts = tuple(int(value) % count for value in config["anchor"]["cuts"])
-        variants = []
-        for direction in directions:
-            for cut in cuts:
-                if str(direction) == "forward" and cut == 0:
-                    continue
-                variants.append((str(direction), cut))
-        # The primary seed is repeated once independently; traversal variants
-        # are then audited against the same canonical phase ordering.
-        repeat_dir = stage / "verify" / candidate_id / "repeat"
-        _solve_centerline_artifact(
-            family=family,
-            phase_count=count,
-            environment=environment,
-            atlas=atlas,
-            policy=_teacher_policy(config, seed=int(config["seeds"]["solver"]) + 1),
-            config=config,
-            directory=repeat_dir,
-            initial_beta=primary_initial,
-            traversal_direction=str(trial["direction"]),
-            cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
-        )
-        repeat_gap = _aligned_beta_gap(
-            primary_frame, pd.read_parquet(repeat_dir / "centerline.parquet")
-        )
-        for direction, cut in variants:
-            variant_dir = (
-                stage / "verify" / candidate_id / f"{direction}_cut{cut:04d}"
-            )
-            _solve_centerline_artifact(
-                family=family,
-                phase_count=count,
-                environment=environment,
-                atlas=atlas,
-                policy=primary_policy,
-                config=config,
-                directory=variant_dir,
-                initial_beta=primary_initial,
-                traversal_direction=direction,
-                cyclic_cut=cut,
-            )
-            audit_gaps.append(
-                _aligned_beta_gap(
-                    primary_frame,
-                    pd.read_parquet(variant_dir / "centerline.parquet"),
-                )["beta_gap_rms_p95_deg"]
-            )
-        reverse_cut_p95 = max(audit_gaps, default=0.0)
-        repeat_limit = float(
-            config["gates"]["repeatability"]["repeat_beta_rms_p95_deg"]
-        )
-        reverse_limit = float(
-            config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"]
-        )
-        full_pass = bool(
-            primary_report["gate_pass"]
-            and repeat_gap["beta_gap_rms_p95_deg"] <= repeat_limit
-            and reverse_cut_p95 <= reverse_limit
-        )
-        verify_rows.append(
+        task_file = stage / "verify_tasks" / f"{candidate_id}.json"
+        atomic_write_json(
+            task_file,
             {
                 "candidate_id": candidate_id,
-                "teacher_gate_pass": bool(primary_report["gate_pass"]),
-                "repeat_beta_rms_p95_deg": repeat_gap["beta_gap_rms_p95_deg"],
-                "reverse_cut_beta_rms_p95_deg": reverse_cut_p95,
-                "full_gate_pass": full_pass,
-                **{key: float(value) for key, value in primary_report["metrics"].items()},
-            }
+                "family": _family_payload(family),
+                "trial": trial,
+                "phase_count": count,
+                "directory": str((stage / "verify" / candidate_id).resolve()),
+                "config_path": str(config["config_path"]),
+                "preset": str(config["preset"]),
+                "project_root": str(project_root),
+            },
         )
+        verify_task_files.append(task_file)
+    _run_subprocess_tasks(
+        verify_task_files,
+        worker_name="anchor-verify",
+        max_workers=int(config["anchor"]["verify_parallel_workers"]),
+    )
+    verify_rows = [
+        json.loads(
+            (stage / "verify" / candidate_id / "summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for candidate_id in verify_ids
+    ]
     verification = pd.DataFrame(verify_rows).sort_values(
         ["full_gate_pass", "joint_margin_min_deg", "residual_p95_mm"],
         ascending=[False, False, True],
@@ -3123,7 +3157,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--project-root", type=Path, default=project_root)
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--internal-worker", choices=("anchor-screen",), default=None)
+    parser.add_argument(
+        "--internal-worker",
+        choices=("anchor-screen", "anchor-verify"),
+        default=None,
+    )
     parser.add_argument("--task-file", type=Path, default=None)
     return parser.parse_args()
 
@@ -3135,6 +3173,8 @@ def main() -> None:
             raise ValueError("--internal-worker requires --task-file")
         if args.internal_worker == "anchor-screen":
             report = _run_anchor_screen_worker(args.task_file)
+        elif args.internal_worker == "anchor-verify":
+            report = _run_anchor_verify_worker(args.task_file)
         else:  # pragma: no cover - argparse owns the choices
             raise ValueError(f"unknown internal worker: {args.internal_worker}")
         print(json.dumps(report, allow_nan=False))

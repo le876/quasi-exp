@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -116,3 +117,36 @@ def test_interpolation_families_are_midpoints_of_training_families() -> None:
     assert len(interpolated) == 5
     assert all(family.metadata["construction"] == "train_family_midpoint_slerp" for family in interpolated)
     assert all(family.family_id not in set(catalog.frame["family_id"]) for family in interpolated)
+
+
+def test_near_ood_families_are_outside_frozen_center_and_plane_boxes() -> None:
+    runner = _runner_module()
+    anchor = runner.EllipseFamilySpec(
+        family_id="anchor",
+        center_m=np.zeros(3),
+        major_direction=np.asarray([1.0, 0.0, 0.0]),
+        minor_direction=np.asarray([0.0, 1.0, 0.0]),
+        major_semiaxis_m=0.5,
+        minor_semiaxis_m=0.17,
+    )
+    adversarial_inside = runner.EllipseFamilySpec(
+        family_id="inside",
+        center_m=np.asarray([-0.01, 0.01, 0.005]),
+        major_direction=np.asarray([1.0, 0.0, 0.0]),
+        minor_direction=np.asarray([0.0, 1.0, 0.0]),
+        major_semiaxis_m=0.48,
+        minor_semiaxis_m=0.16,
+    )
+
+    center_ood = runner._category_families(
+        adversarial_inside, category="center_ood", domain_anchor=anchor
+    )
+    plane_ood = runner._category_families(
+        adversarial_inside, category="plane_ood", domain_anchor=anchor
+    )
+
+    assert np.dot(center_ood.center_m - anchor.center_m, anchor.major_direction) > 0.01
+    plane_angle_deg = np.rad2deg(
+        np.arccos(np.clip(np.dot(plane_ood.plane_normal, anchor.plane_normal), -1.0, 1.0))
+    )
+    assert plane_angle_deg > 3.0

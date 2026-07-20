@@ -53,26 +53,27 @@ def finalize_experiment(
             raise FileNotFoundError(str(relative))
         payload = json.loads(path.read_text(encoding="utf-8"))
         gate_pass = require_boolean_gate_tree(payload)
-        frozen_artifacts = payload.get("artifact_sha256", {})
-        if frozen_artifacts:
-            if not isinstance(frozen_artifacts, dict):
-                raise TypeError(f"gate artifact_sha256 must be a mapping: {relative}")
-            expected_paths = set(str(value) for value in frozen_artifacts)
-            actual_paths = {
-                candidate.relative_to(path.parent).as_posix()
-                for candidate in path.parent.rglob("*")
-                if candidate.is_file() and candidate.resolve() != path.resolve()
-            }
-            if actual_paths != expected_paths:
+        if "artifact_sha256" not in payload:
+            raise KeyError(f"gate lacks artifact_sha256 inventory: {relative}")
+        frozen_artifacts = payload["artifact_sha256"]
+        if not isinstance(frozen_artifacts, dict):
+            raise TypeError(f"gate artifact_sha256 must be a mapping: {relative}")
+        expected_paths = set(str(value) for value in frozen_artifacts)
+        actual_paths = {
+            candidate.relative_to(path.parent).as_posix()
+            for candidate in path.parent.rglob("*")
+            if candidate.is_file() and candidate.resolve() != path.resolve()
+        }
+        if actual_paths != expected_paths:
+            raise RuntimeError(
+                f"stage artifact hash inventory changed after gate: {relative}"
+            )
+        for artifact_relative, expected_sha in frozen_artifacts.items():
+            artifact = (path.parent / str(artifact_relative)).resolve()
+            if path.parent not in artifact.parents or _sha256(artifact) != str(expected_sha):
                 raise RuntimeError(
-                    f"stage artifact hash inventory changed after gate: {relative}"
+                    f"stage artifact hash changed after gate: {artifact_relative}"
                 )
-            for artifact_relative, expected_sha in frozen_artifacts.items():
-                artifact = (path.parent / str(artifact_relative)).resolve()
-                if path.parent not in artifact.parents or _sha256(artifact) != str(expected_sha):
-                    raise RuntimeError(
-                        f"stage artifact hash changed after gate: {artifact_relative}"
-                    )
         gates.append({"path": Path(relative).as_posix(), "gate_pass": gate_pass})
     if not all(row["gate_pass"] for row in gates):
         raise RuntimeError("cannot finalize an experiment with a failed hard gate")

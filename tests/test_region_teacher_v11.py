@@ -206,3 +206,37 @@ def test_surface_neighbor_anchor_is_part_of_whole_trajectory_objective() -> None
     assert trajectory.success
     assert np.mean(np.abs(trajectory.beta_rad[:, 3] - target[:, 0])) < 1.0e-3
     assert trajectory.provenance["surface_neighbor_coupled"] is True
+
+
+def test_surface_solver_honors_independent_phase_offset() -> None:
+    family = _family()
+    cross = TubeCrossSection.master(seed=7).prefix(9)
+    offset = np.pi / 12.0
+    policy = TeacherPolicy(
+        variant=TeacherVariant.T1,
+        candidate_budget=1,
+        tracking_tolerance_mm=0.01,
+        max_corrector_iterations=20,
+    )
+
+    surface = CanonicalRegionTeacher(_AffineEnvironment()).solve_surface(
+        family=family,
+        cross_section=cross,
+        phase_count=12,
+        radial_radius_mm=0.5,
+        plane_radius_mm=0.5,
+        policy=policy,
+        root_beta=np.zeros(6),
+        phase_offset_rad=offset,
+        sweep_directions=("outward",),
+    )
+
+    expected = family.tube_targets(
+        phase_count=12,
+        normalized_offsets=cross.points,
+        radial_radius_mm=0.5,
+        plane_radius_mm=0.5,
+        phase_offset_rad=offset,
+    )
+    np.testing.assert_allclose(surface.target_xyz_m, expected)
+    assert surface.provenance["phase_offset_rad"] == offset

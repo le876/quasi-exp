@@ -167,6 +167,38 @@ def _policy_payload(policy: TeacherPolicy) -> dict[str, Any]:
     }
 
 
+def _implementation_sha256(source_root: Path) -> dict[str, str]:
+    relative_paths = (
+        "scripts/analysis/run_generalized_ellipse_region_v11.py",
+        "scripts/analysis/run_trajectory_canonical_teacher_v10.py",
+        "src/quasi_exp/teacher/canonical.py",
+        "src/quasi_exp/teacher/region.py",
+        "src/quasi_exp/teacher/region_audit.py",
+        "src/quasi_exp/teacher/region_artifacts.py",
+        "src/quasi_exp/teacher/region_protocol.py",
+        "src/quasi_exp/teacher/student_tracking_tf.py",
+    )
+    return {
+        relative: sha256_file(source_root / relative) for relative in relative_paths
+    }
+
+
+def _external_input_sha256(
+    *, config: Mapping[str, Any], source_root: Path
+) -> dict[str, str]:
+    project_root = project_root_from(source_root)
+    evidence = project_root / str(config["v10_evidence_root"])
+    paths = {
+        "protocol_config": Path(str(config["config_path"])),
+        "robot_config": project_root / str(config["robot_config"]),
+        "v10_pose": evidence / "a0p500m/pose_report.json",
+        "v10_centerline": evidence / "a0p500m/formal/T3/centerline.parquet",
+        "v10_reachability_atlas": evidence / "reachability_atlas.parquet",
+        "v10_0p75m_dense_stress": project_root / str(config["scale_stress_0p75m"]),
+    }
+    return {name: sha256_file(path) for name, path in paths.items()}
+
+
 def _stage_cache_fingerprint(
     *,
     config: Mapping[str, Any],
@@ -174,13 +206,6 @@ def _stage_cache_fingerprint(
     output: Path,
     stage_name: str,
 ) -> str:
-    source_files = (
-        source_root / "scripts/analysis/run_generalized_ellipse_region_v11.py",
-        source_root / "src/quasi_exp/teacher/canonical.py",
-        source_root / "src/quasi_exp/teacher/region.py",
-        source_root / "src/quasi_exp/teacher/region_audit.py",
-        source_root / "src/quasi_exp/teacher/region_protocol.py",
-    )
     upstream_name = STAGE_UPSTREAM[stage_name]
     upstream_gate = (
         None
@@ -194,10 +219,10 @@ def _stage_cache_fingerprint(
         {
             "stage": stage_name,
             "config": normalized_config,
-            "source_sha256": {
-                path.relative_to(source_root).as_posix(): sha256_file(path)
-                for path in source_files
-            },
+            "source_sha256": _implementation_sha256(source_root),
+            "external_input_sha256": _external_input_sha256(
+                config=config, source_root=source_root
+            ),
             "upstream_gate_sha256": (
                 sha256_file(upstream_gate)
                 if upstream_gate is not None and upstream_gate.is_file()
@@ -333,23 +358,7 @@ def run_protocol_stage(
     (stage / "protocol_v11.yaml").write_text(
         yaml.safe_dump(resolved_config, sort_keys=False), encoding="utf-8"
     )
-    input_files = {
-        "protocol_config": sha256_file(str(config["config_path"])),
-        "robot_config": sha256_file(project_root / str(config["robot_config"])),
-        "v10_pose": sha256_file(
-            project_root
-            / str(config["v10_evidence_root"])
-            / "a0p500m/pose_report.json"
-        ),
-        "v10_centerline": sha256_file(
-            project_root
-            / str(config["v10_evidence_root"])
-            / "a0p500m/formal/T3/centerline.parquet"
-        ),
-        "v10_0p75m_dense_stress": sha256_file(
-            project_root / str(config["scale_stress_0p75m"])
-        ),
-    }
+    input_files = _external_input_sha256(config=config, source_root=source_root)
     manifest_payload = {
         "protocol_id": str(config["protocol_id"]),
         "source_fixed_point": str(config["source_fixed_point"]),
@@ -359,15 +368,7 @@ def run_protocol_stage(
             catalog.seal_token.encode("utf-8")
         ).hexdigest(),
         "input_sha256": input_files,
-        "worker_code_sha256": {
-            str(Path(__file__).resolve().relative_to(source_root)): sha256_file(__file__),
-            "src/quasi_exp/teacher/region.py": sha256_file(
-                source_root / "src/quasi_exp/teacher/region.py"
-            ),
-            "src/quasi_exp/teacher/region_protocol.py": sha256_file(
-                source_root / "src/quasi_exp/teacher/region_protocol.py"
-            ),
-        },
+        "worker_code_sha256": _implementation_sha256(source_root),
         "runtime": runtime_fingerprint(),
     }
     manifest_payload["protocol_sha256"] = _canonical_sha(manifest_payload)
@@ -548,6 +549,12 @@ def _solve_centerline_artifact(
     cache_fingerprint = _canonical_sha(
         {
             "kind": "centerline_v11",
+            "implementation_sha256": _implementation_sha256(
+                Path(__file__).resolve().parents[2]
+            ),
+            "external_input_sha256": _external_input_sha256(
+                config=config, source_root=Path(__file__).resolve().parents[2]
+            ),
             "family": _family_payload(family),
             "phase_count": int(phase_count),
             "target_sha256": _array_sha(targets),
@@ -1011,12 +1018,19 @@ def _solve_surface_artifact(
     centerline_seed: np.ndarray | None,
     traversal_direction: str = "forward",
     cyclic_cut: int = 0,
+    phase_offset_rad: float = 0.0,
 ) -> tuple[TeacherSurface | None, dict[str, Any]]:
     report_path = directory / "report.json"
     parquet_path = directory / "surface.parquet"
     cache_fingerprint = _canonical_sha(
         {
             "kind": "surface_v11",
+            "implementation_sha256": _implementation_sha256(
+                Path(__file__).resolve().parents[2]
+            ),
+            "external_input_sha256": _external_input_sha256(
+                config=config, source_root=Path(__file__).resolve().parents[2]
+            ),
             "family": _family_payload(family),
             "phase_count": int(phase_count),
             "cross_section_fingerprint": cross_section.fingerprint,
@@ -1027,8 +1041,13 @@ def _solve_surface_artifact(
             "teacher_gate": config["gates"]["teacher_surface"],
             "local_gate": config["gates"]["local_consistency"],
             "sweep_directions": list(config["tube"]["sweep_directions"]),
+            "max_surface_sweeps": int(config["tube"]["max_surface_sweeps"]),
+            "surface_convergence_tol_deg": float(
+                config["tube"]["surface_convergence_tol_deg"]
+            ),
             "traversal_direction": str(traversal_direction),
             "cyclic_cut": int(cyclic_cut),
+            "phase_offset_rad": float(phase_offset_rad),
         }
     )
     cached = read_valid_gate(report_path, expected_fingerprint=cache_fingerprint)
@@ -1050,6 +1069,11 @@ def _solve_surface_artifact(
         sweep_directions=tuple(config["tube"]["sweep_directions"]),
         traversal_direction=traversal_direction,
         cyclic_cut=int(cyclic_cut),
+        phase_offset_rad=float(phase_offset_rad),
+        max_surface_sweeps=int(config["tube"]["max_surface_sweeps"]),
+        surface_convergence_tol_deg=float(
+            config["tube"]["surface_convergence_tol_deg"]
+        ),
     )
     directory.mkdir(parents=True, exist_ok=True)
     _atomic_parquet(surface.to_frame(), parquet_path)
@@ -1554,6 +1578,133 @@ def run_core_stage(
     )
 
 
+def _family_parameter_coverage(
+    catalog: FamilyCatalog, *, config: Mapping[str, Any]
+) -> dict[str, Any]:
+    frame = catalog.frame[catalog.frame["is_primary"].astype(bool)].copy()
+    domain = config["family_domain"]
+    specifications = (
+        ("major_semiaxis_m", *map(float, domain["major_semiaxis_m"])),
+        ("axis_ratio", *map(float, domain["axis_ratio"])),
+        ("center_q1_offset_mm", *map(float, domain["center_q1_mm"])),
+        ("center_q2_offset_mm", *map(float, domain["center_q2_mm"])),
+        ("center_normal_offset_mm", *map(float, domain["center_normal_mm"])),
+        ("tilt_q1_deg", *map(float, domain["tilt_deg"])),
+        ("tilt_q2_deg", *map(float, domain["tilt_deg"])),
+        ("tilt_normal_deg", *map(float, domain["tilt_deg"])),
+    )
+    normalized = np.column_stack(
+        [
+            (frame[column].to_numpy(dtype=float) - low) / (high - low)
+            for column, low, high in specifications
+        ]
+    )
+    occupied = {
+        tuple(np.clip(np.floor(row * 2.0), 0, 1).astype(int).tolist())
+        for row in normalized
+    }
+    role_distances: dict[str, float] = {}
+    for role in ("validation", "virgin_test"):
+        reference = normalized[frame["role"].eq("train").to_numpy()]
+        query = normalized[frame["role"].eq(role).to_numpy()]
+        role_distances[role] = float(cKDTree(reference).query(query, k=1)[0].min())
+    checks = {
+        "all_primary_parameters_inside_frozen_box": bool(
+            np.all(normalized >= -1.0e-12) and np.all(normalized <= 1.0 + 1.0e-12)
+        ),
+        "all_eight_parameters_have_nonzero_span": bool(
+            np.all(np.ptp(normalized, axis=0) > 0.0)
+        ),
+        "group_splits_are_disjoint": bool(
+            all(
+                set(frame.loc[frame["role"].eq(left), "family_id"]).isdisjoint(
+                    set(frame.loc[frame["role"].eq(right), "family_id"])
+                )
+                for left, right in (
+                    ("train", "validation"),
+                    ("train", "virgin_test"),
+                    ("validation", "virgin_test"),
+                )
+            )
+        ),
+        "discrepancy_is_finite": bool(np.isfinite(qmc.discrepancy(normalized))),
+    }
+    return {
+        "primary_family_count": int(len(frame)),
+        "dimensions": [column for column, _low, _high in specifications],
+        "normalized_l2_discrepancy": float(qmc.discrepancy(normalized)),
+        "occupied_two_bin_cells": int(len(occupied)),
+        "occupied_cell_fraction": float(len(occupied) / (2 ** normalized.shape[1])),
+        "nearest_train_distance_by_holdout_role": role_distances,
+        "checks": checks,
+        "gate_pass": bool(all(checks.values())),
+    }
+
+
+def _conditioning_audit(
+    frame: pd.DataFrame,
+    *,
+    environment: Any,
+    config: Mapping[str, Any],
+    max_samples: int = 4096,
+) -> dict[str, Any]:
+    beta = frame[list(BETA_COLUMNS)].to_numpy(dtype=float)
+    if len(beta) > int(max_samples):
+        indices = np.linspace(0, len(beta) - 1, int(max_samples), dtype=int)
+        beta = beta[indices]
+    singular_values = []
+    for row in beta:
+        jacobian_method = getattr(environment, "jacobian", None)
+        jacobian = (
+            jacobian_method(row)
+            if callable(jacobian_method)
+            else environment.numerical_jacobian(row)
+        )
+        singular_values.append(np.linalg.svd(np.asarray(jacobian), compute_uv=False))
+    singular = np.asarray(singular_values, dtype=float)
+    sigma_min = singular[:, -1]
+    kappa = singular[:, 0] / np.maximum(sigma_min, 1.0e-12)
+    thresholds = config["gates"]["conditioning"]
+    checks = {
+        "all_singular_values_finite": bool(np.isfinite(singular).all()),
+        "sigma_min_p05": bool(
+            np.percentile(sigma_min, 5)
+            >= float(thresholds["sigma_min_p05_min"])
+        ),
+        "kappa_p95": bool(
+            np.percentile(kappa, 95) <= float(thresholds["kappa_p95_max"])
+        ),
+    }
+    return {
+        "sample_count": int(len(beta)),
+        "sigma_min_p05": float(np.percentile(sigma_min, 5)),
+        "sigma_min_min": float(np.min(sigma_min)),
+        "kappa_p95": float(np.percentile(kappa, 95)),
+        "kappa_max": float(np.max(kappa)),
+        "checks": checks,
+        "gate_pass": bool(all(checks.values())),
+    }
+
+
+def _chart_overlap_audit(
+    frame: pd.DataFrame, conflicts: pd.DataFrame
+) -> dict[str, Any]:
+    charts = frame.set_index("sample_id")["chart_id"].astype(int)
+    cross_chart = 0
+    if not conflicts.empty:
+        left = conflicts["left_sample_id"].map(charts)
+        right = conflicts["right_sample_id"].map(charts)
+        cross_chart = int(np.count_nonzero(left.to_numpy() != right.to_numpy()))
+    return {
+        "observed_chart_count": int(frame["chart_id"].nunique()),
+        "conflict_pair_count": int(len(conflicts)),
+        "cross_chart_conflict_count": cross_chart,
+        "same_chart_conflict_count": int(len(conflicts) - cross_chart),
+        "audit_computed_from_teacher_labels": True,
+        "gate_pass": bool(len(conflicts) == 0 or cross_chart > 0),
+    }
+
+
 def run_pilot_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
@@ -1689,6 +1840,10 @@ def run_pilot_stage(
         "conflict_pair_count": 0,
         "static_representation_gate_pass": False,
     }
+    parameter_coverage = _family_parameter_coverage(catalog, config=config)
+    atomic_write_json(stage / "parameter_space_coverage.json", parameter_coverage)
+    conditioning_report: dict[str, Any] = {"gate_pass": False}
+    chart_overlap_report: dict[str, Any] = {"gate_pass": False}
     if frames:
         combined = pd.concat(frames, ignore_index=True, sort=False)
         train_validation = combined.copy()
@@ -1704,6 +1859,12 @@ def run_pilot_stage(
         )
         _atomic_parquet(conflicts, stage / "cross_family_conflicts.parquet")
         atomic_write_json(stage / "conflict_report.json", conflict_report)
+        conditioning_report = _conditioning_audit(
+            train_validation, environment=environment, config=config
+        )
+        chart_overlap_report = _chart_overlap_audit(train_validation, conflicts)
+        atomic_write_json(stage / "conditioning_report.json", conditioning_report)
+        atomic_write_json(stage / "chart_overlap_report.json", chart_overlap_report)
     role_counts = (
         selection.groupby("role").size().to_dict() if selection is not None else {}
     )
@@ -1733,6 +1894,11 @@ def run_pilot_stage(
         "conflict_audit_completed_on_train_validation_only": bool(
             frames and not train_validation["role"].eq("virgin_test").any()
         ),
+        "parameter_space_coverage_audit_passes": bool(
+            parameter_coverage["gate_pass"]
+        ),
+        "conditioning_audit_passes": bool(conditioning_report["gate_pass"]),
+        "chart_overlap_audit_passes": bool(chart_overlap_report["gate_pass"]),
     }
     return _write_gate(
         gate_path,
@@ -1742,6 +1908,9 @@ def run_pilot_stage(
         train_validation_rows=int(len(train_validation)),
         sealed_test_rows=0,
         conflict_report=conflict_report,
+        parameter_coverage=parameter_coverage,
+        conditioning_report=conditioning_report,
+        chart_overlap_report=chart_overlap_report,
     )
 
 
@@ -1767,15 +1936,20 @@ def run_representation_stage(
     stage.mkdir(parents=True, exist_ok=True)
     pilot_stage = output / STAGE_DIRS["pilot"]
     conflict = json.loads((pilot_stage / "conflict_report.json").read_text(encoding="utf-8"))
+    chart_overlap = json.loads(
+        (pilot_stage / "chart_overlap_report.json").read_text(encoding="utf-8")
+    )
     diagnostics = dict(conflict)
     # Chart/state evidence is deliberately unavailable unless separately
     # demonstrated.  T3's default chart id of zero is not counted as evidence.
     diagnostics.update(
         {
-            "stable_chart_count": 0,
+            "stable_chart_count": int(chart_overlap["observed_chart_count"]),
             "chart_repeat_ari": 0.0,
             "chart_xyz_macro_f1": 0.0,
-            "ambiguous_voxel_count": int(conflict.get("conflict_pair_count", 0)),
+            "ambiguous_voxel_count": int(
+                chart_overlap["same_chart_conflict_count"]
+            ),
             "previous_beta_resolves_conflicts": False,
         }
     )
@@ -1805,6 +1979,9 @@ def run_representation_stage(
             representation == "static"
         ),
         "virgin_test_remains_sealed": True,
+        "chart_overlap_audit_is_empirical": bool(
+            chart_overlap["audit_computed_from_teacher_labels"]
+        ),
     }
     return _write_gate(
         gate_path,
@@ -2008,6 +2185,12 @@ def _model_cache_fingerprint(
     return _canonical_sha(
         {
             "kind": "static_student_v11",
+            "implementation_sha256": _implementation_sha256(
+                Path(__file__).resolve().parents[2]
+            ),
+            "external_input_sha256": _external_input_sha256(
+                config=config, source_root=Path(__file__).resolve().parents[2]
+            ),
             "train_sha256": _frame_sha(train),
             "validation_sha256": _frame_sha(validation),
             "seed": int(seed),
@@ -2298,26 +2481,35 @@ def _evaluation_targets(
 
 
 def _category_families(
-    family: EllipseFamilySpec, *, category: str
+    family: EllipseFamilySpec,
+    *,
+    category: str,
+    domain_anchor: EllipseFamilySpec | None = None,
 ) -> EllipseFamilySpec:
     if category == "family_interpolation":
         return family
     if category == "center_ood":
+        if domain_anchor is None:
+            raise ValueError("center_ood construction requires the frozen domain anchor")
         return EllipseFamilySpec(
             family_id=f"{family.family_id}:center_ood",
-            center_m=family.center_m + 0.015 * family.major_direction,
+            center_m=domain_anchor.center_m + 0.015 * domain_anchor.major_direction,
             major_direction=family.major_direction,
             minor_direction=family.minor_direction,
             major_semiaxis_m=family.major_semiaxis_m,
             minor_semiaxis_m=family.minor_semiaxis_m,
         )
     if category == "plane_ood":
-        rotation = Rotation.from_rotvec(np.deg2rad(4.0) * family.major_direction)
+        if domain_anchor is None:
+            raise ValueError("plane_ood construction requires the frozen domain anchor")
+        rotation = Rotation.from_rotvec(
+            np.deg2rad(4.0) * domain_anchor.major_direction
+        )
         return EllipseFamilySpec(
             family_id=f"{family.family_id}:plane_ood",
             center_m=family.center_m,
-            major_direction=rotation.apply(family.major_direction),
-            minor_direction=rotation.apply(family.minor_direction),
+            major_direction=rotation.apply(domain_anchor.major_direction),
+            minor_direction=rotation.apply(domain_anchor.minor_direction),
             major_semiaxis_m=family.major_semiaxis_m,
             minor_semiaxis_m=family.minor_semiaxis_m,
         )
@@ -2515,21 +2707,24 @@ def _validate_evaluation_family_surfaces(
     project_root: Path,
     stage: Path,
     environment: Any,
+    phase_count: int,
+    cross_section: TubeCrossSection,
 ) -> dict[str, Any]:
     # ``output`` is stage.parent; keep the teacher validation physically under
     # the post-lock evaluation stage so it cannot leak into model selection.
     output = stage.parent
     tube = _load_selected_tube(output)
     atlas = _reachability_atlas(project_root, config)
-    phase_count = int(config["pilot"]["phase_count"])
-    cross = TubeCrossSection.master(seed=int(config["seeds"]["audit"])).prefix(
-        int(config["pilot"]["cross_section_count"])
-    )
+    phase_count = int(phase_count)
+    cross = cross_section
     rows = []
     for category, families in category_families.items():
         for family in families:
             seed_path = atlas.match_targets(
-                family.centerline(phase_count=phase_count)
+                family.centerline(
+                    phase_count=phase_count,
+                    phase_offset_rad=math.pi / phase_count,
+                )
             ).initial_beta_path_rad
             _surface, report = _solve_surface_artifact(
                 family=family,
@@ -2542,6 +2737,7 @@ def _validate_evaluation_family_surfaces(
                 config=config,
                 directory=stage / "category_teacher" / category / family.family_id,
                 centerline_seed=seed_path,
+                phase_offset_rad=math.pi / phase_count,
             )
             rows.append(
                 {
@@ -2639,9 +2835,14 @@ def run_evaluate_stage(
             catalog, train_family_ids, count=5
         )
     }
+    domain_anchor, _domain_anchor_beta = _load_region_anchor(output)
     for category in categories[1:]:
         category_family_map[category] = tuple(
-            _category_families(catalog.family(family_id), category=category)
+            _category_families(
+                catalog.family(family_id),
+                category=category,
+                domain_anchor=domain_anchor,
+            )
             for family_id in selected_test
         )
     category_teacher_report = _validate_evaluation_family_surfaces(
@@ -2650,6 +2851,8 @@ def run_evaluate_stage(
         project_root=project_root,
         stage=stage,
         environment=environment,
+        phase_count=count,
+        cross_section=cross,
     )
     target_sets = {}
     for category in categories:

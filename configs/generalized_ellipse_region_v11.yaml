@@ -72,6 +72,8 @@ tube:
   dense_cross_section_count: 49
   audit_cross_section_count: 25
   sweep_directions: [outward, inward]
+  max_surface_sweeps: 4
+  surface_convergence_tol_deg: 0.05
 
 core:
   phase_count: 720
@@ -100,12 +102,17 @@ gates:
     acceleration_beta_rms_p95_deg: 0.5
     seam_beta_rms_max_deg: 1.0
     surface_edge_beta_rms_p95_deg: 1.0
+    surface_laplacian_beta_rms_p95_deg: 1.0
+    surface_block_update_rms_max_deg: 0.05
   repeatability:
     repeat_beta_rms_p95_deg: 0.2
     reverse_cut_beta_rms_p95_deg: 0.5
   local_consistency:
     gap_5mm_p95_deg: 0.5
     gap_10mm_p95_deg: 1.0
+  conditioning:
+    sigma_min_p05_min: 0.05
+    kappa_p95_max: 100.0
   conflicts:
     xyz_radius_mm: 2.0
     beta_gap_threshold_deg: 1.0
@@ -157,6 +164,8 @@ smoke:
     dense_cross_section_count: 9
     audit_cross_section_count: 9
     sweep_directions: [outward]
+    max_surface_sweeps: 1
+    surface_convergence_tol_deg: 0.5
   core:
     phase_count: 12
     cross_section_count: 9

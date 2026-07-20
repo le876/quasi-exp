@@ -84,6 +84,8 @@ def test_surface_gate_is_strict_and_exposes_raw_boolean_checks() -> None:
         "acceleration_beta_rms_p95_deg": 0.4,
         "seam_beta_rms_max_deg": 0.8,
         "surface_edge_beta_rms_p95_deg": 0.9,
+        "surface_laplacian_beta_rms_p95_deg": 0.8,
+        "surface_block_update_rms_max_deg": 0.04,
     }
 
     report = evaluate_teacher_surface_gate(metrics)

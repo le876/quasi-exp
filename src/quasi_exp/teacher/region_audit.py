@@ -23,6 +23,8 @@ DEFAULT_SURFACE_THRESHOLDS: Mapping[str, float] = {
     "acceleration_beta_rms_p95_deg": 0.5,
     "seam_beta_rms_max_deg": 1.0,
     "surface_edge_beta_rms_p95_deg": 1.0,
+    "surface_laplacian_beta_rms_p95_deg": 1.0,
+    "surface_block_update_rms_max_deg": 0.05,
 }
 
 
@@ -74,6 +76,14 @@ def evaluate_teacher_surface_gate(
         "normal_smoothness": bool(
             float(metrics["surface_edge_beta_rms_p95_deg"])
             <= float(thresholds["surface_edge_beta_rms_p95_deg"])
+        ),
+        "normal_laplacian_smoothness": bool(
+            float(metrics["surface_laplacian_beta_rms_p95_deg"])
+            <= float(thresholds["surface_laplacian_beta_rms_p95_deg"])
+        ),
+        "whole_surface_block_convergence": bool(
+            float(metrics["surface_block_update_rms_max_deg"])
+            <= float(thresholds["surface_block_update_rms_max_deg"])
         ),
     }
     return {

@@ -15,11 +15,19 @@ from quasi_exp.teacher.region_artifacts import (
 def test_final_verifier_is_last_writer_and_detects_later_artifact_mutation(tmp_path: Path) -> None:
     stage = tmp_path / "00_protocol"
     stage.mkdir()
+    (stage / "data.bin").write_bytes(b"evidence")
     (stage / "gate.json").write_text(
-        json.dumps({"gate_pass": True, "checks": {"frozen": True}}),
+        json.dumps(
+            {
+                "gate_pass": True,
+                "checks": {"frozen": True},
+                "artifact_sha256": {
+                    "data.bin": hashlib.sha256(b"evidence").hexdigest()
+                },
+            }
+        ),
         encoding="utf-8",
     )
-    (stage / "data.bin").write_bytes(b"evidence")
 
     verification = finalize_experiment(
         tmp_path,
@@ -60,4 +68,26 @@ def test_finalizer_rejects_stage_artifact_that_changed_after_its_gate(tmp_path: 
         finalize_experiment(
             tmp_path,
             required_gate_files=(Path("01_anchor/gate.json"),),
+        )
+
+
+def test_finalizer_treats_empty_artifact_inventory_as_exact(tmp_path: Path) -> None:
+    stage = tmp_path / "00_protocol"
+    stage.mkdir()
+    (stage / "gate.json").write_text(
+        json.dumps(
+            {
+                "gate_pass": True,
+                "checks": {"frozen": True},
+                "artifact_sha256": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stage / "unexpected.bin").write_bytes(b"not frozen")
+
+    with pytest.raises(RuntimeError, match="inventory changed"):
+        finalize_experiment(
+            tmp_path,
+            required_gate_files=(Path("00_protocol/gate.json"),),
         )

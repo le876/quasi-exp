@@ -356,6 +356,9 @@ class CanonicalRegionTeacher:
         sweep_directions: Sequence[str] = ("outward", "inward"),
         traversal_direction: str = "forward",
         cyclic_cut: int = 0,
+        phase_offset_rad: float = 0.0,
+        max_surface_sweeps: int = 4,
+        surface_convergence_tol_deg: float = 0.05,
     ) -> TeacherSurface:
         count = int(phase_count)
         target = family.tube_targets(
@@ -363,10 +366,13 @@ class CanonicalRegionTeacher:
             normalized_offsets=cross_section.points,
             radial_radius_mm=float(radial_radius_mm),
             plane_radius_mm=float(plane_radius_mm),
+            phase_offset_rad=float(phase_offset_rad),
         )
         directions = tuple(str(value).lower() for value in sweep_directions)
         if not directions or any(value not in {"outward", "inward"} for value in directions):
             raise ValueError("sweep_directions must contain outward and/or inward")
+        if int(max_surface_sweeps) < 1 or float(surface_convergence_tol_deg) <= 0.0:
+            raise ValueError("surface sweep count/tolerance must be positive")
         node_count = len(cross_section.points)
         beta = np.empty((node_count, count, 6), dtype=float)
         theta = np.empty((node_count, count, 30), dtype=float)
@@ -452,11 +458,29 @@ class CanonicalRegionTeacher:
         # previously solved geometric neighbour or the centreline seed.
         for node_index in radius_order:
             solve_node(int(node_index))
-        # Block-coordinate sweeps revisit curves with Delaunay-neighbour means.
-        for direction in directions:
-            order = radius_order if direction == "outward" else radius_order[::-1]
-            for node_index in order:
-                solve_node(int(node_index))
+        # Block-coordinate sweeps revisit curves with Delaunay-neighbour means
+        # until the full phase×normal field reaches a fixed point.  This is a
+        # sparse Gauss-Seidel solve of the coupled surface objective: phase
+        # derivatives are optimized inside each trajectory block, while graph
+        # edge and graph-Laplacian terms couple the two normal dimensions.
+        sweep_history = []
+        converged = False
+        for sweep_index in range(int(max_surface_sweeps)):
+            before = beta.copy()
+            for direction in directions:
+                order = radius_order if direction == "outward" else radius_order[::-1]
+                for node_index in order:
+                    solve_node(int(node_index))
+            update_deg = np.rad2deg(
+                np.sqrt(np.mean(np.square(beta - before), axis=2))
+            )
+            update_max = float(np.max(update_deg))
+            sweep_history.append(
+                {"sweep": int(sweep_index + 1), "update_rms_max_deg": update_max}
+            )
+            if update_max <= float(surface_convergence_tol_deg):
+                converged = True
+                break
 
         residual_mm = np.linalg.norm(achieved - target, axis=2) * 1000.0
         velocity = np.roll(beta, -1, axis=1) - beta
@@ -470,6 +494,15 @@ class CanonicalRegionTeacher:
             np.sqrt(np.mean(np.square(acceleration), axis=2))
         )
         edge_deg = _edge_beta_rms_deg(beta, cross_section.edges)
+        laplacian_deg = []
+        for node_index in range(node_count):
+            if not neighbours[node_index]:
+                continue
+            laplacian = beta[node_index] - np.mean(beta[neighbours[node_index]], axis=0)
+            laplacian_deg.extend(
+                np.rad2deg(np.sqrt(np.mean(np.square(laplacian), axis=1))).tolist()
+            )
+        laplacian_array = np.asarray(laplacian_deg or [0.0], dtype=float)
         bounds = np.asarray(self._environment.bounds, dtype=float).reshape(6, 2)
         margin_deg = np.rad2deg(
             np.minimum(
@@ -490,6 +523,13 @@ class CanonicalRegionTeacher:
             "seam_beta_rms_max_deg": float(np.max(velocity_deg[:, -1])),
             "surface_edge_beta_rms_p95_deg": float(np.percentile(edge_deg, 95)),
             "surface_edge_beta_rms_max_deg": float(np.max(edge_deg)),
+            "surface_laplacian_beta_rms_p95_deg": float(
+                np.percentile(laplacian_array, 95)
+            ),
+            "surface_block_update_rms_max_deg": float(
+                sweep_history[-1]["update_rms_max_deg"]
+            ),
+            "surface_block_converged": float(converged),
         }
         return TeacherSurface(
             family=family,
@@ -512,5 +552,11 @@ class CanonicalRegionTeacher:
                 "sweep_directions": list(directions),
                 "traversal_direction": str(traversal_direction),
                 "cyclic_cut": int(cyclic_cut) % count,
+                "phase_offset_rad": float(phase_offset_rad),
+                "surface_objective": (
+                    "phase_velocity_acceleration_plus_delaunay_edge_laplacian"
+                ),
+                "surface_sweep_history": sweep_history,
+                "surface_convergence_tol_deg": float(surface_convergence_tol_deg),
             },
         )

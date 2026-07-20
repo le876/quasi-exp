@@ -23,9 +23,16 @@ from quasi_exp.teacher.canonical import (
     TeacherVariant,
     TrajectorySpec,
 )
-from quasi_exp.teacher.dataset import evaluate_centerline_gate, trajectory_frame
+from quasi_exp.teacher.dataset import (
+    evaluate_centerline_gate,
+    evaluate_tube_gate,
+    measured_multi_branch_ratio,
+    trajectory_frame,
+)
 from quasi_exp.teacher.experiment import ExperimentManifest, atomic_write_json
 from quasi_exp.teacher.large_scale import (
+    REGISTERED_MAJOR_AXIS_GAIN,
+    REGISTERED_MINOR_TO_MAJOR_RATIO,
     EllipseChallenge,
     ReachabilityAtlas,
     assess_chain_length_necessity,
@@ -34,6 +41,7 @@ from quasi_exp.teacher.large_scale import (
 
 from run_trajectory_canonical_teacher_v10 import (
     load_environment,
+    normal_frame,
     project_root_from,
     runtime_fingerprint,
 )
@@ -96,6 +104,13 @@ def _teacher_policy(config: dict[str, Any], variant: TeacherVariant, seed: int) 
             lambda_posture=0.01,
             lambda_conditioning=0.0,
         )
+    elif variant == TeacherVariant.T3:
+        weights = dict(
+            lambda_velocity=5.0,
+            lambda_acceleration=0.5,
+            lambda_posture=0.1,
+            lambda_conditioning=0.05,
+        )
     elif variant == TeacherVariant.T4:
         weights = dict(
             lambda_velocity=10.0,
@@ -120,6 +135,156 @@ def _challenge_slug(major_semiaxis_m: float) -> str:
     return f"a{major_semiaxis_m:0.3f}m".replace(".", "p")
 
 
+def _solve_centerline(
+    *,
+    teacher: CanonicalTeacher,
+    environment: Any,
+    config: dict[str, Any],
+    variant: TeacherVariant,
+    challenge: EllipseChallenge,
+    targets: np.ndarray,
+    initial_beta_path: np.ndarray,
+    output: Path,
+) -> tuple[Any, Any | None, dict[str, Any]]:
+    policy = _teacher_policy(config, variant, int(config["solver_seed"]))
+    spec = TrajectorySpec(
+        trajectory_id=f"large-scale@a{challenge.major_semiaxis_m:g}m",
+        family_id=f"optimized_a{challenge.major_semiaxis_m:g}m",
+        radius_mm=challenge.radius_parameter_m * 1000.0,
+        target_xyz_m=targets,
+    )
+    solve_started = time.perf_counter()
+    trajectory = teacher.solve(
+        spec,
+        policy,
+        root_beta=initial_beta_path[0],
+        initial_beta_path=initial_beta_path,
+    )
+    solve_wall = time.perf_counter() - solve_started
+    local_atlas = None
+    atlas_report: dict[str, Any] | None = None
+    if variant == TeacherVariant.T4:
+        local_atlas = build_local_atlas(trajectory, environment, policy)
+        trajectory = replace(trajectory, chart_id=local_atlas.phase_chart_ids)
+        trajectory.metrics["chart_overlap_gap_p95_deg"] = local_atlas.overlap_gap_p95_deg
+        trajectory.metrics["chart_overlap_gate_pass"] = float(local_atlas.overlap_gate_pass)
+        atlas_report = {
+            "chart_count": len(local_atlas.charts),
+            "overlap_gap_p95_deg": local_atlas.overlap_gap_p95_deg,
+            "overlap_gate_pass": local_atlas.overlap_gate_pass,
+        }
+    gate = evaluate_centerline_gate(
+        trajectory, thresholds=config["gates"]["centerline"]
+    )
+    if atlas_report is not None:
+        gate["checks"]["chart_overlap"] = bool(atlas_report["overlap_gate_pass"])
+        gate["centerline_gate_pass"] = bool(all(gate["checks"].values()))
+    output.mkdir(parents=True, exist_ok=True)
+    trajectory_frame(trajectory, environment).to_parquet(
+        output / "centerline.parquet", index=False
+    )
+    report = {
+        "variant": variant.value,
+        "metrics": dict(trajectory.metrics),
+        "provenance": dict(trajectory.provenance),
+        "wall_time_s": float(solve_wall),
+        "atlas": atlas_report,
+        **gate,
+    }
+    atomic_write_json(output / "centerline_report.json", report)
+    return trajectory, local_atlas, report
+
+
+def _run_tube(
+    *,
+    teacher: CanonicalTeacher,
+    environment: Any,
+    config: dict[str, Any],
+    variant: TeacherVariant,
+    challenge: EllipseChallenge,
+    centerline: Any,
+    local_atlas: Any | None,
+    output: Path,
+) -> dict[str, Any]:
+    offsets = tuple(float(value) for value in config["formal_upgrade"]["tube_offsets_mm"])
+    policy = _teacher_policy(config, variant, int(config["solver_seed"]))
+    targets = np.asarray(centerline.target_xyz_m, dtype=float)
+    n1, n2 = normal_frame(targets)
+    frames: list[pd.DataFrame] = []
+    residual_groups: list[np.ndarray] = []
+    local_groups: list[np.ndarray] = []
+    successes = 0
+    total = 0
+    for offset1 in offsets:
+        for offset2 in offsets:
+            shifted = targets + (offset1 * n1 + offset2 * n2) / 1000.0
+            if offset1 == 0.0 and offset2 == 0.0:
+                tube_trajectory = centerline
+            else:
+                spec = TrajectorySpec(
+                    trajectory_id=(
+                        f"large-scale@a{challenge.major_semiaxis_m:g}m"
+                        f":n1{offset1:+g}:n2{offset2:+g}"
+                    ),
+                    family_id=f"optimized_a{challenge.major_semiaxis_m:g}m",
+                    radius_mm=challenge.radius_parameter_m * 1000.0,
+                    target_xyz_m=shifted,
+                    tube_offsets_mm=offsets,
+                )
+                predicted = (
+                    local_atlas.predict_path(shifted)
+                    if local_atlas is not None
+                    else centerline.beta_rad
+                )
+                tube_trajectory = teacher.solve(
+                    spec,
+                    policy,
+                    root_beta=centerline.beta_rad[0],
+                    initial_beta_path=predicted,
+                )
+            frames.append(
+                trajectory_frame(
+                    tube_trajectory,
+                    environment,
+                    tube_n1_mm=offset1,
+                    tube_n2_mm=offset2,
+                )
+            )
+            residual = np.linalg.norm(
+                tube_trajectory.achieved_xyz_m - shifted, axis=1
+            ) * 1000.0
+            local = np.rad2deg(
+                np.sqrt(
+                    np.mean(
+                        np.square(tube_trajectory.beta_rad - centerline.beta_rad),
+                        axis=1,
+                    )
+                )
+            )
+            residual_groups.append(residual)
+            local_groups.append(local)
+            successes += int(np.count_nonzero(residual <= 3.0))
+            total += len(residual)
+    tube_frame = pd.concat(frames, ignore_index=True)
+    tube_frame.to_parquet(output / "tube.parquet", index=False)
+    all_residual = np.concatenate(residual_groups)
+    all_local = np.concatenate(local_groups)
+    metrics = {
+        "success_rate": float(successes / total),
+        "residual_p95_mm": float(np.percentile(all_residual, 95)),
+        "residual_max_mm": float(np.max(all_residual)),
+        "local_beta_rms_p95_deg": float(np.percentile(all_local, 95)),
+        "multi_branch_ratio": measured_multi_branch_ratio(tube_frame),
+    }
+    report = {
+        "variant": variant.value,
+        "metrics": metrics,
+        **evaluate_tube_gate(metrics, thresholds=config["gates"]["tube"]),
+    }
+    atomic_write_json(output / "tube_report.json", report)
+    return report
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.time()
     project_root = Path(args.project_root).resolve()
@@ -130,6 +295,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     requested = tuple(float(value) for value in config["major_semiaxes_m"])
     if requested != (0.5, 0.75, 1.0):
         raise ValueError("the registered challenge set must remain exactly 0.5/0.75/1.0 m")
+    if not np.isclose(
+        float(config["legacy_major_axis_gain"]),
+        REGISTERED_MAJOR_AXIS_GAIN,
+        atol=1.0e-12,
+    ):
+        raise ValueError("protocol legacy_major_axis_gain differs from frozen geometry lineage")
+    if not np.isclose(
+        float(config["minor_to_major_ratio"]),
+        REGISTERED_MINOR_TO_MAJOR_RATIO,
+        atol=1.0e-12,
+    ):
+        raise ValueError("protocol minor_to_major_ratio differs from frozen geometry lineage")
     challenges = tuple(
         EllipseChallenge.from_major_semiaxis_m(
             value,
@@ -140,13 +317,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     runtime = runtime_fingerprint()
     worker = Path(__file__).resolve()
     source_root = worker.parents[2]
+    environment = load_environment(project_root, Path(args.robot_config))
+    derived_robot_max_reach_m = float(
+        np.sum(environment.lengths_m[:30])
+        + np.linalg.norm(environment.p_end_local_m[:3])
+    )
+    if not np.isclose(
+        derived_robot_max_reach_m,
+        float(config["robot_max_reach_m"]),
+        atol=1.0e-9,
+    ):
+        raise ValueError("protocol robot_max_reach_m differs from the loaded robot geometry")
+    formal = config["formal_upgrade"]
+    variants = tuple(
+        dict.fromkeys(
+            [str(value) for value in config["teacher_screen"]["variants"]]
+            + [str(value) for value in formal["variants"]]
+        )
+    )
     manifest = ExperimentManifest.create(
         protocol_id=str(config["protocol_id"]),
-        teacher_variants=tuple(str(value) for value in config["teacher_screen"]["variants"]),
+        teacher_variants=variants,
         family_id="optimized_large_scale_pose_v10",
         radii_mm=tuple(challenge.radius_parameter_m * 1000.0 for challenge in challenges),
-        phase_count=int(config["pose_search"]["phase_count"]),
-        tube_offsets_mm=(),
+        phase_count=int(formal["phase_count"]),
+        tube_offsets_mm=tuple(float(value) for value in formal["tube_offsets_mm"]),
         solver_seed=int(config["solver_seed"]),
         input_files=(config_path, Path(args.robot_config).resolve()),
         worker_code_files=(
@@ -156,6 +351,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             source_root / "src/quasi_exp/teacher/forward.py",
             source_root / "src/quasi_exp/teacher/dataset.py",
             source_root / "src/quasi_exp/teacher/atlas.py",
+            source_root / "scripts/analysis/run_trajectory_canonical_teacher_v10.py",
         ),
         runtime_fingerprint=runtime,
     )
@@ -167,7 +363,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(manifest_path, manifest.as_dict())
     atomic_write_json(output / "runtime.json", runtime)
 
-    environment = load_environment(project_root, Path(args.robot_config))
     atlas_started = time.perf_counter()
     atlas_config = config["reachability_atlas"]
     atlas = _sample_reachability_atlas(
@@ -196,7 +391,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(output / "workspace_report.json", workspace)
     chain_rows = assess_chain_length_necessity(
         challenges,
-        robot_max_reach_m=float(config["robot_max_reach_m"]),
+        robot_max_reach_m=derived_robot_max_reach_m,
         tube_radius_m=float(config["tube_radius_m"]),
     )
     atomic_write_json(output / "chain_length_gate.json", chain_rows)
@@ -225,7 +420,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "major_diameter_m": challenge.major_diameter_m,
             "legacy_radius_parameter_m": challenge.radius_parameter_m,
             "scale_over_legacy_100mm": challenge.major_semiaxis_m
-            / (float(config["baseline_legacy_R_m"]) * float(config["legacy_major_axis_gain"])),
+            / (float(config["baseline_legacy_R_m"]) * REGISTERED_MAJOR_AXIS_GAIN),
+            "normalized_legacy_radius_parameter": challenge.radius_parameter_m
+            / derived_robot_max_reach_m,
+            "normalized_major_semiaxis": challenge.major_semiaxis_m
+            / derived_robot_max_reach_m,
+            "normalized_major_diameter": challenge.major_diameter_m
+            / derived_robot_max_reach_m,
             "center_m": fit.center_m.tolist(),
             "major_direction": fit.major_direction.tolist(),
             "minor_direction": fit.minor_direction.tolist(),
@@ -237,9 +438,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "restart_objectives_mm": [value.objective_mm for value in fits],
             "max_target_norm_m": float(np.max(np.linalg.norm(fit.target_xyz_m, axis=1))),
             "min_chain_reach_margin_m": float(
-                float(config["robot_max_reach_m"])
+                derived_robot_max_reach_m
                 - np.max(np.linalg.norm(fit.target_xyz_m, axis=1))
             ),
+            "robot_scale_design_lower_bounds": {
+                "current_robot_max_reach_m": derived_robot_max_reach_m,
+                "minimum_reach_from_translation_independent_diameter_m": (
+                    challenge.major_semiaxis_m + float(config["tube_radius_m"])
+                ),
+                "minimum_reach_for_fitted_center_and_tube_m": float(
+                    np.max(np.linalg.norm(fit.target_xyz_m, axis=1))
+                    + float(config["tube_radius_m"])
+                ),
+                "uniform_length_scale_lower_bound_for_fitted_center": float(
+                    (
+                        np.max(np.linalg.norm(fit.target_xyz_m, axis=1))
+                        + float(config["tube_radius_m"])
+                    )
+                    / derived_robot_max_reach_m
+                ),
+                "semantics": (
+                    "necessary geometry lower bounds; segment allocation and expanded joint-domain "
+                    "design remain conditional on exact teacher failure points"
+                ),
+            },
             "chain_length_necessity": chain_gate,
         }
         atomic_write_json(challenge_dir / "pose_report.json", pose_report)
@@ -251,76 +473,110 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             target_frame[f"initial_beta{index + 1}_rad"] = fit.match.initial_beta_path_rad[:, index]
         target_frame.to_parquet(challenge_dir / "pose_targets.parquet", index=False)
 
-        teacher_reports: dict[str, Any] = {}
+        screen_reports: dict[str, Any] = {}
         for variant_name in config["teacher_screen"]["variants"]:
             variant = TeacherVariant(str(variant_name))
-            policy = _teacher_policy(config, variant, int(config["solver_seed"]))
-            spec = TrajectorySpec(
-                trajectory_id=f"large-scale@a{challenge.major_semiaxis_m:g}m",
-                family_id=f"optimized_a{challenge.major_semiaxis_m:g}m",
-                radius_mm=challenge.radius_parameter_m * 1000.0,
-                target_xyz_m=fit.target_xyz_m,
-            )
-            solve_started = time.perf_counter()
-            trajectory = teacher.solve(
-                spec,
-                policy,
-                root_beta=fit.match.initial_beta_path_rad[0],
+            _trajectory, _local_atlas, variant_report = _solve_centerline(
+                teacher=teacher,
+                environment=environment,
+                config=config,
+                variant=variant,
+                challenge=challenge,
+                targets=fit.target_xyz_m,
                 initial_beta_path=fit.match.initial_beta_path_rad,
+                output=challenge_dir / "screen" / variant.value,
             )
-            solve_wall = time.perf_counter() - solve_started
-            atlas_report: dict[str, Any] | None = None
-            if variant == TeacherVariant.T4:
-                local_atlas = build_local_atlas(trajectory, environment, policy)
-                trajectory = replace(trajectory, chart_id=local_atlas.phase_chart_ids)
-                trajectory.metrics["chart_overlap_gap_p95_deg"] = local_atlas.overlap_gap_p95_deg
-                trajectory.metrics["chart_overlap_gate_pass"] = float(local_atlas.overlap_gate_pass)
-                atlas_report = {
-                    "chart_count": len(local_atlas.charts),
-                    "overlap_gap_p95_deg": local_atlas.overlap_gap_p95_deg,
-                    "overlap_gate_pass": local_atlas.overlap_gate_pass,
-                }
-            gate = evaluate_centerline_gate(
-                trajectory, thresholds=config["gates"]["centerline"]
-            )
-            if atlas_report is not None:
-                gate["checks"]["chart_overlap"] = bool(atlas_report["overlap_gate_pass"])
-                gate["centerline_gate_pass"] = bool(all(gate["checks"].values()))
-            variant_dir = challenge_dir / variant.value
-            variant_dir.mkdir(parents=True, exist_ok=True)
-            trajectory_frame(trajectory, environment).to_parquet(
-                variant_dir / "centerline.parquet", index=False
-            )
-            variant_report = {
-                "variant": variant.value,
-                "metrics": dict(trajectory.metrics),
-                "provenance": dict(trajectory.provenance),
-                "wall_time_s": float(solve_wall),
-                "atlas": atlas_report,
-                **gate,
-            }
-            atomic_write_json(variant_dir / "report.json", variant_report)
-            teacher_reports[variant.value] = variant_report
+            screen_reports[variant.value] = variant_report
 
-        t1_pass = bool(teacher_reports["T1"]["centerline_gate_pass"])
-        t4_pass = bool(teacher_reports["T4"]["centerline_gate_pass"])
-        if t4_pass and not t1_pass:
-            attribution = "method_enabled_centerline_scale_gain"
-        elif t4_pass and t1_pass:
-            attribution = "geometry_enabled_not_T4_specific"
-        elif not t4_pass and not t1_pass:
-            attribution = "centerline_challenge_failed"
+        t4_screen_metrics = screen_reports["T4"]["metrics"]
+        t4_screen_hard_pass = bool(
+            float(t4_screen_metrics["residual_p95_mm"])
+            <= float(config["gates"]["centerline"]["residual_p95_mm"])
+            and float(t4_screen_metrics["residual_max_mm"])
+            <= float(config["gates"]["centerline"]["residual_max_mm"])
+            and float(t4_screen_metrics["joint_margin_min_deg"])
+            >= float(config["gates"]["centerline"]["joint_margin_min_deg"])
+            and bool(screen_reports["T4"]["atlas"]["overlap_gate_pass"])
+        )
+        formal_reports: dict[str, Any] = {}
+        if t4_screen_hard_pass:
+            formal_targets = challenge.generate_targets(
+                center_m=fit.center_m,
+                major_direction=fit.major_direction,
+                minor_direction=fit.minor_direction,
+                phase_count=int(formal["phase_count"]),
+            )
+            formal_match = atlas.match_targets(formal_targets)
+            for variant_name in formal["variants"]:
+                variant = TeacherVariant(str(variant_name))
+                variant_dir = challenge_dir / "formal" / variant.value
+                centerline, local_atlas, centerline_report = _solve_centerline(
+                    teacher=teacher,
+                    environment=environment,
+                    config=config,
+                    variant=variant,
+                    challenge=challenge,
+                    targets=formal_targets,
+                    initial_beta_path=formal_match.initial_beta_path_rad,
+                    output=variant_dir,
+                )
+                if bool(centerline_report["centerline_gate_pass"]):
+                    tube_report = _run_tube(
+                        teacher=teacher,
+                        environment=environment,
+                        config=config,
+                        variant=variant,
+                        challenge=challenge,
+                        centerline=centerline,
+                        local_atlas=local_atlas,
+                        output=variant_dir,
+                    )
+                    status = "completed"
+                else:
+                    tube_report = None
+                    status = "skipped_centerline_gate_failed"
+                formal_reports[variant.value] = {
+                    "centerline": centerline_report,
+                    "tube": tube_report,
+                    "tube_status": status,
+                    "full_gate_pass": bool(
+                        centerline_report["centerline_gate_pass"]
+                        and tube_report is not None
+                        and tube_report["tube_gate_pass"]
+                    ),
+                }
+
+        baseline_pass = bool(
+            formal_reports.get("T3", {}).get("full_gate_pass", False)
+        )
+        t4_pass = bool(formal_reports.get("T4", {}).get("full_gate_pass", False))
+        if t4_pass and not baseline_pass:
+            attribution = "T4_atlas_enabled_full_gate_scale_gain"
+        elif t4_pass and baseline_pass:
+            attribution = "geometry_enabled_not_T4_atlas_specific"
+        elif not t4_pass and not baseline_pass:
+            attribution = "large_scale_full_gate_failed"
         else:
-            attribution = "baseline_only_unexpected"
+            attribution = "generalized_V7_structure_baseline_only_unexpected"
         report = {
             "challenge": pose_report,
-            "teachers": teacher_reports,
-            "qualitative_threshold_reached": bool(
+            "baseline_semantics": {
+                "exact_T0_V7_replay": "not_applicable_to_new_optimized_geometry",
+                "attribution_comparator": "T3_graph_plus_whole_trajectory_correction",
+                "T1_role": "Jacobian_continuation_mechanism_ablation_only",
+            },
+            "screen_teachers": screen_reports,
+            "screen_hard_gate_pass": t4_screen_hard_pass,
+            "formal_teachers": formal_reports,
+            "requested_scale_meets_qualitative_threshold": bool(
                 challenge.major_semiaxis_m >= float(config["qualitative_scale_threshold_m"])
             ),
-            "centerline_attribution": attribution,
-            "centerline_challenge_pass": t4_pass,
-            "tube_challenge_status": "not_run_until_centerline_pass",
+            "qualitative_method_gate_pass": bool(t4_pass and not baseline_pass),
+            "large_scale_full_gate_pass": t4_pass,
+            "method_attribution": attribution,
+            "formal_upgrade_status": (
+                "completed" if t4_screen_hard_pass else "skipped_screen_hard_gate_failed"
+            ),
         }
         atomic_write_json(challenge_dir / "report.json", report)
         reports.append(report)

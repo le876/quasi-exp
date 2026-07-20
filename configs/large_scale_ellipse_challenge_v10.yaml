@@ -17,10 +17,17 @@ pose_search:
   max_iterations: 160
   population_size: 12
 teacher_screen:
-  variants: [T1, T4]
+  # T1 is a mechanism ablation.  T3 is the conservative generalized
+  # V7-structure comparator (graph + whole-trajectory correction) because an
+  # exact V7 artifact replay does not exist for a newly optimized geometry.
+  variants: [T1, T3, T4]
   candidate_budget: 16
   max_corrector_iterations: 100
   tracking_tolerance_mm: 1.0
+formal_upgrade:
+  phase_count: 180
+  variants: [T3, T4]
+  tube_offsets_mm: [-1.0, 0.0, 1.0]
 gates:
   centerline:
     residual_p95_mm: 1.0
@@ -30,4 +37,9 @@ gates:
     acceleration_beta_rms_p95_deg: 0.5
     seam_beta_rms_deg: 1.0
     joint_margin_min_deg: 1.5
-
+  tube:
+    success_rate: 0.99
+    residual_p95_mm: 1.5
+    residual_max_mm: 3.0
+    local_beta_rms_p95_deg: 1.0
+    multi_branch_ratio: 0.0

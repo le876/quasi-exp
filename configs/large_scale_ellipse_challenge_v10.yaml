@@ -1,0 +1,33 @@
+protocol_id: large-scale-ellipse-challenge-v10.1
+challenge_definition: actual_3d_major_semiaxis
+major_semiaxes_m: [0.5, 0.75, 1.0]
+minor_to_major_ratio: 0.3373339499411772
+legacy_major_axis_gain: 1.953403629
+baseline_legacy_R_m: 0.1
+qualitative_scale_threshold_m: 0.5
+robot_max_reach_m: 1.215498
+tube_radius_m: 0.001
+solver_seed: 20260720
+reachability_atlas:
+  sample_count: 131072
+  sampling_margin_deg: 0.0
+pose_search:
+  phase_count: 24
+  restarts: 3
+  max_iterations: 160
+  population_size: 12
+teacher_screen:
+  variants: [T1, T4]
+  candidate_budget: 16
+  max_corrector_iterations: 100
+  tracking_tolerance_mm: 1.0
+gates:
+  centerline:
+    residual_p95_mm: 1.0
+    residual_max_mm: 3.0
+    delta_beta_rms_p95_deg: 1.0
+    delta_beta_rms_max_deg: 2.0
+    acceleration_beta_rms_p95_deg: 0.5
+    seam_beta_rms_deg: 1.0
+    joint_margin_min_deg: 1.5
+

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import numpy as np
 from scipy.optimize import differential_evolution
@@ -346,3 +346,28 @@ def assess_chain_length_necessity(
             }
         )
     return rows
+
+
+def is_promising_centerline_screen(
+    metrics: Mapping[str, float],
+    *,
+    solver_success: bool,
+    residual_p95_limit_mm: float = 1.0,
+    residual_max_limit_mm: float = 3.0,
+) -> bool:
+    """Gate a coarse screen using only phase-density-independent hard facts.
+
+    Smoothness, acceleration, seam, safe margin, and chart overlap are formal
+    180-phase gates.  A coarse screen only rejects failed tracking or an
+    actual joint-bound violation, so it cannot prematurely discard a curve
+    whose discretisation changes at the formal upgrade.
+    """
+
+    return bool(
+        solver_success
+        and float(metrics.get("residual_p95_mm", math.inf))
+        <= float(residual_p95_limit_mm)
+        and float(metrics.get("residual_max_mm", math.inf))
+        <= float(residual_max_limit_mm)
+        and float(metrics.get("joint_margin_min_deg", -math.inf)) >= 0.0
+    )

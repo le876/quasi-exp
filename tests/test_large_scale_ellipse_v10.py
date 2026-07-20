@@ -6,6 +6,7 @@ from quasi_exp.teacher.large_scale import (
     ReachabilityAtlas,
     assess_chain_length_necessity,
     fit_ellipse_pose_to_atlas,
+    is_promising_centerline_screen,
 )
 
 
@@ -149,3 +150,22 @@ def test_pose_search_prefers_a_safe_joint_margin_witness_over_an_exact_boundary_
 
     assert fit.match.metrics["nearest_joint_margin_min_deg"] >= 50.0
     assert np.isclose(fit.center_m[0], 0.71, atol=5.0e-3)
+
+
+def test_promising_screen_defers_sampling_dependent_and_safe_margin_gates_to_formal():
+    metrics = {
+        "residual_p95_mm": 0.969,
+        "residual_max_mm": 0.988,
+        "joint_margin_min_deg": 1.187,
+        "delta_beta_rms_p95_deg": 1.60,
+        "acceleration_beta_rms_p95_deg": 1.52,
+        "chart_overlap_gap_p95_deg": 0.868,
+    }
+
+    assert is_promising_centerline_screen(metrics, solver_success=True)
+    assert not is_promising_centerline_screen(
+        {**metrics, "joint_margin_min_deg": -0.001}, solver_success=True
+    )
+    assert not is_promising_centerline_screen(
+        {**metrics, "residual_max_mm": 3.001}, solver_success=True
+    )

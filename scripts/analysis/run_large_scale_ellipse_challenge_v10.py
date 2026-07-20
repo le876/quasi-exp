@@ -37,6 +37,7 @@ from quasi_exp.teacher.large_scale import (
     ReachabilityAtlas,
     assess_chain_length_necessity,
     fit_ellipse_pose_to_atlas,
+    is_promising_centerline_screen,
 )
 
 from run_trajectory_canonical_teacher_v10 import (
@@ -498,15 +499,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             screen_reports[variant.value] = variant_report
 
-        t4_screen_metrics = screen_reports["T4"]["metrics"]
-        t4_screen_hard_pass = bool(
-            float(t4_screen_metrics["residual_p95_mm"])
-            <= float(config["gates"]["centerline"]["residual_p95_mm"])
-            and float(t4_screen_metrics["residual_max_mm"])
-            <= float(config["gates"]["centerline"]["residual_max_mm"])
-            and float(t4_screen_metrics["joint_margin_min_deg"])
-            >= float(config["gates"]["centerline"]["joint_margin_min_deg"])
-            and bool(screen_reports["T4"]["atlas"]["overlap_gate_pass"])
+        t4_screen_hard_pass = is_promising_centerline_screen(
+            screen_reports["T4"]["metrics"],
+            solver_success=bool(screen_reports["T4"]["checks"]["solver_success"]),
+            residual_p95_limit_mm=float(
+                config["gates"]["centerline"]["residual_p95_mm"]
+            ),
+            residual_max_limit_mm=float(
+                config["gates"]["centerline"]["residual_max_mm"]
+            ),
         )
         formal_reports: dict[str, Any] = {}
         if t4_screen_hard_pass:

@@ -1,4 +1,4 @@
-protocol_id: large-scale-ellipse-challenge-v10.2
+protocol_id: large-scale-ellipse-challenge-v10.3
 challenge_definition: actual_3d_major_semiaxis
 major_semiaxes_m: [0.5, 0.75, 1.0]
 minor_to_major_ratio: 0.3373339499411772

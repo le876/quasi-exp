@@ -7,7 +7,6 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
-import time
 from typing import Any
 
 import matplotlib
@@ -19,18 +18,11 @@ import pandas as pd
 
 from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 from quasi_exp.teacher.large_scale import EllipseChallenge
-from quasi_exp.teacher.student import BETA_COLUMNS, XYZ_COLUMNS
-from quasi_exp.teacher.student_tracking_tf import (
-    autoregressive_rollout,
-    build_gru_model,
-    build_static_model,
-    compile_student,
-    make_cyclic_windows,
-    packed_targets,
-)
+from quasi_exp.teacher.student import XYZ_COLUMNS
+from quasi_exp.teacher.student_tracking_tf import autoregressive_rollout
 
 from run_trajectory_canonical_teacher_v10 import load_environment, project_root_from, runtime_fingerprint
-from train_large_scale_students_v10 import Candidate, _geometry
+from train_large_scale_students_v10 import Candidate, _fit_fixed_epochs, _geometry
 
 
 DEPLOYMENT_SEED = 20260740
@@ -47,63 +39,6 @@ def _epoch_budget(output_root: Path, scope: str, fallback: int) -> int:
         report = _load_json(report_path)
         values.append(int(report["history"]["best_epoch"]))
     return max(1, int(round(float(np.median(values))))) if values else int(fallback)
-
-
-def _fit_fixed(
-    tf: Any,
-    frames: list[pd.DataFrame],
-    candidate: Candidate,
-    geometry: Any,
-    *,
-    epochs: int,
-    window_size: int,
-) -> tuple[Any, Any | None, dict[str, Any]]:
-    tf.keras.utils.set_random_seed(DEPLOYMENT_SEED)
-    started = time.perf_counter()
-    init_model = None
-    if candidate.student == "S3":
-        windows = [
-            make_cyclic_windows(frame, window_size=window_size, include_reverse=True)
-            for frame in frames
-        ]
-        x = np.concatenate([value[0] for value in windows], axis=0)
-        y = np.concatenate([value[1] for value in windows], axis=0)
-        model = build_gru_model(x, geometry=geometry, output_mode=candidate.output_mode)
-        compile_student(model, geometry=geometry, lambda_fk=candidate.lambda_fk, learning_rate=5.0e-4)
-        history = model.fit(x, y, epochs=epochs, batch_size=64, shuffle=True, verbose=0)
-        full = pd.concat(frames, ignore_index=True)
-        xyz = full.loc[:, XYZ_COLUMNS].to_numpy(dtype=np.float32)
-        init_model = build_static_model(xyz, geometry=geometry, output_mode="tanh")
-        compile_student(init_model, geometry=geometry, lambda_fk=1.0, learning_rate=1.0e-3)
-        init_model.fit(
-            xyz,
-            packed_targets(full),
-            epochs=max(epochs, 100),
-            batch_size=min(128, len(full)),
-            shuffle=True,
-            verbose=0,
-        )
-        row_count = int(len(x))
-    else:
-        full = pd.concat(frames, ignore_index=True)
-        xyz = full.loc[:, XYZ_COLUMNS].to_numpy(dtype=np.float32)
-        model = build_static_model(xyz, geometry=geometry, output_mode=candidate.output_mode)
-        compile_student(model, geometry=geometry, lambda_fk=candidate.lambda_fk, learning_rate=1.0e-3)
-        history = model.fit(
-            xyz,
-            packed_targets(full),
-            epochs=epochs,
-            batch_size=min(128, len(full)),
-            shuffle=True,
-            verbose=0,
-        )
-        row_count = int(len(full))
-    return model, init_model, {
-        "epochs": int(epochs),
-        "rows_or_windows": row_count,
-        "final_loss": float(history.history["loss"][-1]),
-        "wall_time_s": float(time.perf_counter() - started),
-    }
 
 
 def _interstitial_targets(
@@ -273,19 +208,20 @@ def main() -> None:
         for slug, frame in dense.items()
     }
     scopes = {
-        "joint": (selection["selected"]["joint"]["candidate"], ["a0p500m", "a0p750m"]),
-        "scale0p5": (selection["selected"]["scale0p5"]["candidate"], ["a0p500m"]),
-        "scale0p75": (selection["selected"]["scale0p5"]["candidate"], ["a0p750m"]),
+        "joint": (selection["selected"]["candidate"], ["a0p500m", "a0p750m"]),
+        "scale0p5": (selection["selected"]["candidate"], ["a0p500m"]),
+        "scale0p75": (selection["selected"]["candidate"], ["a0p750m"]),
     }
     reports: list[dict[str, Any]] = []
     for scope, (candidate_dict, scale_slugs) in scopes.items():
         candidate = Candidate(**candidate_dict)
         epochs = _epoch_budget(output_root, scope, args.fallback_epochs)
-        model, init_model, training = _fit_fixed(
+        model, init_model, training = _fit_fixed_epochs(
             tf,
             [dense[slug] for slug in scale_slugs],
             candidate,
             geometry,
+            seed=DEPLOYMENT_SEED,
             epochs=epochs,
             window_size=args.window_size,
         )
@@ -308,10 +244,10 @@ def main() -> None:
                 pose=pose,
                 minor_to_major_ratio=float(config["minor_to_major_ratio"]),
             )
-            if candidate.student == "S3":
+            if candidate.is_autoregressive:
                 if init_model is None:
                     raise RuntimeError("missing S3 rollout initialiser")
-                initial = np.asarray(init_model.predict(target[:1], verbose=0), dtype=float)[0]
+                initial = np.asarray(init_model.predict(target[-1:], verbose=0), dtype=float)[0]
                 beta = autoregressive_rollout(
                     model,
                     target,
@@ -362,6 +298,9 @@ def main() -> None:
         "gpu_preflight_sha256": sha256_file(output_root / "gpu_preflight.json"),
         "worker_code_sha256": {
             str(Path(__file__).resolve()): sha256_file(Path(__file__).resolve()),
+            str((repo_root / "scripts/analysis/train_large_scale_students_v10.py").resolve()): sha256_file(
+                repo_root / "scripts/analysis/train_large_scale_students_v10.py"
+            ),
             str((repo_root / "src/quasi_exp/teacher/student_tracking_tf.py").resolve()): sha256_file(
                 repo_root / "src/quasi_exp/teacher/student_tracking_tf.py"
             ),

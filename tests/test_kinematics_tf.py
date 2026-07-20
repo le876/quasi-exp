@@ -5,6 +5,8 @@ import pytest
 
 
 tf = pytest.importorskip("tensorflow")
+if not all(hasattr(tf, name) for name in ("zeros", "Variable", "GradientTape", "keras")):
+    pytest.skip("TensorFlow namespace is incomplete", allow_module_level=True)
 
 from quasi_exp.model.kinematics_tf import forward_xyz_from_beta_tf
 from quasi_exp.model.kinematics import forward_kinematics

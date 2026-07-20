@@ -56,6 +56,19 @@ def _load_pose(path: Path) -> dict[str, Any]:
     return pose
 
 
+def _teacher_report_gate_pass(report: dict[str, Any], major_semiaxis_m: float) -> bool:
+    expected_eligible = PHASE_COUNT if np.isclose(major_semiaxis_m, 0.5) else 180
+    dense_path = Path(str(report.get("dense_teacher_path", "")))
+    expected_hash = str(report.get("dense_teacher_sha256", ""))
+    return bool(
+        int(report.get("phase_count", -1)) == PHASE_COUNT
+        and int(report.get("eligible_count", -1)) >= expected_eligible
+        and dense_path.is_file()
+        and bool(expected_hash)
+        and sha256_file(dense_path) == expected_hash
+    )
+
+
 def run_one(
     *,
     major_semiaxis_m: float,
@@ -75,7 +88,14 @@ def run_one(
     completed = output / "teacher_report.json"
     if completed.exists() and not force:
         with completed.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            cached = json.load(handle)
+        gate_pass = _teacher_report_gate_pass(cached, major_semiaxis_m)
+        if not gate_pass:
+            raise RuntimeError(f"cached dense teacher report failed its gate: {completed}")
+        if cached.get("dense_teacher_gate_pass") is not True:
+            cached["dense_teacher_gate_pass"] = True
+            atomic_write_json(completed, cached)
+        return cached
 
     pose_path = challenge_dir / "pose_report.json"
     source_path = _source_path(challenge_dir, major_semiaxis_m)
@@ -143,12 +163,15 @@ def run_one(
         "dense_teacher_sha256": sha256_file(full_path),
         "split_report": split_report,
     }
+    report["dense_teacher_gate_pass"] = _teacher_report_gate_pass(
+        report, major_semiaxis_m
+    )
     # The primary selection benchmark must have an exact eligible ring.  The
     # 0.75 m stress test deliberately retains invalid rows if any are found.
-    if np.isclose(major_semiaxis_m, 0.5) and report["eligible_count"] != PHASE_COUNT:
+    if np.isclose(major_semiaxis_m, 0.5) and not report["dense_teacher_gate_pass"]:
         atomic_write_json(completed, report)
         raise RuntimeError("0.5 m dense T3 teacher did not produce 720 eligible labels")
-    if int(report["eligible_count"]) < 180:
+    if not report["dense_teacher_gate_pass"]:
         atomic_write_json(completed, report)
         raise RuntimeError("dense T3 teacher produced fewer than 180 eligible labels")
     atomic_write_json(completed, report)

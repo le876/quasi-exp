@@ -39,6 +39,10 @@ class Candidate:
     output_mode: str
     lambda_fk: float
 
+    @property
+    def is_autoregressive(self) -> bool:
+        return self.student == "S3"
+
 
 CANDIDATES = (
     Candidate("S0_identity", "S0", "identity", 0.0),
@@ -194,7 +198,7 @@ def _fit_fixed_epochs(
     tf.keras.utils.set_random_seed(int(seed))
     started = time.perf_counter()
     init_model = None
-    if candidate.student == "S3":
+    if candidate.is_autoregressive:
         windows = [
             make_cyclic_windows(frame, window_size=window_size, include_reverse=True)
             for frame in train_frames
@@ -255,11 +259,13 @@ def _predict(
     window_size: int,
 ) -> np.ndarray:
     xyz = frame.loc[:, XYZ_COLUMNS].to_numpy(dtype=np.float32)
-    if candidate.student != "S3":
+    if not candidate.is_autoregressive:
         return np.asarray(model.predict(xyz, verbose=0), dtype=float)
     if init_model is None:
         raise ValueError("S3 rollout requires a static initialiser")
-    initial = np.asarray(init_model.predict(xyz[:1], verbose=0), dtype=float)[0]
+    # ``initial_beta_rad`` is beta_(t-1); for a cyclic traversal its state is
+    # predicted at the traversal's final target, not at the first target.
+    initial = np.asarray(init_model.predict(xyz[-1:], verbose=0), dtype=float)[0]
     return autoregressive_rollout(
         model,
         xyz,
@@ -279,7 +285,7 @@ def _prediction_variants(
     """Return canonical predictions, plus cut/direction stress rollouts for S3."""
 
     canonical = frame.sort_values("phase_idx", kind="stable").reset_index(drop=True)
-    if candidate.student != "S3":
+    if not candidate.is_autoregressive:
         return [("forward_cut0", _predict(model, canonical, candidate, init_model=init_model, window_size=window_size))]
     count = len(canonical)
     base = np.arange(count)
@@ -364,7 +370,6 @@ def _train_one(
     scope: str,
     seed: int,
     train_0p5: pd.DataFrame,
-    train_0p75: pd.DataFrame,
     validation_0p5: pd.DataFrame,
     geometry: StudentGeometry,
     output: Path,
@@ -381,10 +386,12 @@ def _train_one(
         flush=True,
     )
     output.mkdir(parents=True, exist_ok=True)
-    train_frames = [train_0p5] if scope == "scale0p5" else [train_0p5, train_0p75]
+    if scope != "scale0p5":
+        raise ValueError("pre-selection training is restricted to scale0p5")
+    train_frames = [train_0p5]
     train = pd.concat(train_frames, ignore_index=True)
     init_model = None
-    if candidate.student == "S3":
+    if candidate.is_autoregressive:
         model, init_model, history = _fit_gru(
             tf,
             train_frames,
@@ -449,30 +456,27 @@ _ENVIRONMENT_HOLDER: list[Any] = []
 
 def run_screen(args: argparse.Namespace, tf: Any, environment: Any, output_root: Path) -> dict[str, Any]:
     train_0p5 = _eligible(_read_split(output_root, "a0p500m", "train"))
-    train_0p75 = _eligible(_read_split(output_root, "a0p750m", "train"))
     validation_0p5 = _eligible(_read_split(output_root, "a0p500m", "validation"))
     geometry = _geometry(environment)
     reports: list[dict[str, Any]] = []
     for candidate in CANDIDATES:
-        for scope in ("joint", "scale0p5"):
-            for seed in SCREEN_SEEDS:
-                path = output_root / "screen" / scope / candidate.candidate_id / f"seed_{seed}"
-                reports.append(
-                    _train_one(
-                        tf,
-                        candidate=candidate,
-                        scope=scope,
-                        seed=seed,
-                        train_0p5=train_0p5,
-                        train_0p75=train_0p75,
-                        validation_0p5=validation_0p5,
-                        geometry=geometry,
-                        output=path,
-                        epochs_static=args.epochs_static,
-                        epochs_gru=args.epochs_gru,
-                        window_size=args.window_size,
-                    )
+        for seed in SCREEN_SEEDS:
+            path = output_root / "screen/scale0p5" / candidate.candidate_id / f"seed_{seed}"
+            reports.append(
+                _train_one(
+                    tf,
+                    candidate=candidate,
+                    scope="scale0p5",
+                    seed=seed,
+                    train_0p5=train_0p5,
+                    validation_0p5=validation_0p5,
+                    geometry=geometry,
+                    output=path,
+                    epochs_static=args.epochs_static,
+                    epochs_gru=args.epochs_gru,
+                    window_size=args.window_size,
                 )
+            )
     rows = []
     for report in reports:
         rows.append(
@@ -485,32 +489,29 @@ def run_screen(args: argparse.Namespace, tf: Any, environment: Any, output_root:
         )
     table = pd.DataFrame(rows)
     table.to_csv(output_root / "screen/screen_results.csv", index=False)
-    selected: dict[str, Any] = {}
-    for scope in ("joint", "scale0p5"):
-        aggregate = (
-            table.loc[table.scope.eq(scope)]
-            .groupby("candidate_id", as_index=False)
-            .agg(
-                tracking_residual_p95_mm=("tracking_residual_p95_mm", "median"),
-                tracking_residual_max_mm=("tracking_residual_max_mm", "median"),
-                tracking_success_rate_3mm=("tracking_success_rate_3mm", "median"),
-                joint_bounds_rate=("joint_bounds_rate", "median"),
-            )
+    aggregate = (
+        table.groupby("candidate_id", as_index=False)
+        .agg(
+            tracking_residual_p95_mm=("tracking_residual_p95_mm", "median"),
+            tracking_residual_max_mm=("tracking_residual_max_mm", "median"),
+            tracking_success_rate_3mm=("tracking_success_rate_3mm", "median"),
+            joint_bounds_rate=("joint_bounds_rate", "median"),
         )
-        aggregate["selection_score"] = (
-            aggregate["tracking_residual_p95_mm"]
-            + 0.1 * aggregate["tracking_residual_max_mm"]
-            + 1000.0 * (1.0 - aggregate["joint_bounds_rate"])
-        )
-        aggregate = aggregate.sort_values(
-            ["selection_score", "tracking_residual_p95_mm", "candidate_id"], kind="stable"
-        ).reset_index(drop=True)
-        aggregate.to_csv(output_root / f"screen/{scope}_aggregate.csv", index=False)
-        winner_id = str(aggregate.iloc[0]["candidate_id"])
-        selected[scope] = {
-            "candidate": asdict(next(value for value in CANDIDATES if value.candidate_id == winner_id)),
-            "selection_metrics": aggregate.iloc[0].to_dict(),
-        }
+    )
+    aggregate["selection_score"] = (
+        aggregate["tracking_residual_p95_mm"]
+        + 0.1 * aggregate["tracking_residual_max_mm"]
+        + 1000.0 * (1.0 - aggregate["joint_bounds_rate"])
+    )
+    aggregate = aggregate.sort_values(
+        ["selection_score", "tracking_residual_p95_mm", "candidate_id"], kind="stable"
+    ).reset_index(drop=True)
+    aggregate.to_csv(output_root / "screen/scale0p5_aggregate.csv", index=False)
+    winner_id = str(aggregate.iloc[0]["candidate_id"])
+    selected = {
+        "candidate": asdict(next(value for value in CANDIDATES if value.candidate_id == winner_id)),
+        "selection_metrics": aggregate.iloc[0].to_dict(),
+    }
     selection = {
         "protocol_id": "large-scale-student-tracking-v10.1",
         "selection_locked": True,
@@ -541,9 +542,9 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
     geometry = _geometry(environment)
     final_reports: list[dict[str, Any]] = []
     scopes = {
-        "joint": (selection["selected"]["joint"]["candidate"], [train_0p5, train_0p75]),
-        "scale0p5": (selection["selected"]["scale0p5"]["candidate"], [train_0p5]),
-        "scale0p75": (selection["selected"]["scale0p5"]["candidate"], [train_0p75]),
+        "joint": (selection["selected"]["candidate"], [train_0p5, train_0p75]),
+        "scale0p5": (selection["selected"]["candidate"], [train_0p5]),
+        "scale0p75": (selection["selected"]["candidate"], [train_0p75]),
     }
     for scope, (candidate_dict, train_frames) in scopes.items():
         candidate = Candidate(**candidate_dict)
@@ -553,7 +554,7 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
             (
                 output_root
                 / "screen/scale0p5"
-                / selection["selected"]["scale0p5"]["candidate"]["candidate_id"]
+                / selection["selected"]["candidate"]["candidate_id"]
             ).glob("seed_*/report.json")
         )
         frozen_epoch_values = [
@@ -563,7 +564,7 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
         frozen_epochs = (
             max(1, int(round(float(np.median(frozen_epoch_values)))))
             if frozen_epoch_values
-            else (args.epochs_gru if candidate.student == "S3" else args.epochs_static)
+            else (args.epochs_gru if candidate.is_autoregressive else args.epochs_static)
         )
         for seed in FINAL_SEEDS:
             out = output_root / "final" / scope / f"seed_{seed}"
@@ -584,7 +585,7 @@ def run_final(args: argparse.Namespace, tf: Any, environment: Any, output_root: 
                     epochs=frozen_epochs,
                     window_size=args.window_size,
                 )
-            elif candidate.student == "S3":
+            elif candidate.is_autoregressive:
                 model, init_model, history = _fit_gru(
                     tf,
                     train_frames,

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
-import hashlib
 
 from quasi_exp.teacher.student import (
     assign_dense_phase_split,
@@ -12,7 +13,18 @@ from quasi_exp.teacher.student import (
 )
 
 
-tf = pytest.importorskip("tensorflow")
+try:
+    import tensorflow as tf
+except Exception:
+    tf = None
+
+TF_READY = tf is not None and all(
+    hasattr(tf, name) for name in ("constant", "zeros", "keras")
+)
+requires_tensorflow = pytest.mark.skipif(
+    not TF_READY,
+    reason="TensorFlow is unavailable or its namespace is incomplete",
+)
 
 from quasi_exp.teacher.student_tracking_tf import (
     StudentGeometry,
@@ -96,6 +108,7 @@ def test_materialized_test_labels_are_physically_separate_from_training(
     assert report["split_sha256"]["test"]
 
 
+@requires_tensorflow
 def test_tanh_beta_decoder_stays_strictly_inside_registered_bounds() -> None:
     bounds = np.column_stack([np.full(6, -0.2), np.full(6, 0.3)]).astype(np.float32)
     decoded = decode_beta_tf(
@@ -106,6 +119,7 @@ def test_tanh_beta_decoder_stays_strictly_inside_registered_bounds() -> None:
     assert np.all(decoded <= bounds[:, 1])
 
 
+@requires_tensorflow
 def test_fk_aware_loss_is_zero_for_exact_beta_and_target() -> None:
     lengths = np.full(31, 0.01, dtype=np.float32)
     endpoint = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
@@ -146,6 +160,7 @@ def test_gru_rollout_feeds_back_predictions_without_teacher_injection() -> None:
     np.testing.assert_allclose(predicted, np.repeat(predicted[:, :1], 6, axis=1), atol=1.0e-7)
 
 
+@requires_tensorflow
 def test_static_student_accepts_packed_beta_and_xyz_targets(tmp_path) -> None:
     geometry = StudentGeometry(
         lengths_m=np.full(31, 0.01, dtype=np.float32),
@@ -190,6 +205,7 @@ def test_gru_windows_cover_cyclic_cuts_in_both_directions() -> None:
     np.testing.assert_allclose(targets[8, :, 6], [7.0, 6.0, 5.0, 4.0])
 
 
+@requires_tensorflow
 def test_gru_student_trains_on_sequence_packed_targets() -> None:
     geometry = StudentGeometry(
         lengths_m=np.full(31, 0.01, dtype=np.float32),

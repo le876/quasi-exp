@@ -109,15 +109,20 @@ def build_static_model(
     for index, units in enumerate(hidden_units):
         hidden = tf.keras.layers.Dense(int(units), activation="gelu", name=f"dense_{index}")(hidden)
     latent = tf.keras.layers.Dense(6, name="beta_latent")(hidden)
-    if output_mode == "identity":
-        beta = latent
-    else:
-        bounds = np.asarray(geometry.beta_bounds_rad, dtype=np.float32)
-        midpoint = 0.5 * (bounds[:, 0] + bounds[:, 1])
-        halfspan = 0.5 * (bounds[:, 1] - bounds[:, 0])
-        beta = tf.keras.layers.Activation("tanh", name="beta_unit")(latent)
-        beta = tf.keras.layers.Rescaling(halfspan, offset=midpoint, name="beta_rad")(beta)
+    beta = _keras_beta_output(latent, geometry=geometry, output_mode=output_mode)
     return tf.keras.Model(inputs, beta, name=f"static_student_{output_mode}")
+
+
+def _keras_beta_output(latent: Any, *, geometry: StudentGeometry, output_mode: OutputMode) -> Any:
+    import tensorflow as tf
+
+    if output_mode == "identity":
+        return latent
+    bounds = np.asarray(geometry.beta_bounds_rad, dtype=np.float32)
+    midpoint = 0.5 * (bounds[:, 0] + bounds[:, 1])
+    halfspan = 0.5 * (bounds[:, 1] - bounds[:, 0])
+    unit_beta = tf.keras.layers.Activation("tanh", name="beta_unit")(latent)
+    return tf.keras.layers.Rescaling(halfspan, offset=midpoint, name="beta_rad")(unit_beta)
 
 
 def compile_student(model: Any, *, geometry: StudentGeometry, lambda_fk: float, learning_rate: float) -> None:
@@ -183,15 +188,8 @@ def build_gru_model(
     hidden = tf.keras.layers.GRU(int(units), return_sequences=True, name="gru_0")(hidden)
     hidden = tf.keras.layers.GRU(int(units), return_sequences=True, name="gru_1")(hidden)
     latent = tf.keras.layers.Dense(6, name="beta_latent")(hidden)
-    if output_mode == "identity":
-        beta = latent
-    else:
-        bounds = np.asarray(geometry.beta_bounds_rad, dtype=np.float32)
-        midpoint = 0.5 * (bounds[:, 0] + bounds[:, 1])
-        halfspan = 0.5 * (bounds[:, 1] - bounds[:, 0])
-        beta = tf.keras.layers.Activation("tanh", name="beta_unit")(latent)
-        beta = tf.keras.layers.Rescaling(halfspan, offset=midpoint, name="beta_rad")(beta)
-    return tf.keras.Model(inputs, beta, name="stateful_gru_student")
+    beta = _keras_beta_output(latent, geometry=geometry, output_mode=output_mode)
+    return tf.keras.Model(inputs, beta, name="windowed_autoregressive_gru_student")
 
 
 def autoregressive_rollout(

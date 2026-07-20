@@ -50,6 +50,7 @@ anchor:
   center_plane_proposals: 128
   screen_candidate_limit: 41
   verify_top_count: 3
+  parallel_workers: 4
   center_q1_mm: [-20.0, 20.0]
   center_q2_mm: [-20.0, 20.0]
   center_normal_mm: [-10.0, 10.0]
@@ -154,6 +155,7 @@ smoke:
     center_plane_proposals: 2
     screen_candidate_limit: 2
     verify_top_count: 1
+    parallel_workers: 2
     cuts: [0]
     directions: [forward]
   tube:

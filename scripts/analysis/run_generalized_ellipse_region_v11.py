@@ -616,6 +616,93 @@ def _aligned_beta_gap(left: pd.DataFrame, right: pd.DataFrame) -> dict[str, floa
     }
 
 
+def _run_subprocess_tasks(
+    task_files: Sequence[Path], *, worker_name: str, max_workers: int
+) -> None:
+    pending = list(task_files)
+    active: dict[subprocess.Popen[str], Path] = {}
+    failures = []
+    while pending or active:
+        while pending and len(active) < int(max_workers):
+            task_file = pending.pop(0)
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--internal-worker",
+                    str(worker_name),
+                    "--task-file",
+                    str(task_file),
+                ],
+                cwd=str(Path(__file__).resolve().parents[2]),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=dict(os.environ),
+            )
+            active[process] = task_file
+        completed = [process for process in active if process.poll() is not None]
+        if not completed:
+            time.sleep(0.1)
+            continue
+        for process in completed:
+            task_file = active.pop(process)
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                failures.append(
+                    {
+                        "task_file": str(task_file),
+                        "returncode": int(process.returncode),
+                        "stdout": stdout[-4000:],
+                        "stderr": stderr[-4000:],
+                    }
+                )
+    if failures:
+        raise RuntimeError(f"parallel worker failures: {json.dumps(failures)}")
+
+
+def _run_anchor_screen_worker(task_file: Path) -> dict[str, Any]:
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    source_root = Path(__file__).resolve().parents[2]
+    project_root = Path(task["project_root"]).resolve()
+    config = load_protocol_config(task["config_path"], preset=str(task["preset"]))
+    family = _family_from_payload(task["family"])
+    trial = task["trial"]
+    count = int(task["phase_count"])
+    environment = load_environment(
+        project_root, project_root / str(config["robot_config"])
+    )
+    atlas = _reachability_atlas(project_root, config)
+    if str(task["candidate_id"]) == "A0_000":
+        initial = _subsample_cyclic(_v10_centerline(project_root, config)[list(BETA_COLUMNS)].to_numpy(dtype=float), count)
+    else:
+        target = family.centerline(phase_count=count)
+        initial = atlas.match_targets(target).initial_beta_path_rad
+        root_count = min(8, len(atlas.xyz_m))
+        _distance, root_indices = cKDTree(atlas.xyz_m).query(target[0], k=root_count)
+        root_indices = np.atleast_1d(root_indices)
+        initial[0] = atlas.beta_rad[
+            int(root_indices[int(trial["root_index"]) % len(root_indices)])
+        ]
+    _trajectory, report = _solve_centerline_artifact(
+        family=family,
+        phase_count=count,
+        environment=environment,
+        atlas=atlas,
+        policy=_teacher_policy(
+            config,
+            seed=int(config["seeds"]["solver"])
+            + int(trial["policy_seed_offset"]),
+        ),
+        config=config,
+        directory=Path(task["directory"]),
+        initial_beta=initial,
+        traversal_direction=str(trial["direction"]),
+        cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
+    )
+    return report
+
+
 def run_anchor_stage(
     *,
     config: Mapping[str, Any],
@@ -746,44 +833,38 @@ def run_anchor_stage(
     pd.DataFrame(
         [{"candidate_id": value, **trial_metadata[value]} for value in selected_ids]
     ).to_csv(stage / "screen_trial_manifest.csv", index=False)
-    v10 = _v10_centerline(project_root, config)
-    v10_beta = v10[list(BETA_COLUMNS)].to_numpy(dtype=float)
     screen_rows = []
+    task_files = []
     for candidate_id in selected_ids:
         family = lookup[candidate_id]
         trial = trial_metadata[candidate_id]
         count = int(config["anchor"]["screen_phase_count"])
-        initial = None
-        if candidate_id == "A0_000":
-            initial = _subsample_cyclic(
-                v10_beta, count
+        task_file = stage / "screen_tasks" / f"{candidate_id}.json"
+        atomic_write_json(
+            task_file,
+            {
+                "candidate_id": candidate_id,
+                "family": _family_payload(family),
+                "trial": trial,
+                "phase_count": count,
+                "directory": str((stage / "screen" / candidate_id).resolve()),
+                "config_path": str(config["config_path"]),
+                "preset": str(config["preset"]),
+                "project_root": str(project_root),
+            },
+        )
+        task_files.append(task_file)
+    _run_subprocess_tasks(
+        task_files,
+        worker_name="anchor-screen",
+        max_workers=int(config["anchor"]["parallel_workers"]),
+    )
+    for candidate_id in selected_ids:
+        trial = trial_metadata[candidate_id]
+        report = json.loads(
+            (stage / "screen" / candidate_id / "report.json").read_text(
+                encoding="utf-8"
             )
-        else:
-            target = family.centerline(phase_count=count)
-            initial = atlas.match_targets(target).initial_beta_path_rad
-            root_count = min(8, len(atlas.xyz_m))
-            _distance, root_indices = cKDTree(atlas.xyz_m).query(
-                target[0], k=root_count
-            )
-            root_indices = np.atleast_1d(root_indices)
-            initial[0] = atlas.beta_rad[
-                int(root_indices[int(trial["root_index"]) % len(root_indices)])
-            ]
-        _trajectory, report = _solve_centerline_artifact(
-            family=family,
-            phase_count=count,
-            environment=environment,
-            atlas=atlas,
-            policy=_teacher_policy(
-                config,
-                seed=int(config["seeds"]["solver"])
-                + int(trial["policy_seed_offset"]),
-            ),
-            config=config,
-            directory=stage / "screen" / candidate_id,
-            initial_beta=initial,
-            traversal_direction=str(trial["direction"]),
-            cyclic_cut=int(round(float(trial["cut_fraction"]) * count)) % count,
         )
         screen_rows.append(
             {
@@ -3042,11 +3123,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--project-root", type=Path, default=project_root)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--internal-worker", choices=("anchor-screen",), default=None)
+    parser.add_argument("--task-file", type=Path, default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.internal_worker is not None:
+        if args.task_file is None:
+            raise ValueError("--internal-worker requires --task-file")
+        if args.internal_worker == "anchor-screen":
+            report = _run_anchor_screen_worker(args.task_file)
+        else:  # pragma: no cover - argparse owns the choices
+            raise ValueError(f"unknown internal worker: {args.internal_worker}")
+        print(json.dumps(report, allow_nan=False))
+        return
     source_root = Path(__file__).resolve().parents[2]
     project_root = Path(args.project_root).resolve()
     config = load_protocol_config(args.config, preset=args.preset)

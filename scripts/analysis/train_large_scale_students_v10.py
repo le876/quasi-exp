@@ -39,6 +39,14 @@ class Candidate:
     output_mode: str
     lambda_fk: float
 
+    def __post_init__(self) -> None:
+        if self.student not in {"S0", "S1", "S3"}:
+            raise ValueError(f"unsupported student architecture: {self.student}")
+        if self.output_mode not in {"identity", "tanh"}:
+            raise ValueError(f"unsupported output mode: {self.output_mode}")
+        if not np.isfinite(self.lambda_fk) or self.lambda_fk < 0.0:
+            raise ValueError("lambda_fk must be finite and non-negative")
+
     @property
     def is_autoregressive(self) -> bool:
         return self.student == "S3"
@@ -192,6 +200,7 @@ def _fit_fixed_epochs(
     seed: int,
     epochs: int,
     window_size: int,
+    epoch_budget_source: str = "0.5m_screen_median",
 ) -> tuple[Any, Any | None, dict[str, Any]]:
     """Fit without consulting a validation set (used by the 0.75 m control)."""
 
@@ -246,7 +255,7 @@ def _fit_fixed_epochs(
         "final_train_loss": float(history.history["loss"][-1]),
         "wall_time_s": float(time.perf_counter() - started),
         "rows_or_windows": int(rows),
-        "epoch_budget_source": "0.5m_screen_median",
+        "epoch_budget_source": str(epoch_budget_source),
     }
 
 

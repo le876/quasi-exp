@@ -197,6 +197,10 @@ def main() -> None:
     if not gpus:
         raise RuntimeError("deployment refit requires a TensorFlow GPU")
     tf.config.experimental.set_memory_growth(gpus[0], True)
+    try:
+        tf.config.experimental.enable_op_determinism()
+    except Exception:
+        pass
     environment = load_environment(project_root, args.robot_config.resolve())
     geometry = _geometry(environment)
     dense = {
@@ -224,6 +228,7 @@ def main() -> None:
             seed=DEPLOYMENT_SEED,
             epochs=epochs,
             window_size=args.window_size,
+            epoch_budget_source="final_scope_best_epoch_median",
         )
         scope_dir = output_root / "deployment" / scope
         scope_dir.mkdir(parents=True, exist_ok=True)

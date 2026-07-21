@@ -112,13 +112,51 @@ def test_relaxed_2x_protocol_doubles_upper_gates_and_halves_lower_gates() -> Non
 
     assert relaxed["protocol_id"] == "generalized-ellipse-region-v11.2-relaxed2x"
     assert relaxed["output_root"] == "runs/generalized_ellipse_region_v11_relaxed2x"
-    assert relaxed["gates"]["teacher_surface"]["residual_max_mm"] == 2.0 * strict["gates"]["teacher_surface"]["residual_max_mm"]
-    assert relaxed["gates"]["teacher_surface"]["success_rate"] == strict["gates"]["teacher_surface"]["success_rate"] / 2.0
-    assert relaxed["gates"]["teacher_surface"]["joint_margin_min_deg"] == strict["gates"]["teacher_surface"]["joint_margin_min_deg"] / 2.0
-    assert relaxed["gates"]["conditioning"]["sigma_min_p05_min"] == strict["gates"]["conditioning"]["sigma_min_p05_min"] / 2.0
-    assert relaxed["gates"]["conditioning"]["kappa_p95_max"] == 2.0 * strict["gates"]["conditioning"]["kappa_p95_max"]
-    assert relaxed["gates"]["conflicts"]["xyz_radius_mm"] == strict["gates"]["conflicts"]["xyz_radius_mm"] / 2.0
-    assert relaxed["gates"]["conflicts"]["beta_gap_threshold_deg"] == 2.0 * strict["gates"]["conflicts"]["beta_gap_threshold_deg"]
+    def value(config: dict, path: str) -> float:
+        current: object = config
+        for part in path.split("."):
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        return float(current)
+
+    upper_limit_paths = (
+        "gates.teacher_surface.residual_p95_mm",
+        "gates.teacher_surface.residual_max_mm",
+        "gates.teacher_surface.phase_beta_rms_p95_deg",
+        "gates.teacher_surface.delta_beta_rms_max_deg",
+        "gates.teacher_surface.acceleration_beta_rms_p95_deg",
+        "gates.teacher_surface.seam_beta_rms_max_deg",
+        "gates.teacher_surface.surface_edge_beta_rms_p95_deg",
+        "gates.teacher_surface.surface_laplacian_beta_rms_p95_deg",
+        "gates.teacher_surface.surface_block_update_rms_max_deg",
+        "gates.repeatability.repeat_beta_rms_p95_deg",
+        "gates.repeatability.reverse_cut_beta_rms_p95_deg",
+        "gates.local_consistency.gap_5mm_p95_deg",
+        "gates.local_consistency.gap_10mm_p95_deg",
+        "gates.conditioning.kappa_p95_max",
+        "gates.conflicts.beta_gap_threshold_deg",
+        "gates.coverage.nearest_p95_mm",
+        "gates.coverage.nearest_max_mm",
+        "gates.student.interpolation_p95_mm",
+        "gates.student.near_ood_p95_mm",
+        "gates.student.absolute_max_mm",
+        "gates.student.relative_max_fraction",
+        "gates.student.per_axis_mean_mm",
+        "representation.chart_count_range.1",
+        "representation.ambiguous_voxel_max",
+    )
+    lower_limit_paths = (
+        "gates.teacher_surface.success_rate",
+        "gates.teacher_surface.joint_margin_min_deg",
+        "gates.conditioning.sigma_min_p05_min",
+        "gates.conflicts.xyz_radius_mm",
+        "representation.chart_count_range.0",
+        "representation.chart_repeat_ari_min",
+        "representation.chart_xyz_macro_f1_min",
+    )
+    for path in upper_limit_paths:
+        assert value(relaxed, path) == 2.0 * value(strict, path), path
+    for path in lower_limit_paths:
+        assert value(relaxed, path) == value(strict, path) / 2.0, path
     assert relaxed["gates"]["student"]["required_seed_passes"] == 2
     assert relaxed["gates"]["student"]["seed_count"] == strict["gates"]["student"]["seed_count"]
     assert relaxed["anchor"] == strict["anchor"]

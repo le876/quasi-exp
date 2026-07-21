@@ -1,8 +1,11 @@
 # Generalized Ellipse Region V11.2：2× Gate 放宽实验记录
 
-日期：2026-07-21  
-协议：`generalized-ellipse-region-v11.2-relaxed2x`  
-实现提交：`ccdbcfd`  
+日期：2026-07-21
+
+协议：`generalized-ellipse-region-v11.2-relaxed2x`
+
+实现提交：`ccdbcfd`
+
 正式产物：`runs/generalized_ellipse_region_v11_relaxed2x/`
 
 ## 1. 实验目的与结论边界
@@ -106,4 +109,3 @@ A2_134 与 A2_143 的 repeat 均通过放宽后的 0.4 deg gate；A2_178 连 rep
 如果目的是保持正式证据有效，应先修改 anchor/canonical 选择目标，使 traversal/cut 共享同一 branch identity，再重跑 Phase 1；不能把 9--14 deg 事后放宽成通过。
 
 如果目的只是查看“忽略分支不变量后”的下游 tube、family 和 student 表现，则应另建明确命名的 shadow/bypass 协议：保留当前 Phase 1 gate 为 FAIL，单独记录被强制选中的 anchor 和 bypass 原因，并禁止生成正式 `COMPLETED`。这属于比“所有数值 gate 放宽 2 倍”更强的协议变更，不能混入本轮正式目录。
-

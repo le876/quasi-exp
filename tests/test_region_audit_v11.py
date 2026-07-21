@@ -95,3 +95,35 @@ def test_surface_gate_is_strict_and_exposes_raw_boolean_checks() -> None:
     failed = evaluate_teacher_surface_gate({**metrics, "success_rate": 0.999})
     assert failed["gate_pass"] is False
     assert failed["checks"]["all_rows_success"] is False
+
+
+def test_surface_success_rate_can_be_relaxed_by_a_frozen_minimum_threshold() -> None:
+    metrics = {
+        "success_rate": 0.75,
+        "residual_p95_mm": 1.8,
+        "residual_max_mm": 5.8,
+        "joint_margin_min_deg": 0.8,
+        "phase_beta_rms_p95_deg": 1.8,
+        "acceleration_beta_rms_p95_deg": 0.8,
+        "seam_beta_rms_max_deg": 1.8,
+        "surface_edge_beta_rms_p95_deg": 1.8,
+        "surface_laplacian_beta_rms_p95_deg": 1.8,
+        "surface_block_update_rms_max_deg": 0.08,
+    }
+    thresholds = {
+        "success_rate": 0.5,
+        "residual_p95_mm": 2.0,
+        "residual_max_mm": 6.0,
+        "joint_margin_min_deg": 0.75,
+        "phase_beta_rms_p95_deg": 2.0,
+        "acceleration_beta_rms_p95_deg": 1.0,
+        "seam_beta_rms_max_deg": 2.0,
+        "surface_edge_beta_rms_p95_deg": 2.0,
+        "surface_laplacian_beta_rms_p95_deg": 2.0,
+        "surface_block_update_rms_max_deg": 0.1,
+    }
+
+    report = evaluate_teacher_surface_gate(metrics, thresholds=thresholds)
+
+    assert report["gate_pass"] is True
+    assert report["checks"]["all_rows_success"] is True

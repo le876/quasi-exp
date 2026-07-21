@@ -119,11 +119,23 @@ def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, 
     return output
 
 
-def load_protocol_config(path: str | Path, *, preset: str) -> dict[str, Any]:
-    config_path = Path(path).resolve()
+def _load_protocol_yaml(config_path: Path, *, seen: frozenset[Path]) -> dict[str, Any]:
+    if config_path in seen:
+        raise ValueError(f"cyclic protocol config inheritance: {config_path}")
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("V11 protocol YAML must contain a mapping")
+    parent = payload.pop("extends", None)
+    if parent is None:
+        return payload
+    parent_path = (config_path.parent / str(parent)).resolve()
+    base = _load_protocol_yaml(parent_path, seen=seen | {config_path})
+    return _deep_merge(base, payload)
+
+
+def load_protocol_config(path: str | Path, *, preset: str) -> dict[str, Any]:
+    config_path = Path(path).resolve()
+    payload = _load_protocol_yaml(config_path, seen=frozenset())
     normalized = str(preset).lower()
     if normalized not in {"smoke", "formal"}:
         raise ValueError("preset must be smoke or formal")
@@ -519,13 +531,22 @@ def _centerline_thresholds(config: Mapping[str, Any]) -> dict[str, float]:
         "residual_p95_mm": float(source["residual_p95_mm"]),
         "residual_max_mm": float(source["residual_max_mm"]),
         "delta_beta_rms_p95_deg": float(source["phase_beta_rms_p95_deg"]),
-        "delta_beta_rms_max_deg": 2.0,
+        "delta_beta_rms_max_deg": float(source["delta_beta_rms_max_deg"]),
         "acceleration_beta_rms_p95_deg": float(
             source["acceleration_beta_rms_p95_deg"]
         ),
         "seam_beta_rms_deg": float(source["seam_beta_rms_max_deg"]),
         "joint_margin_min_deg": float(source["joint_margin_min_deg"]),
     }
+
+
+def _anchor_margin_passes(
+    margin_deg: float, teacher_surface_thresholds: Mapping[str, Any]
+) -> bool:
+    return bool(
+        float(margin_deg)
+        >= float(teacher_surface_thresholds["joint_margin_min_deg"])
+    )
 
 
 def _solve_centerline_artifact(
@@ -1094,9 +1115,12 @@ def run_anchor_stage(
         atomic_write_json(stage / "selected_anchor.json", _family_payload(selected_family))
     checks = {
         "at_least_one_720_phase_candidate_passes": bool(selected_family is not None),
-        "selected_margin_at_least_1p5_deg": bool(
+        "selected_margin_meets_protocol_minimum": bool(
             selected_family is not None
-            and float(passing.iloc[0]["joint_margin_min_deg"]) >= 1.5
+            and _anchor_margin_passes(
+                float(passing.iloc[0]["joint_margin_min_deg"]),
+                config["gates"]["teacher_surface"],
+            )
         ),
         "selected_repeatability_passes": bool(
             selected_family is not None
@@ -2103,7 +2127,9 @@ def run_representation_stage(
             "previous_beta_resolves_conflicts": False,
         }
     )
-    representation = select_student_representation(diagnostics)
+    representation = select_student_representation(
+        diagnostics, thresholds=config["representation"]
+    )
     decision = {
         "representation": representation,
         "decision_order": ["static", "chart_expert", "stateful", "stop"],

@@ -1,0 +1,62 @@
+extends: generalized_ellipse_region_v11.yaml
+
+protocol_id: generalized-ellipse-region-v11.2-relaxed2x
+output_root: runs/generalized_ellipse_region_v11_relaxed2x
+
+gate_relaxation:
+  factor: 2.0
+  purpose: diagnostic-continuation
+  rule:
+    upper_error_limits: multiply-by-2
+    lower_quality_limits: divide-by-2
+    integer_minimum_counts: ceil-divide-by-2
+  unchanged_invariants:
+    - artifact-integrity
+    - complete-row-inventory
+    - family-and-trajectory-split-isolation
+    - sealed-test-non-leakage
+    - zero-joint-bound-violations
+    - fixed-sampling-and-training-budgets
+
+gates:
+  teacher_surface:
+    success_rate: 0.5
+    residual_p95_mm: 2.0
+    residual_max_mm: 6.0
+    joint_margin_min_deg: 0.75
+    phase_beta_rms_p95_deg: 2.0
+    delta_beta_rms_max_deg: 4.0
+    acceleration_beta_rms_p95_deg: 1.0
+    seam_beta_rms_max_deg: 2.0
+    surface_edge_beta_rms_p95_deg: 2.0
+    surface_laplacian_beta_rms_p95_deg: 2.0
+    surface_block_update_rms_max_deg: 0.1
+  repeatability:
+    repeat_beta_rms_p95_deg: 0.4
+    reverse_cut_beta_rms_p95_deg: 1.0
+  local_consistency:
+    gap_5mm_p95_deg: 1.0
+    gap_10mm_p95_deg: 2.0
+  conditioning:
+    sigma_min_p05_min: 0.025
+    kappa_p95_max: 200.0
+  conflicts:
+    xyz_radius_mm: 1.0
+    beta_gap_threshold_deg: 2.0
+  coverage:
+    nearest_p95_mm: 6.0
+    nearest_max_mm: 10.0
+  student:
+    interpolation_p95_mm: 10.0
+    near_ood_p95_mm: 15.0
+    absolute_max_mm: 20.0
+    relative_max_fraction: 0.04
+    per_axis_mean_mm: 4.0
+    required_seed_passes: 2
+    seed_count: 5
+
+representation:
+  chart_count_range: [1, 8]
+  chart_repeat_ari_min: 0.495
+  chart_xyz_macro_f1_min: 0.49
+  ambiguous_voxel_max: 0

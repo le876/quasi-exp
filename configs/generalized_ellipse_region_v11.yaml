@@ -101,6 +101,7 @@ gates:
     residual_max_mm: 3.0
     joint_margin_min_deg: 1.5
     phase_beta_rms_p95_deg: 1.0
+    delta_beta_rms_max_deg: 2.0
     acceleration_beta_rms_p95_deg: 0.5
     seam_beta_rms_max_deg: 1.0
     surface_edge_beta_rms_p95_deg: 1.0

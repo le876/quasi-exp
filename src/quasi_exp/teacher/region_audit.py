@@ -42,12 +42,8 @@ def evaluate_teacher_surface_gate(
         raise ValueError(f"surface thresholds missing fields: {missing_thresholds}")
     checks = {
         "all_rows_success": bool(
-            math.isclose(
-                float(metrics["success_rate"]),
-                float(thresholds["success_rate"]),
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
+            float(metrics["success_rate"])
+            >= float(thresholds["success_rate"]) - 1.0e-12
         ),
         "residual_p95": bool(
             float(metrics["residual_p95_mm"])
@@ -205,16 +201,28 @@ def audit_cross_family_conflicts(
     )
 
 
-def select_student_representation(report: Mapping[str, Any]) -> str:
+def select_student_representation(
+    report: Mapping[str, Any], *, thresholds: Mapping[str, Any] | None = None
+) -> str:
     """Apply the frozen static → chart → stateful → stop decision ladder."""
 
     if int(report.get("conflict_pair_count", 1)) == 0:
         return "static"
+    limits = thresholds or {
+        "chart_count_range": (2, 4),
+        "chart_repeat_ari_min": 0.99,
+        "chart_xyz_macro_f1_min": 0.98,
+        "ambiguous_voxel_max": 0,
+    }
+    chart_min, chart_max = (int(value) for value in limits["chart_count_range"])
     chart_pass = bool(
-        2 <= int(report.get("stable_chart_count", 0)) <= 4
-        and float(report.get("chart_repeat_ari", -math.inf)) >= 0.99
-        and float(report.get("chart_xyz_macro_f1", -math.inf)) >= 0.98
-        and int(report.get("ambiguous_voxel_count", 1)) == 0
+        chart_min <= int(report.get("stable_chart_count", 0)) <= chart_max
+        and float(report.get("chart_repeat_ari", -math.inf))
+        >= float(limits["chart_repeat_ari_min"])
+        and float(report.get("chart_xyz_macro_f1", -math.inf))
+        >= float(limits["chart_xyz_macro_f1_min"])
+        and int(report.get("ambiguous_voxel_count", 1))
+        <= int(limits["ambiguous_voxel_max"])
     )
     if chart_pass:
         return "chart_expert"

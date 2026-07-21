@@ -98,6 +98,41 @@ def test_stage_cache_is_invalidated_when_execution_fingerprint_changes(
     )
 
 
+def test_relaxed_2x_protocol_doubles_upper_gates_and_halves_lower_gates() -> None:
+    runner = _runner_module()
+    source_root = Path(__file__).resolve().parents[1]
+    strict = runner.load_protocol_config(
+        source_root / "configs/generalized_ellipse_region_v11.yaml",
+        preset="formal",
+    )
+    relaxed = runner.load_protocol_config(
+        source_root / "configs/generalized_ellipse_region_v11_relaxed2x.yaml",
+        preset="formal",
+    )
+
+    assert relaxed["protocol_id"] == "generalized-ellipse-region-v11.2-relaxed2x"
+    assert relaxed["output_root"] == "runs/generalized_ellipse_region_v11_relaxed2x"
+    assert relaxed["gates"]["teacher_surface"]["residual_max_mm"] == 2.0 * strict["gates"]["teacher_surface"]["residual_max_mm"]
+    assert relaxed["gates"]["teacher_surface"]["success_rate"] == strict["gates"]["teacher_surface"]["success_rate"] / 2.0
+    assert relaxed["gates"]["teacher_surface"]["joint_margin_min_deg"] == strict["gates"]["teacher_surface"]["joint_margin_min_deg"] / 2.0
+    assert relaxed["gates"]["conditioning"]["sigma_min_p05_min"] == strict["gates"]["conditioning"]["sigma_min_p05_min"] / 2.0
+    assert relaxed["gates"]["conditioning"]["kappa_p95_max"] == 2.0 * strict["gates"]["conditioning"]["kappa_p95_max"]
+    assert relaxed["gates"]["conflicts"]["xyz_radius_mm"] == strict["gates"]["conflicts"]["xyz_radius_mm"] / 2.0
+    assert relaxed["gates"]["conflicts"]["beta_gap_threshold_deg"] == 2.0 * strict["gates"]["conflicts"]["beta_gap_threshold_deg"]
+    assert relaxed["gates"]["student"]["required_seed_passes"] == 2
+    assert relaxed["gates"]["student"]["seed_count"] == strict["gates"]["student"]["seed_count"]
+    assert relaxed["anchor"] == strict["anchor"]
+    assert relaxed["formal"] == strict["formal"]
+    assert runner._centerline_thresholds(relaxed)["delta_beta_rms_max_deg"] == 4.0
+
+
+def test_anchor_selection_margin_uses_protocol_threshold_not_a_literal() -> None:
+    runner = _runner_module()
+
+    assert runner._anchor_margin_passes(0.75, {"joint_margin_min_deg": 0.75}) is True
+    assert runner._anchor_margin_passes(0.749, {"joint_margin_min_deg": 0.75}) is False
+
+
 def test_interpolation_families_are_midpoints_of_training_families() -> None:
     runner = _runner_module()
     source_root = Path(__file__).resolve().parents[1]

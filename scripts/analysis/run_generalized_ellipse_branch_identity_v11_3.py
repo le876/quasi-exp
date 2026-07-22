@@ -534,6 +534,7 @@ def _candidate_layers(
     corrector_policy: TeacherPolicy,
     solver_seed: int,
     seed_step_deg: float,
+    max_seed_attempts: int = 24,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Build 8--16 distinct, corrected nodes from paths, predictors and null seeds."""
 
@@ -543,6 +544,8 @@ def _candidate_layers(
         raise ValueError("candidate limits must satisfy 1 <= min <= max")
     if float(seed_step_deg) <= 0.0:
         raise ValueError("seed_step_deg must be positive")
+    if int(max_seed_attempts) < minimum:
+        raise ValueError("max_seed_attempts must be at least min_candidates")
     all_paths = [np.asarray(reference, dtype=float), *[np.asarray(path) for path in paths]]
     reference_path = np.asarray(reference, dtype=float).reshape(len(target), 6)
     bounds = np.asarray(environment.bounds, dtype=float).reshape(6, 2)
@@ -590,7 +593,8 @@ def _candidate_layers(
             seed_bank.extend([anchor + step * direction, anchor - step * direction])
         rng = np.random.default_rng(int(solver_seed) + phase)
         attempts = 0
-        while len(kept) < minimum and attempts < 96:
+        raw_candidates: list[np.ndarray] = []
+        while len(kept) < minimum and attempts < int(max_seed_attempts):
             if attempts < len(seed_bank):
                 seed = seed_bank[attempts]
             else:
@@ -598,14 +602,25 @@ def _candidate_layers(
                 direction /= max(float(np.linalg.norm(direction)), 1.0e-12)
                 scale = step * (1.0 + (attempts - len(seed_bank)) // 12)
                 seed = anchor + scale * direction
+            bounded_seed = np.clip(seed, bounds[:, 0], bounds[:, 1])
+            raw_candidates.append(bounded_seed.copy())
             beta, _residual, _iterations, _success = _correct_target(
                 environment,
                 target[phase],
-                np.clip(seed, bounds[:, 0], bounds[:, 1]),
+                bounded_seed,
                 corrector_policy,
             )
             keep(beta)
             attempts += 1
+        # A candidate graph may contain imperfect IK nodes: residual is an
+        # explicit unary cost.  If correction collapses distinct null seeds
+        # onto fewer than K branches, retain the bounded predictor/null seeds
+        # rather than duplicating a solved node or silently shrinking K.
+        if len(kept) < minimum:
+            for candidate in raw_candidates:
+                keep(candidate)
+                if len(kept) >= minimum:
+                    break
         layer = np.vstack(kept)
         achieved = np.asarray(environment.fk(layer), dtype=float).reshape(-1, 3)
         error = np.linalg.norm(achieved - target[phase][None, :], axis=1) * 1000.0
@@ -905,6 +920,7 @@ def _run_candidate_experiment(
         corrector_policy=corrector,
         solver_seed=int(corrector.solver_seed + 350),
         seed_step_deg=float(config["repair"]["graph_seed_step_deg"]),
+        max_seed_attempts=int(config["repair"]["graph_candidate_seed_attempts"]),
     )
     graph_consensus, graph_report = link_reference_cyclic_candidates(
         layers,

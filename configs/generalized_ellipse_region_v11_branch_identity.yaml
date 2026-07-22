@@ -42,6 +42,7 @@ repair:
   graph_closure_weight: 5.0
   graph_candidates_min_per_phase: 8
   graph_candidates_per_phase: 16
+  graph_candidate_seed_attempts: 24
   graph_seed_step_deg: 2.0
   consensus_reference_weight: 2.0
   consensus_reference_scale_deg: 1.0
@@ -97,6 +98,7 @@ smoke:
     trust_radius_pilot_deg: [0.5]
     graph_candidates_min_per_phase: 4
     graph_candidates_per_phase: 4
+    graph_candidate_seed_attempts: 8
   variants:
     pilot_cuts: [0, 3]
     formal_cuts: [0, 3]

@@ -37,9 +37,12 @@ repair:
   lambda_reference: 2.0
   lambda_previous: 1.0
   graph_lambda_velocity: 1.0
+  graph_lambda_acceleration: 0.5
   graph_lambda_reference: 2.0
   graph_closure_weight: 5.0
+  graph_candidates_min_per_phase: 8
   graph_candidates_per_phase: 16
+  graph_seed_step_deg: 2.0
   consensus_reference_weight: 2.0
   consensus_reference_scale_deg: 1.0
 
@@ -92,6 +95,7 @@ smoke:
   repair:
     candidate_budget: 2
     trust_radius_pilot_deg: [0.5]
+    graph_candidates_min_per_phase: 4
     graph_candidates_per_phase: 4
   variants:
     pilot_cuts: [0, 3]

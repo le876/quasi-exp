@@ -62,6 +62,21 @@ def _rms_deg(delta_rad: np.ndarray, *, axis: int = -1) -> np.ndarray:
     return np.rad2deg(np.sqrt(np.mean(np.square(delta_rad), axis=axis)))
 
 
+def _gap_summary(name: str, gap_deg: np.ndarray) -> dict[str, Any]:
+    gap = np.asarray(gap_deg, dtype=float).reshape(-1)
+    return {
+        "variant": str(name),
+        "gap_p50_deg": float(np.percentile(gap, 50)),
+        "gap_p90_deg": float(np.percentile(gap, 90)),
+        "gap_p95_deg": float(np.percentile(gap, 95)),
+        "gap_max_deg": float(np.max(gap)),
+        "ratio_gap_gt_0p5deg": float(np.mean(gap > 0.5)),
+        "ratio_gap_gt_1deg": float(np.mean(gap > 1.0)),
+        "ratio_gap_gt_2deg": float(np.mean(gap > 2.0)),
+        "ratio_gap_gt_5deg": float(np.mean(gap > 5.0)),
+    }
+
+
 def _connected_labels(values: np.ndarray, threshold_deg: float) -> np.ndarray:
     beta = np.asarray(values, dtype=float).reshape(-1, 6)
     count = len(beta)
@@ -182,21 +197,7 @@ def analyze_branch_variants(
         paths[str(name)] = beta
         delta = beta - primary_beta
         gap = _rms_deg(delta)
-        summary_rows.append(
-            {
-                "variant": str(name),
-                "gap_p50_deg": float(np.percentile(gap, 50)),
-                "gap_p90_deg": float(np.percentile(gap, 90)),
-                "gap_p95_deg": float(np.percentile(gap, 95)),
-                "gap_max_deg": float(np.max(gap)),
-                **{
-                    f"ratio_gap_gt_{('0p5' if limit == 0.5 else str(int(limit)))}deg": float(
-                        np.mean(gap > limit)
-                    )
-                    for limit in (0.5, 1.0, 2.0, 5.0)
-                },
-            }
-        )
+        summary_rows.append(_gap_summary(str(name), gap))
         interval_rows.extend(_transition_intervals(phase, str(name), gap))
         for joint in range(6):
             joint_gap = np.abs(np.rad2deg(delta[:, joint]))
@@ -329,6 +330,7 @@ def link_reference_cyclic_candidates(
     lambda_reference: float,
     closure_weight: float,
     root_cluster_threshold_deg: float,
+    lambda_acceleration: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Choose one closed candidate path while freezing the canonical root cluster."""
 
@@ -382,6 +384,72 @@ def link_reference_cyclic_candidates(
     best_cost = math.inf
     best_indices: list[int] | None = None
     for start in allowed_starts:
+        if float(lambda_acceleration) > 0.0:
+            cost = np.full(
+                (len(ordered_layers[0]), len(ordered_layers[1])), np.inf
+            )
+            cost[int(start), :] = (
+                unary[0][int(start)]
+                + unary[1]
+                + transitions[0][int(start), :]
+            )
+            second_order_parents: list[np.ndarray] = []
+            for index in range(2, count):
+                acceleration = (
+                    ordered_layers[index][None, None, :, :]
+                    - 2.0 * ordered_layers[index - 1][None, :, None, :]
+                    + ordered_layers[index - 2][:, None, None, :]
+                )
+                acceleration_deg = np.rad2deg(
+                    np.sqrt(
+                        np.sum(weights[None, None, None, :] * np.square(acceleration), axis=3)
+                        / np.sum(weights)
+                    )
+                )
+                values = (
+                    cost[:, :, None]
+                    + transitions[index - 1][None, :, :]
+                    + float(lambda_acceleration) * np.square(acceleration_deg)
+                )
+                parent = np.argmin(values, axis=0).astype(np.int64)
+                cost = np.min(values, axis=0) + unary[index][None, :]
+                second_order_parents.append(parent)
+            seam = _weighted_pairwise_gap_deg(
+                ordered_layers[-1],
+                ordered_layers[0][int(start) : int(start) + 1],
+                weights,
+            )[:, 0]
+            seam_acceleration = (
+                ordered_layers[0][int(start)][None, None, :]
+                - 2.0 * ordered_layers[-1][None, :, :]
+                + ordered_layers[-2][:, None, :]
+            )
+            seam_acceleration_deg = np.rad2deg(
+                np.sqrt(
+                    np.sum(weights[None, None, :] * np.square(seam_acceleration), axis=2)
+                    / np.sum(weights)
+                )
+            )
+            total = (
+                cost
+                + float(closure_weight) * np.square(seam)[None, :]
+                + float(lambda_acceleration) * np.square(seam_acceleration_deg)
+            )
+            penultimate, end = np.unravel_index(int(np.argmin(total)), total.shape)
+            candidate_cost = float(total[penultimate, end])
+            if candidate_cost >= best_cost:
+                continue
+            indices = [0] * count
+            indices[-2] = int(penultimate)
+            indices[-1] = int(end)
+            for phase_index in range(count - 1, 1, -1):
+                parent = second_order_parents[phase_index - 2]
+                indices[phase_index - 2] = int(
+                    parent[indices[phase_index - 1], indices[phase_index]]
+                )
+            best_indices = indices
+            best_cost = candidate_cost
+            continue
         cost = np.full(len(ordered_layers[0]), np.inf)
         cost[int(start)] = unary[0][int(start)]
         parents: list[np.ndarray] = []
@@ -423,6 +491,7 @@ def link_reference_cyclic_candidates(
         "delta_beta_rms_p95_deg": float(np.percentile(velocity, 95)),
         "delta_beta_rms_max_deg": float(np.max(velocity)),
         "seam_beta_rms_deg": float(velocity[-1]),
+        "second_order_acceleration_enabled": bool(float(lambda_acceleration) > 0.0),
     }
 
 
@@ -448,12 +517,20 @@ def audit_consensus_variants(
     paths: dict[str, np.ndarray] = {"consensus": consensus}
     rows: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    primary = (
+        np.asarray(variants["primary"], dtype=float).reshape(-1, 6)
+        if "primary" in variants
+        else None
+    )
+    if primary is not None and primary.shape != consensus.shape:
+        raise ValueError("variant 'primary' does not match consensus shape")
     for name, value in variants.items():
         beta = np.asarray(value, dtype=float).reshape(-1, 6)
         if beta.shape != consensus.shape:
             raise ValueError(f"variant {name!r} does not match consensus shape")
         paths[str(name)] = beta
-        gap = _rms_deg(beta - consensus)
+        comparison = primary if str(name) == "repeat" and primary is not None else consensus
+        gap = _rms_deg(beta - comparison)
         rows.extend(
             {
                 "variant": str(name),
@@ -462,19 +539,7 @@ def audit_consensus_variants(
             }
             for index, item in enumerate(gap)
         )
-        summaries.append(
-            {
-                "variant": str(name),
-                "gap_p50_deg": float(np.percentile(gap, 50)),
-                "gap_p90_deg": float(np.percentile(gap, 90)),
-                "gap_p95_deg": float(np.percentile(gap, 95)),
-                "gap_max_deg": float(np.max(gap)),
-                "ratio_gap_gt_0p5deg": float(np.mean(gap > 0.5)),
-                "ratio_gap_gt_1deg": float(np.mean(gap > 1.0)),
-                "ratio_gap_gt_2deg": float(np.mean(gap > 2.0)),
-                "ratio_gap_gt_5deg": float(np.mean(gap > 5.0)),
-            }
-        )
+        summaries.append(_gap_summary(str(name), gap))
     return ConsensusVariantAudit(
         per_phase_gap=pd.DataFrame(rows),
         summary=pd.DataFrame(summaries),
@@ -503,6 +568,8 @@ class BranchIdentityGate:
         *,
         numerical_metrics: Mapping[str, float],
         variant_audit: ConsensusVariantAudit,
+        variant_solver_success: Mapping[str, bool] | None = None,
+        variant_trust_violation_count: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         required = {
             "residual_p95_mm",
@@ -563,6 +630,23 @@ class BranchIdentityGate:
             "single_branch_cluster": bool(
                 not variant_audit.branch_clusters.empty
                 and int(variant_audit.branch_clusters["cluster_count"].max()) == 1
+            ),
+            "audit_variant_solver_success": bool(
+                variant_solver_success is None
+                or (
+                    len(variant_solver_success) > 0
+                    and all(bool(value) for value in variant_solver_success.values())
+                )
+            ),
+            "audit_variant_trust_preserved": bool(
+                variant_trust_violation_count is None
+                or (
+                    len(variant_trust_violation_count) > 0
+                    and all(
+                        float(value) <= 0.0
+                        for value in variant_trust_violation_count.values()
+                    )
+                )
             ),
         }
         normalized = {key: bool(value) for key, value in checks.items()}
@@ -726,7 +810,11 @@ class ReferenceBranchTeacher:
                 )
             if not np.any(allowed):
                 trust_violations += 1
-                allowed[int(np.argmin(reference_gap))] = True
+                # Fail closed on branch identity.  Preserve the frozen chart for
+                # evidence generation, but never promote an out-of-trust solve.
+                selected[phase] = root_beta if phase == root_index else reference[phase]
+                solved_indices.append(phase)
+                continue
             scores = np.full(len(candidates), np.inf)
             for candidate_index, (beta, residual, _iterations) in enumerate(candidates):
                 if not allowed[candidate_index]:

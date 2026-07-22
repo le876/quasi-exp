@@ -100,7 +100,8 @@ def project_root_from(source_root: Path) -> Path:
 
 def variant_specs(cuts: Sequence[int]) -> list[tuple[str, str, int]]:
     normalized = [int(value) for value in cuts]
-    output = [("repeat", "forward", 0)]
+    # Primary and repeat deliberately use identical traversal, seed and policy.
+    output = [("primary", "forward", 0), ("repeat", "forward", 0)]
     output.extend(
         (f"forward_cut{cut:04d}", "forward", cut)
         for cut in normalized
@@ -403,7 +404,7 @@ def _solve_audit_variants(
     teacher = ReferenceBranchTeacher(environment)
     paths: dict[str, np.ndarray] = {}
     trajectories: dict[str, TeacherTrajectory] = {}
-    for variant_index, (name, direction, cut) in enumerate(variant_specs(cuts)):
+    for name, direction, cut in variant_specs(cuts):
         trajectory = teacher.solve(
             target,
             reference_beta=reference,
@@ -413,7 +414,7 @@ def _solve_audit_variants(
             cut=int(cut) % len(target),
             corrector_policy=corrector_policy,
             repair_policy=repair_policy,
-            solver_seed=int(seed_base + variant_index),
+            solver_seed=int(seed_base),
             trajectory_id=f"{family_id}:{name}",
             family_id=family_id,
             radius_mm=radius_mm,
@@ -437,6 +438,7 @@ def _write_strategy(
     root_phase_idx: int,
     gate: BranchIdentityGate,
     extra: Mapping[str, Any] | None = None,
+    additional_checks: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
     consensus_trajectory = _trajectory_from_beta(
@@ -484,10 +486,30 @@ def _write_strategy(
     audit.summary.to_csv(directory / "variant_audit_summary.csv", index=False)
     _atomic_parquet(audit.branch_clusters, directory / "audit_branch_clusters.parquet")
     numerical = _metrics_for_beta(environment, target, consensus)
+    solver_success = (
+        {name: bool(value.success) for name, value in variant_trajectories.items()}
+        if variant_trajectories is not None
+        else None
+    )
+    trust_violations = (
+        {
+            name: float(value.metrics.get("trust_violation_count", 0.0))
+            for name, value in variant_trajectories.items()
+        }
+        if variant_trajectories is not None
+        else None
+    )
     gate_report = gate.evaluate(
         numerical_metrics=numerical,
         variant_audit=audit,
+        variant_solver_success=solver_success,
+        variant_trust_violation_count=trust_violations,
     )
+    gate_report["checks"]["candidate_layer_budget"] = True
+    gate_report["checks"].update(
+        {key: bool(value) for key, value in dict(additional_checks or {}).items()}
+    )
+    gate_report["gate_pass"] = bool(all(gate_report["checks"].values()))
     summary = {
         "root_phase_idx": int(root_phase_idx),
         "numerical_metrics": numerical,
@@ -507,24 +529,83 @@ def _candidate_layers(
     *,
     reference: np.ndarray,
     cluster_threshold_deg: float,
+    min_candidates: int,
     max_candidates: int,
+    corrector_policy: TeacherPolicy,
+    solver_seed: int,
+    seed_step_deg: float,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Build 8--16 distinct, corrected nodes from paths, predictors and null seeds."""
+
+    minimum = int(min_candidates)
+    maximum = int(max_candidates)
+    if minimum < 1 or maximum < minimum:
+        raise ValueError("candidate limits must satisfy 1 <= min <= max")
+    if float(seed_step_deg) <= 0.0:
+        raise ValueError("seed_step_deg must be positive")
     all_paths = [np.asarray(reference, dtype=float), *[np.asarray(path) for path in paths]]
+    reference_path = np.asarray(reference, dtype=float).reshape(len(target), 6)
+    bounds = np.asarray(environment.bounds, dtype=float).reshape(6, 2)
     layers: list[np.ndarray] = []
     residuals: list[np.ndarray] = []
     for phase in range(len(target)):
         kept: list[np.ndarray] = []
-        for path in all_paths:
-            candidate = path[phase]
+
+        def keep(candidate: np.ndarray) -> bool:
+            value = np.asarray(candidate, dtype=float).reshape(6)
+            if not np.isfinite(value).all():
+                return False
+            if np.any(value < bounds[:, 0] - 1.0e-12) or np.any(
+                value > bounds[:, 1] + 1.0e-12
+            ):
+                return False
             if any(
-                np.rad2deg(np.sqrt(np.mean(np.square(candidate - previous))))
+                np.rad2deg(np.sqrt(np.mean(np.square(value - previous))))
                 < float(cluster_threshold_deg)
                 for previous in kept
             ):
-                continue
-            kept.append(candidate.copy())
-            if len(kept) >= int(max_candidates):
+                return False
+            kept.append(value.copy())
+            return True
+
+        for path in all_paths:
+            keep(path[phase])
+            if len(kept) >= maximum:
                 break
+        anchor = reference_path[phase]
+        predictor = (
+            reference_path[(phase - 1) % len(target)]
+            + reference_path[(phase - 1) % len(target)]
+            - reference_path[(phase - 2) % len(target)]
+        )
+        seed_bank = [predictor]
+        jacobian = np.asarray(environment.jacobian(anchor), dtype=float).reshape(3, 6)
+        _u, singular, vh = np.linalg.svd(jacobian, full_matrices=True)
+        tolerance = max(jacobian.shape) * np.finfo(float).eps * max(
+            float(singular[0]) if len(singular) else 0.0, 1.0
+        )
+        null_basis = vh[int(np.sum(singular > tolerance)) :]
+        step = math.radians(float(seed_step_deg))
+        for direction in null_basis:
+            seed_bank.extend([anchor + step * direction, anchor - step * direction])
+        rng = np.random.default_rng(int(solver_seed) + phase)
+        attempts = 0
+        while len(kept) < minimum and attempts < 96:
+            if attempts < len(seed_bank):
+                seed = seed_bank[attempts]
+            else:
+                direction = rng.normal(size=6)
+                direction /= max(float(np.linalg.norm(direction)), 1.0e-12)
+                scale = step * (1.0 + (attempts - len(seed_bank)) // 12)
+                seed = anchor + scale * direction
+            beta, _residual, _iterations, _success = _correct_target(
+                environment,
+                target[phase],
+                np.clip(seed, bounds[:, 0], bounds[:, 1]),
+                corrector_policy,
+            )
+            keep(beta)
+            attempts += 1
         layer = np.vstack(kept)
         achieved = np.asarray(environment.fk(layer), dtype=float).reshape(-1, 3)
         error = np.linalg.norm(achieved - target[phase][None, :], axis=1) * 1000.0
@@ -577,6 +658,9 @@ def _root_for_candidate(
     directory.mkdir(parents=True, exist_ok=True)
     selection.candidate_table.to_csv(directory / "root_candidates.csv", index=False)
     selection.cluster_table.to_csv(directory / "root_clusters.csv", index=False)
+    selected_cluster = selection.cluster_table[
+        selection.cluster_table["cluster_id"] == selection.selected_cluster_id
+    ].iloc[0]
     payload = {
         **root,
         "candidate_id": candidate_id,
@@ -584,6 +668,7 @@ def _root_for_candidate(
         "canonical_root_beta": selection.selected_beta.tolist(),
         "candidate_count": int(len(selection.candidate_table)),
         "root_cluster_count": int(len(selection.cluster_table)),
+        "selected_cluster_candidate_count": int(selected_cluster["candidate_count"]),
         "selected_cluster_id": int(selection.selected_cluster_id),
     }
     atomic_write_json(directory / "canonical_root.json", payload)
@@ -815,7 +900,11 @@ def _run_candidate_experiment(
         pool_paths,
         reference=provisional,
         cluster_threshold_deg=float(config["canonical_root"]["cluster_threshold_deg"]),
+        min_candidates=int(config["repair"]["graph_candidates_min_per_phase"]),
         max_candidates=int(config["repair"]["graph_candidates_per_phase"]),
+        corrector_policy=corrector,
+        solver_seed=int(corrector.solver_seed + 350),
+        seed_step_deg=float(config["repair"]["graph_seed_step_deg"]),
     )
     graph_consensus, graph_report = link_reference_cyclic_candidates(
         layers,
@@ -828,6 +917,7 @@ def _run_candidate_experiment(
         lambda_reference=float(config["repair"]["graph_lambda_reference"]),
         closure_weight=float(config["repair"]["graph_closure_weight"]),
         root_cluster_threshold_deg=float(config["canonical_root"]["cluster_threshold_deg"]),
+        lambda_acceleration=float(config["repair"]["graph_lambda_acceleration"]),
     )
     if not graph_report.get("success", False):
         graph_consensus = provisional.copy()
@@ -869,6 +959,14 @@ def _run_candidate_experiment(
             "graph_report": graph_report,
             "candidate_layer_count_min": int(min(map(len, layers))),
             "candidate_layer_count_max": int(max(map(len, layers))),
+        },
+        additional_checks={
+            "candidate_layer_budget": bool(
+                min(map(len, layers))
+                >= int(config["repair"]["graph_candidates_min_per_phase"])
+                and max(map(len, layers))
+                <= int(config["repair"]["graph_candidates_per_phase"])
+            )
         },
     )
     if formal_methods is None or "BI-3" in formal_methods:
@@ -921,6 +1019,14 @@ def _run_candidate_experiment(
             "optimizer_success": bool(optimized.success),
             "optimizer_metrics": dict(optimized.metrics),
         },
+        additional_checks={
+            "candidate_layer_budget": bool(
+                min(map(len, layers))
+                >= int(config["repair"]["graph_candidates_min_per_phase"])
+                and max(map(len, layers))
+                <= int(config["repair"]["graph_candidates_per_phase"])
+            )
+        },
     )
     if formal_methods is None or "BI-4" in formal_methods:
         rows.append(_ranking_row(candidate_id, "BI-4", bi4_summary))
@@ -946,6 +1052,24 @@ def _ranking_row(candidate_id: str, strategy: str, summary: Mapping[str, Any]) -
         "variant_ratio_gt_1deg": float(traversal["ratio_gap_gt_1deg"].max()) if not traversal.empty else math.inf,
         "max_branch_cluster_count": int(summary["max_branch_cluster_count"]),
     }
+
+
+def _trajectory_inventories_complete(stage: Path, expected_count: int) -> bool:
+    paths = [
+        *stage.rglob("canonical_consensus_branch.parquet"),
+        *stage.rglob("centerline.parquet"),
+        *stage.rglob("provisional_reference/*.parquet"),
+    ]
+    if not paths:
+        return False
+    expected = np.arange(int(expected_count), dtype=np.int64)
+    for path in paths:
+        phase = pd.read_parquet(path, columns=["phase_idx"])["phase_idx"].to_numpy(
+            dtype=np.int64
+        )
+        if len(phase) != len(expected) or not np.array_equal(np.sort(phase), expected):
+            return False
+    return True
 
 
 def run_protocol(
@@ -1213,8 +1337,10 @@ def run_formal(
             "two_methods_rerun_at_720_phase": set(ranking["strategy"]) == methods,
             "two_candidates_rerun_at_720_phase": set(ranking["candidate_id"])
             == set(map(str, config["candidates"]["pilot"])),
-            "all_formal_rows_have_complete_phase_inventory": count
-            == int(config["phase_counts"]["formal"]),
+            "all_formal_rows_have_complete_phase_inventory": (
+                count == int(config["phase_counts"]["formal"])
+                and _trajectory_inventories_complete(stage, count)
+            ),
             "at_least_one_candidate_method_passes": restart_authorized,
         },
         phase_count=count,

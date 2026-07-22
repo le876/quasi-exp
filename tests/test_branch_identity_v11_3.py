@@ -126,9 +126,11 @@ def test_reference_linker_freezes_root_cluster_and_avoids_cheaper_other_branch()
         lambda_reference=2.0,
         closure_weight=5.0,
         root_cluster_threshold_deg=0.5,
+        lambda_acceleration=0.5,
     )
 
     assert report["success"] is True
+    assert report["second_order_acceleration_enabled"] is True
     assert report["root_cluster_candidate_count"] == 1
     assert np.allclose(selected, reference)
 
@@ -164,6 +166,50 @@ def test_consensus_audit_and_gate_are_fail_closed_on_identity_and_margin() -> No
     assert gate["checks"]["strict_joint_margin"] is False
     assert gate["checks"]["traversal_cut_ratio"] is False
     assert gate["checks"]["single_branch_cluster"] is False
+
+
+def test_repeatability_compares_identical_primary_and_repeat_runs() -> None:
+    consensus = np.deg2rad(np.zeros((8, 6)))
+    primary = consensus.copy()
+    primary[:, 5] = np.deg2rad(6.0)
+    repeat = primary.copy()
+
+    audit = audit_consensus_variants(
+        consensus,
+        {"primary": primary, "repeat": repeat},
+        cluster_threshold_deg=0.5,
+    )
+    summary = audit.summary.set_index("variant")
+
+    assert summary.loc["primary", "gap_p95_deg"] > 2.0
+    assert summary.loc["repeat", "gap_p95_deg"] == 0.0
+
+
+def test_gate_rejects_failed_or_trust_violating_audit_solver() -> None:
+    consensus = np.zeros((8, 6))
+    audit = audit_consensus_variants(
+        consensus,
+        {"primary": consensus.copy(), "repeat": consensus.copy()},
+        cluster_threshold_deg=0.5,
+    )
+    gate = BranchIdentityGate().evaluate(
+        numerical_metrics={
+            "residual_p95_mm": 0.1,
+            "residual_max_mm": 0.2,
+            "joint_margin_min_deg": 2.0,
+            "delta_beta_rms_p95_deg": 0.1,
+            "delta_beta_rms_max_deg": 0.2,
+            "acceleration_beta_rms_p95_deg": 0.1,
+            "seam_beta_rms_deg": 0.1,
+        },
+        variant_audit=audit,
+        variant_solver_success={"primary": True, "repeat": False},
+        variant_trust_violation_count={"primary": 0.0, "repeat": 1.0},
+    )
+
+    assert gate["gate_pass"] is False
+    assert gate["checks"]["audit_variant_solver_success"] is False
+    assert gate["checks"]["audit_variant_trust_preserved"] is False
 
 
 def test_reference_branch_teacher_is_direction_and_cut_independent() -> None:

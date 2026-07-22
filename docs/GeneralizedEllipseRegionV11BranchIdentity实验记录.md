@@ -150,7 +150,7 @@ Branch repair 确实产生了强烈、可重复的改善：
 
 ## 8. Gate 与产物完整性审计
 
-最终封存序列于 14:10:36 写入协议，15:09:25 完成 Pilot，17:36:57 写入 Formal Gate 与 completion，总耗时约 3 小时 26 分钟，其中 Formal 约 2 小时 24 分钟。runtime git SHA 为 `fb9f5f8708b575022639ab42293bd6203de5b343`。正式目录含 314 个文件、约 48 MiB。
+最终封存序列于 14:10:36 启动，15:09:25 完成 Pilot；包含最终代码 provenance 的协议于 15:13:06 重新封存，17:36:57 写入 Formal Gate 与 completion。全序列总耗时约 3 小时 26 分钟，其中 Formal 约 2 小时 24 分钟。runtime git SHA 为 `fb9f5f8708b575022639ab42293bd6203de5b343`。正式目录含 314 个文件、约 48 MiB。
 
 独立审计结果：
 

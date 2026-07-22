@@ -988,6 +988,9 @@ def _run_candidate_experiment(
     if formal_methods is None or "BI-3" in formal_methods:
         rows.append(_ranking_row(candidate_id, "BI-3", bi3_summary))
 
+    if formal_methods is not None and "BI-4" not in formal_methods:
+        return rows
+
     optimized = optimize_consensus_branch(
         environment,
         target,

@@ -94,3 +94,15 @@ def test_candidate_graph_builds_at_least_eight_distinct_corrected_nodes() -> Non
     assert min(map(len, layers)) >= 8
     assert max(map(len, layers)) <= 16
     assert all(len(layer) == len(error) for layer, error in zip(layers, residuals))
+
+
+def test_formal_run_stops_before_unselected_bi4() -> None:
+    import inspect
+
+    runner = _runner_module()
+    source = inspect.getsource(runner._run_candidate_experiment)
+
+    assert 'formal_methods is not None and "BI-4" not in formal_methods' in source
+    assert source.index('formal_methods is not None and "BI-4" not in formal_methods') < source.index(
+        "optimized = optimize_consensus_branch"
+    )

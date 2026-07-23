@@ -110,6 +110,9 @@ formal_audit:
   cut_angles_deg: [0, 45, 90, 135]
   directions: [forward, reverse]
   repeat: true
+  parallel_workers: 2
+  per_worker_blas_threads: 1
+  monitoring_poll_seconds: 1.0
   repeat_beta_rms_p95_deg: 0.2
   variant_beta_rms_p95_deg: 1.0
   variant_beta_rms_max_deg: 2.0

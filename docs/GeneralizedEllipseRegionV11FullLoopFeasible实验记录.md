@@ -94,16 +94,83 @@ candidate A2_143 / Nroot 1024
 
 正式运行结束后，本节补充 4-worker 实测数据、与串行基线的阶段耗时对比，以及是否需要扩大并行度的判断。
 
+### 4.1 4-worker Pilot 实测
+
+4-worker Pilot 于 2026-07-24 完成：
+
+- wall time：`5182.14 s`，即约 `1h26m22s`；
+- 4 个切片 wall time：`4314.86`、`4646.98`、`5118.11`、
+  `5182.13 s`；
+- 每个 worker 的 CPU utilization 均约 `99.9%`；
+- aggregate worker CPU utilization：`371.34%`；
+- mean effective worker utilization：`92.83%`；
+- 并发 worker 峰值 RSS：`1,017,237,504 bytes`，约 `970 MiB`；
+- 运行开始时可用内存约 `17.4 GiB`，结束时约 `19.0 GiB`；
+- 4 个切片全部 `completed`，无 failure；
+- 4 个任务最长/最短 wall time 比约为 `1.20`，负载不均衡较小。
+
+与串行基线相比，串行运行约 6 小时仍未形成完整矩阵，而 4-worker 在约
+1.44 小时内完成，因此“达到完整 Pilot 结论”的时间改善至少约为 `4.2x`。
+这不是严格的同终点 speedup，因为串行基线被中断，但可作为保守下界。
+
+Pilot 结果：
+
+- matrix row count：`146`；
+- strict-pass row count：`38`；
+- 两个 candidate 均存在 strict-pass 方法；
+- selected shared method：
+  `E3 / Nroot=1024 / K=64 / edge_limit=3 deg`；
+- selected method 的两个 candidate 均 strict-pass；
+- `empty_layer_count=0`；
+- `targeted_search_complete=true`；
+- `pilot gate_pass=true`。
+
+由于当前 4 个自然切片均接近满核运行、负载比仅 1.20，且 Pilot 已完成，
+不重跑 8-worker Pilot。下一步 Formal 只有两个天然独立 candidate，因此
+采用 2-process candidate 并行；继续把单个 candidate 的 cycle/audit 状态拆开
+会改变更深的数值执行边界，当前收益证据不足。
+
+### 4.2 旧进程残留污染
+
+首次启动并行 branch 时，前置阶段运行约 `2h24m23s` 后，Pilot 的防覆盖检查
+发现：
+
+```text
+Refusing to overwrite incomplete Pilot slice artifacts:
+01_A4_A2_143_r1_reverse_c0045_Nroot_0256
+```
+
+诊断表明，旧串行 `longrun stop` 停止了 wrapper，但旧 Python 子进程短暂存活。
+它在原输出目录被改名归档后，又于新 run 启动后约 41 秒重新创建原路径并写入
+9 个旧 Pilot 尾部文件。证据：
+
+- 9 个文件时间均为 `2026-07-23 23:10:57`；
+- 新 worker task JSON 到 `01:34:39` 才创建；
+- worker 日志数为 0；
+- 独立重放 protocol 不创建任何 Pilot 文件；
+- 归档前后均检查过新 Formal 输出路径为空。
+
+防覆盖检查正确阻止了两代进程混写。污染目录已保存为：
+
+```text
+03_pilot_matrix_orphan_contamination_20260723
+```
+
+00–02 阶段的 gate 和 artifact manifest 均重新验证通过，随后只恢复执行 Pilot，
+没有重复计算前置阶段。
+
 ## 5. 并行语义验证
 
 实现完成后的验证：
 
-- V11.4 定向测试：两个 Python 环境均 `23 passed`；
-- V11/V11.3/V11.4 相关回归：`64 passed`；
+- V11.4 定向测试：Formal candidate 并行化后两个 Python 环境均
+  `24 passed`；
+- V11/V11.3/V11.4 相关回归：`65 passed`；
 - 真实 2-worker smoke：通过；
 - 同一 smoke 分别使用 1 worker 和 2 workers：
   `pilot_matrix.csv` 逐单元一致，
-  `selected_formal_method.json` 一致；
+  `selected_formal_method.json` 一致，Formal 数值报告和最终 decision marker
+  一致；
 - 全量测试未发现新的 V11.4 回归；仍为 37 个既有 V7 失败，其中多数来自标准环境 Python 3.10 缺少 `enum.StrEnum`，其余为既有 registered gate 预期。
 
 ## 6. 结果状态
@@ -112,6 +179,7 @@ candidate A2_143 / Nroot 1024
 
 - 串行残留：已整体归档为
   `runs/generalized_ellipse_region_v11_full_loop_feasible_branch_serial_interrupted_20260723`；
-- 4-worker Formal：等待在干净输出目录启动；
+- 4-worker Pilot：完成且 Gate 通过；
+- 2-worker 720-phase Formal：等待启动；
 - Formal Gate：尚无结论；
 - downstream tube/dataset/student：未授权。

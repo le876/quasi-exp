@@ -3686,12 +3686,26 @@ def _formal_lineages(
     )
 
 
-def run_formal(
+def _formal_task_specs(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "task_id": f"{candidate_offset:02d}_{candidate_id}",
+            "candidate_id": candidate_id,
+            "candidate_offset": candidate_offset,
+        }
+        for candidate_offset, candidate_id in enumerate(
+            map(str, config["candidates"])
+        )
+    ]
+
+
+def _run_formal_candidate(
     *,
     config: Mapping[str, Any],
     project_root: Path,
     environment: Any,
     output: Path,
+    formal_task: Mapping[str, Any],
     **_unused: Any,
 ) -> dict[str, Any]:
     stage = output / STAGE_DIRS["formal"]
@@ -3709,6 +3723,12 @@ def run_formal(
     edge_limit = float(selected_method["edge_limit_deg"])
     candidate_reports: list[dict[str, Any]] = []
     for candidate_offset, candidate_id in enumerate(map(str, config["candidates"])):
+        if candidate_id != str(formal_task["candidate_id"]):
+            continue
+        if candidate_offset != int(formal_task["candidate_offset"]):
+            raise RuntimeError(
+                "Formal task candidate_offset does not match frozen candidate order"
+            )
         candidate_dir = stage / candidate_id
         root_summary_path = (
             output
@@ -4216,6 +4236,21 @@ def run_formal(
         )
         atomic_write_json(candidate_dir / "formal_report.json", report)
         candidate_reports.append(report)
+    if len(candidate_reports) != 1:
+        raise RuntimeError("Formal worker did not produce exactly one candidate report")
+    return candidate_reports[0]
+
+
+def _finalize_formal_reports(
+    *,
+    config: Mapping[str, Any],
+    output: Path,
+    selected_method: Mapping[str, Any],
+    candidate_reports: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    stage = output / STAGE_DIRS["formal"]
+    selected_method = dict(selected_method)
+    candidate_reports = [dict(report) for report in candidate_reports]
     passing = [
         row["candidate_id"] for row in candidate_reports if row["formal_pass"]
     ]
@@ -4258,6 +4293,262 @@ def run_formal(
         },
     )
     return gate
+
+
+def _run_formal_subprocess_tasks(
+    *,
+    source_root: Path,
+    project_root: Path,
+    output: Path,
+    config_path: Path,
+    preset: str,
+    task_files: Sequence[Path],
+    task_specs: Sequence[Mapping[str, Any]],
+    effective_workers: int,
+    poll_seconds: float,
+    per_worker_blas_threads: int,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    """Run independent 720-phase candidate jobs with resource observations."""
+
+    task_by_path = {
+        path: dict(spec) for path, spec in zip(task_files, task_specs, strict=True)
+    }
+    logs_dir = manifest_path.parent / "_parallel" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    started_wall = time.monotonic()
+    records: dict[str, dict[str, Any]] = {}
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "execution_model": "independent_subprocess_workers",
+        "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": "running",
+        "effective_workers": int(effective_workers),
+        "independent_task_count": len(task_specs),
+        "per_worker_blas_threads": int(per_worker_blas_threads),
+        "logical_cpu_count": os.cpu_count(),
+        "host_memory_start": _host_memory_snapshot(),
+        "peak_concurrent_worker_rss_bytes": 0,
+        "tasks": [],
+    }
+    atomic_write_json(manifest_path, manifest)
+    env = dict(os.environ)
+    for variable in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        env[variable] = str(per_worker_blas_threads)
+    env.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-v11-4")
+    pending = list(task_files)
+    active: dict[subprocess.Popen[Any], dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
+    while pending or active:
+        while pending and len(active) < effective_workers:
+            task_file = pending.pop(0)
+            task = task_by_path[task_file]
+            stdout_path = logs_dir / f"{task['task_id']}.stdout.log"
+            stderr_path = logs_dir / f"{task['task_id']}.stderr.log"
+            stdout_handle = stdout_path.open("w", encoding="utf-8")
+            stderr_handle = stderr_path.open("w", encoding="utf-8")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--config",
+                    str(config_path),
+                    "--preset",
+                    str(preset),
+                    "--project-root",
+                    str(project_root),
+                    "--output",
+                    str(output),
+                    "--formal-worker-task",
+                    str(task_file),
+                ],
+                cwd=str(source_root),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                env=env,
+            )
+            active[process] = {
+                "task": task,
+                "started": time.monotonic(),
+                "pid": int(process.pid),
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+                "stdout_handle": stdout_handle,
+                "stderr_handle": stderr_handle,
+                "peak_rss_bytes": 0,
+                "cpu_seconds": 0.0,
+            }
+        concurrent_rss = 0
+        for process, state in active.items():
+            cpu_seconds, rss_bytes = _read_process_usage(int(process.pid))
+            state["cpu_seconds"] = max(state["cpu_seconds"], cpu_seconds)
+            state["peak_rss_bytes"] = max(state["peak_rss_bytes"], rss_bytes)
+            concurrent_rss += rss_bytes
+        manifest["peak_concurrent_worker_rss_bytes"] = max(
+            int(manifest["peak_concurrent_worker_rss_bytes"]), concurrent_rss
+        )
+        completed = [
+            process for process in active if process.poll() is not None
+        ]
+        for process in completed:
+            state = active.pop(process)
+            state["stdout_handle"].close()
+            state["stderr_handle"].close()
+            wall_seconds = max(time.monotonic() - state["started"], 1.0e-9)
+            cpu_seconds = float(state["cpu_seconds"])
+            task = state["task"]
+            record = {
+                **task,
+                "status": (
+                    "completed" if process.returncode == 0 else "failed"
+                ),
+                "pid": int(state["pid"]),
+                "exit_code": int(process.returncode),
+                "wall_seconds": wall_seconds,
+                "cpu_seconds": cpu_seconds,
+                "cpu_utilization_percent": 100.0
+                * cpu_seconds
+                / wall_seconds,
+                "peak_rss_bytes": int(state["peak_rss_bytes"]),
+                "stdout_log": str(state["stdout_path"]),
+                "stderr_log": str(state["stderr_path"]),
+            }
+            records[str(task["task_id"])] = record
+            if process.returncode != 0:
+                failures.append(
+                    {
+                        **record,
+                        "stdout_tail": _tail_text(state["stdout_path"]),
+                        "stderr_tail": _tail_text(state["stderr_path"]),
+                    }
+                )
+            manifest["tasks"] = [
+                records[str(spec["task_id"])]
+                for spec in task_specs
+                if str(spec["task_id"]) in records
+            ]
+            atomic_write_json(manifest_path, manifest)
+        if pending or active:
+            time.sleep(max(0.1, float(poll_seconds)))
+    elapsed = max(time.monotonic() - started_wall, 1.0e-9)
+    total_cpu = sum(float(record["cpu_seconds"]) for record in records.values())
+    manifest.update(
+        {
+            "status": "failed" if failures else "completed",
+            "completed_utc": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            ),
+            "wall_seconds": elapsed,
+            "total_worker_cpu_seconds": total_cpu,
+            "aggregate_worker_cpu_utilization_percent": 100.0
+            * total_cpu
+            / elapsed,
+            "mean_effective_worker_utilization_percent": 100.0
+            * total_cpu
+            / (elapsed * effective_workers),
+            "host_memory_end": _host_memory_snapshot(),
+            "tasks": [
+                records[str(spec["task_id"])] for spec in task_specs
+            ],
+            "failures": failures,
+        }
+    )
+    atomic_write_json(manifest_path, manifest)
+    if failures:
+        raise RuntimeError(
+            "Formal subprocess worker failures: "
+            + json.dumps(failures, ensure_ascii=False)
+        )
+    return manifest
+
+
+def run_formal(
+    *,
+    config: Mapping[str, Any],
+    source_root: Path,
+    project_root: Path,
+    environment: Any,
+    output: Path,
+    config_path: Path,
+    preset: str,
+    pilot_workers: int | None = None,
+    **_unused: Any,
+) -> dict[str, Any]:
+    """Execute two independent Formal candidates and merge in frozen order."""
+
+    stage = output / STAGE_DIRS["formal"]
+    tasks_root = stage / "_parallel" / "tasks"
+    tasks_root.mkdir(parents=True, exist_ok=True)
+    task_specs = _formal_task_specs(config)
+    task_files = []
+    for task in task_specs:
+        task_file = tasks_root / f"{task['task_id']}.json"
+        atomic_write_json(task_file, task)
+        task_files.append(task_file)
+    configured_workers = int(config["formal_audit"]["parallel_workers"])
+    requested_workers = (
+        configured_workers if pilot_workers is None else int(pilot_workers)
+    )
+    effective_workers = min(
+        max(1, requested_workers), configured_workers, len(task_specs)
+    )
+    _run_formal_subprocess_tasks(
+        source_root=source_root,
+        project_root=project_root,
+        output=output,
+        config_path=config_path,
+        preset=preset,
+        task_files=task_files,
+        task_specs=task_specs,
+        effective_workers=effective_workers,
+        poll_seconds=float(
+            config["formal_audit"]["monitoring_poll_seconds"]
+        ),
+        per_worker_blas_threads=int(
+            config["formal_audit"]["per_worker_blas_threads"]
+        ),
+        manifest_path=stage / "formal_parallel_manifest.json",
+    )
+    candidate_reports = []
+    for task in task_specs:
+        candidate_dir = stage / str(task["candidate_id"])
+        report_path = candidate_dir / "formal_report.json"
+        if not report_path.is_file():
+            raise RuntimeError(
+                f"Formal candidate report missing: {task['candidate_id']}"
+            )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if (
+            report.get("candidate_id") != str(task["candidate_id"])
+            or not _artifact_manifest_is_valid(
+                candidate_dir,
+                report.get("candidate_artifact_sha256", {}),
+            )
+        ):
+            raise RuntimeError(
+                f"Formal candidate artifact validation failed: "
+                f"{task['candidate_id']}"
+            )
+        candidate_reports.append(report)
+    selected_method = json.loads(
+        (
+            output
+            / STAGE_DIRS["pilot"]
+            / "selected_formal_method.json"
+        ).read_text(encoding="utf-8")
+    )
+    return _finalize_formal_reports(
+        config=config,
+        output=output,
+        selected_method=selected_method,
+        candidate_reports=candidate_reports,
+    )
 
 
 def _derived_downstream_config(
@@ -4834,6 +5125,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--formal-worker-task",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -4875,6 +5171,26 @@ def main() -> None:
             environment=environment,
             output=output,
             pilot_task=pilot_task,
+        )
+        print(json.dumps(report, indent=2, allow_nan=False))
+        return
+    if args.formal_worker_task is not None:
+        task_path = Path(args.formal_worker_task).resolve()
+        formal_task = json.loads(task_path.read_text(encoding="utf-8"))
+        expected_tasks = {
+            str(task["task_id"]): task for task in _formal_task_specs(config)
+        }
+        if (
+            str(formal_task.get("task_id")) not in expected_tasks
+            or expected_tasks[str(formal_task["task_id"])] != formal_task
+        ):
+            raise RuntimeError("Formal worker task does not match resolved config")
+        report = _run_formal_candidate(
+            config=config,
+            project_root=project_root,
+            environment=environment,
+            output=output,
+            formal_task=formal_task,
         )
         print(json.dumps(report, indent=2, allow_nan=False))
         return

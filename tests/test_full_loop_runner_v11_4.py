@@ -42,6 +42,8 @@ def test_protocol_freezes_strict_gate_and_gate_driven_matrix() -> None:
     assert config["pilot_matrix"]["parallel_workers"] == 4
     assert config["pilot_matrix"]["max_parallel_workers"] == 8
     assert config["pilot_matrix"]["per_worker_blas_threads"] == 1
+    assert config["formal_audit"]["parallel_workers"] == 2
+    assert config["formal_audit"]["per_worker_blas_threads"] == 1
     assert config["hard_feasibility"] == {
         "residual_max_mm": 3.0,
         "joint_margin_min_deg": 1.5,
@@ -121,6 +123,25 @@ def test_pilot_parallel_tasks_are_stable_candidate_root_slices() -> None:
         ("A4_A2_143_r1_reverse_c0045", 1024, False),
     ]
     assert len({task["task_id"] for task in tasks}) == 4
+
+
+def test_formal_parallel_tasks_are_stable_candidate_slices() -> None:
+    runner = _runner_module()
+    source_root = Path(__file__).resolve().parents[1]
+    config = runner.load_config(
+        source_root / "configs/generalized_ellipse_region_v11_full_loop.yaml",
+        preset="formal",
+    )
+
+    tasks = runner._formal_task_specs(config)  # noqa: SLF001
+
+    assert [
+        (task["candidate_id"], task["candidate_offset"]) for task in tasks
+    ] == [
+        ("A4_A2_178_r0_reverse_c0045", 0),
+        ("A4_A2_143_r1_reverse_c0045", 1),
+    ]
+    assert len({task["task_id"] for task in tasks}) == 2
 
 
 def test_pilot_ranking_merge_is_independent_of_worker_completion_order() -> None:
@@ -491,6 +512,19 @@ def test_real_cli_smoke_writes_complete_branch_decision(tmp_path: Path) -> None:
     assert all(
         task["peak_rss_bytes"] > 0 for task in parallel_manifest["tasks"]
     )
+    formal_manifest = json.loads(
+        (
+            output
+            / "04_formal"
+            / "formal_parallel_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert formal_manifest["status"] == "completed"
+    assert formal_manifest["effective_workers"] == 2
+    assert formal_manifest["independent_task_count"] == 2
+    assert {task["status"] for task in formal_manifest["tasks"]} == {
+        "completed"
+    }
     assert not (output / "05_downstream_bridge").exists()
 
 
@@ -547,4 +581,38 @@ def test_parallel_pilot_ranking_matches_single_worker(tmp_path: Path) -> None:
             / "03_pilot_matrix"
             / "selected_formal_method.json"
         ).read_text(encoding="utf-8")
+    )
+    for candidate_id in (
+        "A4_A2_178_r0_reverse_c0045",
+        "A4_A2_143_r1_reverse_c0045",
+    ):
+        single_report = json.loads(
+            (
+                outputs[1]
+                / "04_formal"
+                / candidate_id
+                / "formal_report.json"
+            ).read_text(encoding="utf-8")
+        )
+        parallel_report = json.loads(
+            (
+                outputs[2]
+                / "04_formal"
+                / candidate_id
+                / "formal_report.json"
+            ).read_text(encoding="utf-8")
+        )
+        for report in (single_report, parallel_report):
+            report.pop("candidate_fingerprint")
+            report.pop("input_sha256")
+            report.pop("candidate_artifact_sha256")
+        assert single_report == parallel_report
+    assert json.loads(
+        (outputs[1] / "FULL_LOOP_EXPERIMENT_COMPLETED.json").read_text(
+            encoding="utf-8"
+        )
+    ) == json.loads(
+        (outputs[2] / "FULL_LOOP_EXPERIMENT_COMPLETED.json").read_text(
+            encoding="utf-8"
+        )
     )

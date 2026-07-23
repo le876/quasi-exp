@@ -94,6 +94,20 @@ CANDIDATE_EVIDENCE_COLUMNS = (
     "kappa",
 )
 
+ROOT_REPRESENTATIVE_COLUMNS = (
+    "root_seed_count",
+    "representative_idx",
+    "root_seed_idx",
+)
+
+
+def representative_inventory_table(
+    rows: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Materialize a stable root-representative CSV schema, including empties."""
+
+    return pd.DataFrame(rows, columns=ROOT_REPRESENTATIVE_COLUMNS)
+
 
 def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     output = copy.deepcopy(base)
@@ -160,6 +174,27 @@ def _write_gate(
     }
     atomic_write_json(path, payload)
     return payload
+
+
+def _directory_artifact_manifest(
+    directory: Path, *, exclude: Sequence[Path] = ()
+) -> dict[str, str]:
+    excluded = {value.resolve() for value in exclude}
+    return {
+        item.relative_to(directory).as_posix(): sha256_file(item)
+        for item in sorted(directory.rglob("*"))
+        if item.is_file() and item.resolve() not in excluded
+    }
+
+
+def _artifact_manifest_is_valid(
+    directory: Path, manifest: Mapping[str, str]
+) -> bool:
+    return bool(manifest) and all(
+        (directory / relative).is_file()
+        and sha256_file(directory / relative) == str(expected)
+        for relative, expected in manifest.items()
+    )
 
 
 def root_evidence_payload(
@@ -806,7 +841,7 @@ def run_root_fiber(
                 }
                 for index, seed_index in enumerate(selected_indices)
             )
-        pd.DataFrame(representative_rows).to_csv(
+        representative_inventory_table(representative_rows).to_csv(
             candidate_dir / "root_representatives.csv", index=False
         )
         selection_pool = (
@@ -2101,7 +2136,7 @@ def _restricted_root_layers(
     root_nodes: pd.DataFrame,
     mode: str,
     root_candidates: pd.DataFrame,
-    viable_root_indices: set[int],
+    allowed_root_indices: set[int],
     beta_weights: Sequence[float],
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     output_layers = [np.asarray(value).copy() for value in layers]
@@ -2115,17 +2150,17 @@ def _restricted_root_layers(
     if mode == "current":
         allowed = np.flatnonzero(origin == 0)
         target_roots = root_candidates.iloc[[0]]
-    elif mode == "viable":
+    elif mode == "roots":
         allowed = np.flatnonzero(
             np.asarray(
                 [
-                    np.isfinite(value) and int(value) in viable_root_indices
+                    np.isfinite(value) and int(value) in allowed_root_indices
                     for value in origin
                 ],
                 dtype=bool,
             )
         )
-        target_roots = root_candidates.iloc[sorted(viable_root_indices)]
+        target_roots = root_candidates.iloc[sorted(allowed_root_indices)]
     else:
         raise ValueError(f"unknown root restriction mode: {mode}")
     if len(allowed) == 0:
@@ -2309,8 +2344,17 @@ def run_pilot(
             top = pd.read_csv(
                 viability_dir / "top_survival_ranked_roots.csv"
             )
-            top_root_indices = set(
+            survival_root_indices = set(
                 top["root_candidate_idx"].astype(int).tolist()
+            )
+            full_loop = pd.read_csv(
+                viability_dir / "full_loop_viable_roots.csv"
+            )
+            full_loop_root_indices = set(
+                full_loop["root_candidate_idx"].astype(int).tolist()
+            )
+            generation_root_indices = (
+                survival_root_indices | full_loop_root_indices
             )
             selected_lineages = pd.read_parquet(
                 viability_dir / "selected_lineages.parquet"
@@ -2328,7 +2372,7 @@ def run_pilot(
                 reference=reference,
                 variants=variants,
                 selected_lineages=selected_lineages,
-                top_root_seed_indices=top_root_indices,
+                top_root_seed_indices=generation_root_indices,
                 candidate_cap=maximum_cap,
                 solver_seed=(
                     int(config["seeds"]["graph"])
@@ -2391,14 +2435,24 @@ def run_pilot(
                 ].sort_values("layer_candidate_idx", kind="stable").head(
                     candidate_cap
                 )
-                cycle_cache: dict[tuple[str, float], tuple[Any, list[np.ndarray], list[np.ndarray]]] = {}
+                cycle_cache: dict[
+                    tuple[str, tuple[int, ...], float],
+                    tuple[Any, list[np.ndarray], list[np.ndarray]],
+                ] = {}
                 for experiment in ("E1", "E2", "E3", "E4"):
                     restriction = {
                         "E1": "current",
-                        "E2": "viable",
-                        "E3": "viable",
-                        "E4": "all",
+                        "E2": "roots",
+                        "E3": "roots",
+                        "E4": "roots",
                     }[experiment]
+                    experiment_root_indices = (
+                        survival_root_indices
+                        if experiment in {"E2", "E3"}
+                        else full_loop_root_indices
+                        if experiment == "E4"
+                        else set()
+                    )
                     experiment_layers, experiment_residuals = (
                         _restricted_root_layers(
                             ordered_layers,
@@ -2406,14 +2460,18 @@ def run_pilot(
                             root_nodes=root_nodes,
                             mode=restriction,
                             root_candidates=root_candidates,
-                            viable_root_indices=top_root_indices,
+                            allowed_root_indices=experiment_root_indices,
                             beta_weights=config["cycle"]["beta_weights"],
                         )
                     )
                     for edge_limit in map(
                         float, config["pilot_matrix"]["edge_limits_deg"]
                     ):
-                        cache_key = (restriction, edge_limit)
+                        cache_key = (
+                            restriction,
+                            tuple(sorted(experiment_root_indices)),
+                            edge_limit,
+                        )
                         if cache_key not in cycle_cache:
                             cycle_cache[cache_key] = (
                                 solve_sparse_cycle(
@@ -2547,9 +2605,22 @@ def run_pilot(
                             "state_pruning_count": int(
                                 solution.state_pruning_count
                             ),
+                            "state_dominance_count": int(
+                                solution.state_dominance_count
+                            ),
                             "max_states_per_root": solution.max_states_per_root,
                             "outcome": outcome,
                             "empty_feasible_layer_indices": empty,
+                            "root_selection": (
+                                "current_root"
+                                if experiment == "E1"
+                                else "survival_ranked_top16"
+                                if experiment in {"E2", "E3"}
+                                else "full_loop_viable_only"
+                            ),
+                            "allowed_root_seed_indices": sorted(
+                                experiment_root_indices
+                            ),
                             "top_cycles": list(solution.top_cycles),
                         }
                         if solution.success:
@@ -3134,12 +3205,13 @@ def run_formal(
     **_unused: Any,
 ) -> dict[str, Any]:
     stage = output / STAGE_DIRS["formal"]
+    selected_method_path = (
+        output
+        / STAGE_DIRS["pilot"]
+        / "selected_formal_method.json"
+    )
     selected_method = json.loads(
-        (
-            output
-            / STAGE_DIRS["pilot"]
-            / "selected_formal_method.json"
-        ).read_text(encoding="utf-8")
+        selected_method_path.read_text(encoding="utf-8")
     )
     experiment = str(selected_method["experiment"])
     root_seed_count = int(selected_method["root_seed_count"])
@@ -3148,12 +3220,51 @@ def run_formal(
     candidate_reports: list[dict[str, Any]] = []
     for candidate_offset, candidate_id in enumerate(map(str, config["candidates"])):
         candidate_dir = stage / candidate_id
+        root_summary_path = (
+            output
+            / STAGE_DIRS["root_fiber"]
+            / candidate_id
+            / "root_fiber_summary.json"
+        )
+        viability_gate_path = (
+            output
+            / STAGE_DIRS["viability"]
+            / candidate_id
+            / f"Nroot_{root_seed_count:04d}"
+            / "gate.json"
+        )
+        source_artifact = (
+            project_root / str(config["source_artifact_root"])
+        )
+        source_inputs = [
+            Path(str(config["config_path"])),
+            selected_method_path,
+            root_summary_path,
+            viability_gate_path,
+            source_artifact / "BRANCH_IDENTITY_EXPERIMENT_COMPLETED.json",
+            source_artifact / "03_formal" / "gate.json",
+            source_artifact
+            / "03_formal"
+            / candidate_id
+            / "BI-3"
+            / "canonical_consensus_branch.parquet",
+        ]
+        input_sha256 = {
+            path.relative_to(project_root).as_posix()
+            if path.is_relative_to(project_root)
+            else str(path): sha256_file(path)
+            for path in source_inputs
+        }
+        resolved_config = copy.deepcopy(dict(config))
+        resolved_config.pop("config_path", None)
         candidate_fingerprint = _canonical_sha(
             {
                 "protocol_id": config["protocol_id"],
                 "preset": config["preset"],
                 "candidate_id": candidate_id,
                 "selected_method": selected_method,
+                "resolved_config": resolved_config,
+                "input_sha256": input_sha256,
                 "runner_sha256": sha256_file(Path(__file__).resolve()),
                 "module_sha256": sha256_file(
                     SOURCE_ROOT
@@ -3169,6 +3280,10 @@ def run_formal(
             if (
                 cached_report.get("candidate_fingerprint")
                 == candidate_fingerprint
+                and _artifact_manifest_is_valid(
+                    candidate_dir,
+                    cached_report.get("candidate_artifact_sha256", {}),
+                )
             ):
                 candidate_reports.append(cached_report)
                 continue
@@ -3184,12 +3299,7 @@ def run_formal(
             name: _frame_beta(frame) for name, frame in variants_frame.items()
         }
         root_summary = json.loads(
-            (
-                output
-                / STAGE_DIRS["root_fiber"]
-                / candidate_id
-                / "root_fiber_summary.json"
-            ).read_text(encoding="utf-8")
+            root_summary_path.read_text(encoding="utf-8")
         )
         root_phase = int(
             round(
@@ -3211,7 +3321,26 @@ def run_formal(
             / f"Nroot_{root_seed_count:04d}"
             / "top_survival_ranked_roots.csv"
         )
-        top_root_indices = top["root_candidate_idx"].astype(int).tolist()
+        full_loop = pd.read_csv(
+            output
+            / STAGE_DIRS["viability"]
+            / candidate_id
+            / f"Nroot_{root_seed_count:04d}"
+            / "full_loop_viable_roots.csv"
+        )
+        survival_root_indices = set(
+            top["root_candidate_idx"].astype(int).tolist()
+        )
+        full_loop_root_indices = set(
+            full_loop["root_candidate_idx"].astype(int).tolist()
+        )
+        formal_root_indices = (
+            [0]
+            if experiment == "E1"
+            else sorted(survival_root_indices)
+            if experiment in {"E2", "E3"}
+            else sorted(full_loop_root_indices)
+        )
         (
             direction_summary,
             selected_lineages,
@@ -3223,7 +3352,7 @@ def run_formal(
             reference=reference,
             root_phase=root_phase,
             root_candidates=root_candidates,
-            top_root_indices=top_root_indices,
+            top_root_indices=formal_root_indices,
             solver_seed=int(config["seeds"]["viability"])
             + 1000000
             + candidate_offset * 100000,
@@ -3252,7 +3381,7 @@ def run_formal(
             reference=reference,
             variants=variants,
             selected_lineages=selected_lineages,
-            top_root_seed_indices=set(top_root_indices),
+            top_root_seed_indices=set(formal_root_indices),
             candidate_cap=candidate_cap,
             solver_seed=int(config["seeds"]["graph"])
             + 1000000
@@ -3291,17 +3420,24 @@ def run_formal(
         ].sort_values("layer_candidate_idx", kind="stable")
         restriction = {
             "E1": "current",
-            "E2": "viable",
-            "E3": "viable",
-            "E4": "all",
+            "E2": "roots",
+            "E3": "roots",
+            "E4": "roots",
         }[experiment]
+        allowed_root_indices = (
+            survival_root_indices
+            if experiment in {"E2", "E3"}
+            else full_loop_root_indices
+            if experiment == "E4"
+            else set()
+        )
         experiment_layers, experiment_residuals = _restricted_root_layers(
             ordered_layers,
             ordered_residuals,
             root_nodes=root_nodes,
             mode=restriction,
             root_candidates=root_candidates,
-            viable_root_indices=set(top_root_indices),
+            allowed_root_indices=allowed_root_indices,
             beta_weights=config["cycle"]["beta_weights"],
         )
         solution = solve_sparse_cycle(
@@ -3364,7 +3500,11 @@ def run_formal(
                         config["cycle"]["lambda_acceleration"]
                     ),
                     top_m=int(config["cycle"]["top_m"]),
-                    max_states_per_root=None,
+                    max_states_per_root=int(
+                        config["cycle"][
+                            "fallback_max_states_per_root"
+                        ]
+                    ),
                 )
                 if exact_solution.success:
                     if experiment in {"E3", "E4"}:
@@ -3454,6 +3594,9 @@ def run_formal(
                     "state_pruning_count": int(
                         solution.state_pruning_count
                     ),
+                    "state_dominance_count": int(
+                        solution.state_dominance_count
+                    ),
                     "max_states_per_root": solution.max_states_per_root,
                     "exact_cycle_fallback_attempted": exact_cycle_fallback_attempted,
                     "top_cycles": list(solution.top_cycles),
@@ -3505,6 +3648,20 @@ def run_formal(
                 evaluation["diagnostic_relaxed_cycle_pass"]
             ),
         )
+        negative_search_incomplete = bool(
+            solution.success
+            and not evaluation["gate_pass"]
+            and (
+                int(solution.state_pruning_count) > 0
+                or int(solution.state_dominance_count) > 0
+            )
+        )
+        if (
+            negative_search_incomplete
+            and not empty
+            and targeted_search_complete
+        ):
+            numerical_outcome = "SEARCH_INCOMPLETE"
         decision = formal_decision(
             numerical_outcome=numerical_outcome,
             audit_pass=bool(audit["gate_pass"]),
@@ -3512,10 +3669,17 @@ def run_formal(
         report = {
             "candidate_id": candidate_id,
             "candidate_fingerprint": candidate_fingerprint,
+            "input_sha256": input_sha256,
             "selected_method": selected_method,
             "phase_count": len(target),
             "cycle_found": bool(solution.success),
             "cycle_state_pruning_count": int(solution.state_pruning_count),
+            "cycle_state_dominance_count": int(
+                solution.state_dominance_count
+            ),
+            "cycle_negative_search_complete": not (
+                negative_search_incomplete
+            ),
             "exact_cycle_fallback_attempted": exact_cycle_fallback_attempted,
             "empty_feasible_layer_indices": empty,
             "targeted_search_complete": targeted_search_complete,
@@ -3530,6 +3694,10 @@ def run_formal(
             "minimal_slack": evaluation["minimal_slack"],
             "minimal_slack_phase_diagnostic": slack_phase_summary,
         }
+        report["candidate_artifact_sha256"] = _directory_artifact_manifest(
+            candidate_dir,
+            exclude=[report_path],
+        )
         atomic_write_json(candidate_dir / "formal_report.json", report)
         candidate_reports.append(report)
     passing = [
@@ -3703,10 +3871,55 @@ def _bootstrap_downstream_anchor(
     )
 
 
+def _rewrite_downstream_tube_gate(
+    *,
+    tube_gate_path: Path,
+    original_tube_gate: Mapping[str, Any],
+    downstream_config: Mapping[str, Any],
+    source_root: Path,
+    downstream_output: Path,
+    selected_tube: Mapping[str, Any],
+    half_mm_full_audit_pass: bool,
+) -> dict[str, Any]:
+    """Re-seal the V11 tube gate after V11.4 selects an audited surface."""
+
+    preserved = {
+        key: value
+        for key, value in original_tube_gate.items()
+        if key
+        not in {
+            "artifact_sha256",
+            "cache_fingerprint",
+            "checks",
+            "gate_pass",
+            "selected_tube",
+        }
+    }
+    return v11._write_gate(  # noqa: SLF001
+        tube_gate_path,
+        checks={
+            **original_tube_gate["checks"],
+            "minimum_0p5_by_0p5_tube_passes": bool(
+                half_mm_full_audit_pass
+            ),
+            "v11_4_selected_surface_full_audit_passes": True,
+        },
+        cache_fingerprint=v11._stage_cache_fingerprint(  # noqa: SLF001
+            config=downstream_config,
+            source_root=source_root,
+            output=downstream_output,
+            stage_name="tube",
+        ),
+        selected_tube=dict(selected_tube),
+        **preserved,
+    )
+
+
 def _run_downstream_full_branch_audit(
     *,
     config: Mapping[str, Any],
     downstream_config: Mapping[str, Any],
+    source_root: Path,
     project_root: Path,
     downstream_output: Path,
     directory: Path,
@@ -3716,6 +3929,10 @@ def _run_downstream_full_branch_audit(
         project_root / str(downstream_config["robot_config"]),
     )
     tube_stage = downstream_output / v11.STAGE_DIRS["tube"]
+    tube_gate_path = tube_stage / "gate.json"
+    original_tube_gate = json.loads(
+        tube_gate_path.read_text(encoding="utf-8")
+    )
     dense = pd.read_csv(tube_stage / "dense_frontier.csv")
     dense = dense[dense["gate_pass"].astype(bool)].copy()
     anchors = {
@@ -3855,21 +4072,22 @@ def _run_downstream_full_branch_audit(
             Path(str(selected_row["primary_surface_path"])),
             tube_stage / "selected_surface.parquet",
         )
+        selected_tube_payload = {
+            "anchor_id": selected_anchor_id,
+            "anchor_family": v11._family_payload(  # noqa: SLF001
+                selected_family
+            ),
+            "radial_radius_mm": float(
+                selected_row["radial_radius_mm"]
+            ),
+            "plane_radius_mm": float(selected_row["plane_radius_mm"]),
+            "phase_count": count,
+            "cross_section_count": int(len(cross.points)),
+            "v11_4_full_branch_audit_pass": True,
+        }
         atomic_write_json(
             tube_stage / "selected_tube.json",
-            {
-                "anchor_id": selected_anchor_id,
-                "anchor_family": v11._family_payload(  # noqa: SLF001
-                    selected_family
-                ),
-                "radial_radius_mm": float(
-                    selected_row["radial_radius_mm"]
-                ),
-                "plane_radius_mm": float(selected_row["plane_radius_mm"]),
-                "phase_count": count,
-                "cross_section_count": int(len(cross.points)),
-                "v11_4_full_branch_audit_pass": True,
-            },
+            selected_tube_payload,
         )
         atomic_write_json(
             tube_stage / "selected_region_anchor.json",
@@ -3884,6 +4102,15 @@ def _run_downstream_full_branch_audit(
         _atomic_parquet(
             centerline_frame,
             tube_stage / "selected_region_centerline.parquet",
+        )
+        _rewrite_downstream_tube_gate(
+            tube_gate_path=tube_gate_path,
+            original_tube_gate=original_tube_gate,
+            downstream_config=downstream_config,
+            source_root=source_root,
+            downstream_output=downstream_output,
+            selected_tube=selected_tube_payload,
+            half_mm_full_audit_pass=not eligible_half.empty,
         )
     return _write_gate(
         directory / "gate.json",
@@ -3991,6 +4218,7 @@ def run_bridge(
     reports["full_tube_branch_audit"] = _run_downstream_full_branch_audit(
         config=config,
         downstream_config=downstream_config,
+        source_root=source_root,
         project_root=project_root,
         downstream_output=downstream_output,
         directory=stage / "full_tube_branch_audit",

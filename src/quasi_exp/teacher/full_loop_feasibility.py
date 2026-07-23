@@ -455,6 +455,7 @@ class CycleSolution:
     reason: str
     top_cycles: tuple[Mapping[str, Any], ...]
     state_pruning_count: int = 0
+    state_dominance_count: int = 0
     max_states_per_root: int | None = None
 
 
@@ -472,9 +473,9 @@ def solve_sparse_cycle(
     """Solve a hard-node cyclic graph using sparse second-order edge states.
 
     Every initial root edge is enumerated.  At each phase, states with the same
-    ``(previous, current)`` pair retain only their lowest-cost history.  Closure
-    checks include both final→root velocity and the two accelerations that cross
-    the cyclic seam.
+    ``(first successor, previous, current)`` triple retain their lowest-cost
+    history. Closure checks include both final→root velocity and the two
+    accelerations that cross the cyclic seam.
     """
 
     layers = [np.asarray(value, dtype=float).reshape(-1, 6) for value in candidate_layers]
@@ -483,16 +484,17 @@ def solve_sparse_cycle(
         raise ValueError("candidate and residual layers must align and contain N >= 3")
     if any(len(beta) == 0 for beta in layers):
         return CycleSolution(
-            False,
-            np.zeros((0, 6)),
-            np.zeros(0, dtype=np.int64),
-            math.inf,
-            None,
-            float(edge_limit_deg),
-            "empty_feasible_layer",
-            (),
-            0,
-            max_states_per_root,
+            success=False,
+            beta_rad=np.zeros((0, 6)),
+            layer_candidate_indices=np.zeros(0, dtype=np.int64),
+            cost=math.inf,
+            root_candidate_idx=None,
+            edge_limit_deg=float(edge_limit_deg),
+            reason="empty_feasible_layer",
+            top_cycles=(),
+            state_pruning_count=0,
+            state_dominance_count=0,
+            max_states_per_root=max_states_per_root,
         )
     if any(len(beta) != len(error) for beta, error in zip(layers, residuals)):
         raise ValueError("every residual layer must align with its candidate layer")
@@ -566,6 +568,7 @@ def solve_sparse_cycle(
             }
         )
     pruning_count = 0
+    dominance_count = 0
     for start in range(len(layers[0])):
         states: dict[tuple[int, int, int], tuple[float, tuple[int, ...]]] = {}
         for raw_second in edges[0][start]:
@@ -610,6 +613,8 @@ def solve_sparse_cycle(
                         + float(lambda_acceleration) * acceleration**2
                     )
                     key = (first_second, current, next_index)
+                    if key in next_states:
+                        dominance_count += 1
                     if key not in next_states or candidate_cost < next_states[key][0]:
                         next_states[key] = (candidate_cost, (*path, next_index))
             if (
@@ -669,18 +674,27 @@ def solve_sparse_cycle(
                     "selection_mode": "sparse_second_order_edge_state",
                 }
             )
+        completed.sort(
+            key=lambda row: (
+                float(row["cost"]),
+                int(row["root_candidate_idx"]),
+                tuple(row["layer_candidate_indices"]),
+            )
+        )
+        completed = completed[: max(int(top_m), 1)]
     if not completed:
         return CycleSolution(
-            False,
-            np.zeros((0, 6)),
-            np.zeros(0, dtype=np.int64),
-            math.inf,
-            None,
-            float(edge_limit_deg),
-            "no_closed_cycle",
-            (),
-            pruning_count,
-            max_states_per_root,
+            success=False,
+            beta_rad=np.zeros((0, 6)),
+            layer_candidate_indices=np.zeros(0, dtype=np.int64),
+            cost=math.inf,
+            root_candidate_idx=None,
+            edge_limit_deg=float(edge_limit_deg),
+            reason="no_closed_cycle",
+            top_cycles=(),
+            state_pruning_count=pruning_count,
+            state_dominance_count=dominance_count,
+            max_states_per_root=max_states_per_root,
         )
     completed.sort(
         key=lambda row: (
@@ -704,16 +718,17 @@ def solve_sparse_cycle(
         for row in completed[: max(int(top_m), 1)]
     )
     return CycleSolution(
-        True,
-        beta,
-        indices,
-        float(best["cost"]),
-        int(best["root_candidate_idx"]),
-        float(edge_limit_deg),
-        "success",
-        public,
-        pruning_count,
-        max_states_per_root,
+        success=True,
+        beta_rad=beta,
+        layer_candidate_indices=indices,
+        cost=float(best["cost"]),
+        root_candidate_idx=int(best["root_candidate_idx"]),
+        edge_limit_deg=float(edge_limit_deg),
+        reason="success",
+        top_cycles=public,
+        state_pruning_count=pruning_count,
+        state_dominance_count=dominance_count,
+        max_states_per_root=max_states_per_root,
     )
 
 
@@ -815,7 +830,14 @@ def formal_decision(*, numerical_outcome: str, audit_pass: bool) -> str:
     """
 
     outcome = str(numerical_outcome)
-    allowed = {"A", "B", "C", "C_pending_targeted_search", "D"}
+    allowed = {
+        "A",
+        "B",
+        "C",
+        "C_pending_targeted_search",
+        "D",
+        "SEARCH_INCOMPLETE",
+    }
     if outcome not in allowed:
         raise ValueError(f"unknown numerical outcome: {outcome}")
     if outcome == "A":

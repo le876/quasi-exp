@@ -75,6 +75,13 @@ def test_formal_decision_never_relabels_audit_failure_as_relaxed_d() -> None:
         )
         == "D"
     )
+    assert (
+        formal_decision(
+            numerical_outcome="SEARCH_INCOMPLETE",
+            audit_pass=False,
+        )
+        == "SEARCH_INCOMPLETE"
+    )
 
 
 def test_geodesic_representatives_do_not_reselect_disconnected_seed() -> None:

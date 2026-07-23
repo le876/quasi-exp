@@ -65,6 +65,7 @@ cycle:
   lambda_acceleration: 0.5
   top_m: 8
   max_states_per_root: 64
+  fallback_max_states_per_root: 2048
 
 whole_curve:
   correction_sweeps: 4
@@ -171,6 +172,7 @@ smoke:
   cycle:
     top_m: 2
     max_states_per_root: 16
+    fallback_max_states_per_root: 64
   whole_curve:
     correction_sweeps: 1
     least_squares_max_nfev: 3

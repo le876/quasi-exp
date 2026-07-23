@@ -82,6 +82,111 @@ def test_smoke_deep_merge_preserves_artifact_contract() -> None:
     }.issubset(required)
 
 
+def test_empty_root_representative_inventory_keeps_csv_schema(
+    tmp_path: Path,
+) -> None:
+    runner = _runner_module()
+    path = tmp_path / "root_representatives.csv"
+
+    runner.representative_inventory_table([]).to_csv(path, index=False)
+    restored = pd.read_csv(path)
+
+    assert restored.empty
+    assert restored.columns.tolist() == list(
+        runner.ROOT_REPRESENTATIVE_COLUMNS
+    )
+
+
+def test_full_loop_viable_root_restriction_stays_empty_without_survivor() -> None:
+    runner = _runner_module()
+    layers = [np.zeros((2, 6)), np.zeros((1, 6)), np.zeros((1, 6))]
+    residuals = [np.zeros(2), np.zeros(1), np.zeros(1)]
+    root_nodes = pd.DataFrame(
+        {
+            "origin_root_seed_idx": [3.0, 4.0],
+        }
+    )
+    root_candidates = pd.DataFrame(
+        {
+            f"beta{joint}_rad": np.zeros(5)
+            for joint in range(1, 7)
+        }
+    )
+
+    restricted, restricted_residuals = runner._restricted_root_layers(  # noqa: SLF001
+        layers,
+        residuals,
+        root_nodes=root_nodes,
+        mode="roots",
+        root_candidates=root_candidates,
+        allowed_root_indices=set(),
+        beta_weights=np.ones(6),
+    )
+
+    assert restricted[0].shape == (0, 6)
+    assert restricted_residuals[0].shape == (0,)
+
+
+def test_formal_checkpoint_rejects_tampered_candidate_artifact(
+    tmp_path: Path,
+) -> None:
+    runner = _runner_module()
+    artifact = tmp_path / "cycle.txt"
+    artifact.write_text("frozen", encoding="utf-8")
+    manifest = runner._directory_artifact_manifest(tmp_path)  # noqa: SLF001
+
+    assert runner._artifact_manifest_is_valid(  # noqa: SLF001
+        tmp_path, manifest
+    )
+    artifact.write_text("tampered", encoding="utf-8")
+    assert not runner._artifact_manifest_is_valid(  # noqa: SLF001
+        tmp_path, manifest
+    )
+
+
+def test_resealed_tube_gate_validates_after_audited_surface_selection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = _runner_module()
+    output = tmp_path / "downstream"
+    tube = output / runner.v11.STAGE_DIRS["tube"]
+    tube.mkdir(parents=True)
+    (tube / "selected_surface.parquet").write_bytes(b"new-audited-surface")
+    original = {
+        "checks": {
+            "minimum_0p5_by_0p5_tube_passes": True,
+            "at_least_one_dense_tube_passes": True,
+        },
+        "gate_pass": True,
+        "artifact_sha256": {"selected_surface.parquet": "stale"},
+        "cache_fingerprint": "stale",
+        "anchors_screened": 2,
+    }
+    monkeypatch.setattr(
+        runner.v11,
+        "_stage_cache_fingerprint",
+        lambda **_kwargs: "fresh-fingerprint",
+    )
+
+    runner._rewrite_downstream_tube_gate(  # noqa: SLF001
+        tube_gate_path=tube / "gate.json",
+        original_tube_gate=original,
+        downstream_config={},
+        source_root=Path(__file__).resolve().parents[1],
+        downstream_output=output,
+        selected_tube={"anchor_id": "A", "radial_radius_mm": 0.5},
+        half_mm_full_audit_pass=True,
+    )
+
+    assert (
+        runner.v11.read_valid_gate(
+            tube / "gate.json",
+            expected_fingerprint="fresh-fingerprint",
+        )
+        is not None
+    )
+
+
 def test_root_evidence_keeps_selected_and_primary_metrics_separate() -> None:
     runner = _runner_module()
     payload = runner.root_evidence_payload(

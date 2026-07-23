@@ -3233,6 +3233,26 @@ def run_formal(
             / f"Nroot_{root_seed_count:04d}"
             / "gate.json"
         )
+        root_candidates_path = (
+            output
+            / STAGE_DIRS["root_fiber"]
+            / candidate_id
+            / "root_candidates.parquet"
+        )
+        viability_directory = viability_gate_path.parent
+        source_anchor_candidate = (
+            project_root
+            / str(config["source_anchor_root"])
+            / "verify"
+            / candidate_id
+        )
+        source_centerline_paths = sorted(
+            source_anchor_candidate.glob("*/centerline.parquet")
+        )
+        if not source_centerline_paths:
+            raise FileNotFoundError(
+                f"no source centerline artifacts under {source_anchor_candidate}"
+            )
         source_artifact = (
             project_root / str(config["source_artifact_root"])
         )
@@ -3240,7 +3260,12 @@ def run_formal(
             Path(str(config["config_path"])),
             selected_method_path,
             root_summary_path,
+            root_candidates_path,
             viability_gate_path,
+            viability_directory / "top_survival_ranked_roots.csv",
+            viability_directory / "full_loop_viable_roots.csv",
+            viability_directory / "selected_lineages.parquet",
+            viability_directory / "candidate_evidence.parquet",
             source_artifact / "BRANCH_IDENTITY_EXPERIMENT_COMPLETED.json",
             source_artifact / "03_formal" / "gate.json",
             source_artifact
@@ -3248,6 +3273,7 @@ def run_formal(
             / candidate_id
             / "BI-3"
             / "canonical_consensus_branch.parquet",
+            *source_centerline_paths,
         ]
         input_sha256 = {
             path.relative_to(project_root).as_posix()

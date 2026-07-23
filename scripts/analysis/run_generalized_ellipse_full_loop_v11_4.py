@@ -18,7 +18,9 @@ import math
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
+import time
 from typing import Any, Mapping, Sequence
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -2249,18 +2251,90 @@ def _old_e0_evidence(
     }
 
 
-def run_pilot(
+def _pilot_task_specs(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return deterministic, numerically independent Pilot task slices."""
+
+    root_seed_counts = list(map(int, config["pilot_matrix"]["root_seed_counts"]))
+    first_root_seed_count = root_seed_counts[0]
+    tasks = []
+    for candidate_offset, candidate_id in enumerate(map(str, config["candidates"])):
+        for root_seed_count in root_seed_counts:
+            tasks.append(
+                {
+                    "task_id": (
+                        f"{candidate_offset:02d}_{candidate_id}"
+                        f"_Nroot_{root_seed_count:04d}"
+                    ),
+                    "candidate_id": candidate_id,
+                    "candidate_offset": candidate_offset,
+                    "root_seed_count": root_seed_count,
+                    "include_e0": root_seed_count == first_root_seed_count,
+                }
+            )
+    return tasks
+
+
+def _sort_pilot_ranking(
+    ranking: pd.DataFrame, config: Mapping[str, Any]
+) -> pd.DataFrame:
+    """Stably order Pilot rows without depending on worker completion order."""
+
+    candidate_order = {
+        value: index for index, value in enumerate(map(str, config["candidates"]))
+    }
+    experiment_order = {
+        value: index
+        for index, value in enumerate(("E0", "E1", "E2", "E3", "E4"))
+    }
+    ordered = ranking.copy()
+    ordered["_candidate_order"] = (
+        ordered["candidate_id"].map(candidate_order).fillna(len(candidate_order))
+    )
+    ordered["_experiment_order"] = (
+        ordered["experiment"].map(experiment_order).fillna(len(experiment_order))
+    )
+    ordered = ordered.sort_values(
+        [
+            "_candidate_order",
+            "root_seed_count",
+            "candidate_cap",
+            "_experiment_order",
+            "edge_limit_deg",
+        ],
+        kind="stable",
+        na_position="first",
+    )
+    return ordered.drop(
+        columns=["_candidate_order", "_experiment_order"]
+    ).reset_index(drop=True)
+
+
+def _pilot_slice_paths(
+    stage: Path, task: Mapping[str, Any]
+) -> tuple[Path, Path]:
+    slice_dir = stage / "_parallel" / "slices" / str(task["task_id"])
+    return slice_dir / "pilot_rows.csv", slice_dir / "gate.json"
+
+
+def _run_pilot_slice(
     *,
     config: Mapping[str, Any],
     project_root: Path,
     environment: Any,
     output: Path,
+    pilot_task: Mapping[str, Any],
     **_unused: Any,
 ) -> dict[str, Any]:
     stage = output / STAGE_DIRS["pilot"]
     ranking_rows: list[dict[str, Any]] = []
     maximum_cap = max(map(int, config["pilot_matrix"]["candidate_caps"]))
     for candidate_offset, candidate_id in enumerate(map(str, config["candidates"])):
+        if candidate_id != str(pilot_task["candidate_id"]):
+            continue
+        if candidate_offset != int(pilot_task["candidate_offset"]):
+            raise RuntimeError(
+                "Pilot task candidate_offset does not match frozen candidate order"
+            )
         primary, variants_frame = _aligned_source_frames(
             config,
             project_root,
@@ -2288,53 +2362,56 @@ def run_pilot(
             / candidate_id
             / "root_candidates.parquet"
         )
-        e0 = _old_e0_evidence(config, project_root, candidate_id)
-        e0_source = pd.read_parquet(
-            project_root
-            / str(config["source_artifact_root"])
-            / "03_formal"
-            / candidate_id
-            / "BI-3"
-            / "canonical_consensus_branch.parquet"
-        )
-        e0_beta = _frame_beta(
-            v113._subsample_frame(e0_source, len(target))  # noqa: SLF001
-        )
-        ranking_rows.append(
-            {
-                "candidate_id": candidate_id,
-                "experiment": "E0",
-                "root_seed_count": 64,
-                "candidate_cap": 0,
-                "edge_limit_deg": math.nan,
-                "cycle_found": True,
-                "gate_pass": bool(e0["gate_pass"]),
-                "passed_check_count": sum(
-                    bool(value) for value in e0["strict_checks"].values()
-                ),
-                "minimal_slack_total": sum(e0["minimal_slack"].values()),
-                "empty_feasible_layer_count": 0,
-                "targeted_search_complete": True,
-                "outcome": classify_full_loop_outcome(
-                    strict_cycle_pass=bool(e0["gate_pass"]),
-                    empty_feasible_layer_indices=[],
-                    targeted_search_complete=True,
-                    diagnostic_relaxed_cycle_pass=bool(
-                        e0["diagnostic_relaxed_cycle_pass"]
+        if bool(pilot_task["include_e0"]):
+            e0 = _old_e0_evidence(config, project_root, candidate_id)
+            e0_source = pd.read_parquet(
+                project_root
+                / str(config["source_artifact_root"])
+                / "03_formal"
+                / candidate_id
+                / "BI-3"
+                / "canonical_consensus_branch.parquet"
+            )
+            e0_beta = _frame_beta(
+                v113._subsample_frame(e0_source, len(target))  # noqa: SLF001
+            )
+            ranking_rows.append(
+                {
+                    "candidate_id": candidate_id,
+                    "experiment": "E0",
+                    "root_seed_count": 64,
+                    "candidate_cap": 0,
+                    "edge_limit_deg": math.nan,
+                    "cycle_found": True,
+                    "gate_pass": bool(e0["gate_pass"]),
+                    "passed_check_count": sum(
+                        bool(value) for value in e0["strict_checks"].values()
                     ),
-                ),
-            }
-        )
-        _write_cycle_artifact(
-            directory=stage / candidate_id / "E0",
-            beta=e0_beta,
-            target=target,
-            evaluation=e0,
-            metadata={"experiment": "E0", "source": "V11.3_BI-3"},
-        )
+                    "minimal_slack_total": sum(e0["minimal_slack"].values()),
+                    "empty_feasible_layer_count": 0,
+                    "targeted_search_complete": True,
+                    "outcome": classify_full_loop_outcome(
+                        strict_cycle_pass=bool(e0["gate_pass"]),
+                        empty_feasible_layer_indices=[],
+                        targeted_search_complete=True,
+                        diagnostic_relaxed_cycle_pass=bool(
+                            e0["diagnostic_relaxed_cycle_pass"]
+                        ),
+                    ),
+                }
+            )
+            _write_cycle_artifact(
+                directory=stage / candidate_id / "E0",
+                beta=e0_beta,
+                target=target,
+                evaluation=e0,
+                metadata={"experiment": "E0", "source": "V11.3_BI-3"},
+            )
         for root_seed_count in map(
             int, config["pilot_matrix"]["root_seed_counts"]
         ):
+            if root_seed_count != int(pilot_task["root_seed_count"]):
+                continue
             viability_dir = (
                 output
                 / STAGE_DIRS["viability"]
@@ -2675,7 +2752,70 @@ def run_pilot(
                                 "outcome": outcome,
                             }
                         )
-    ranking = pd.DataFrame(ranking_rows)
+    ranking = _sort_pilot_ranking(pd.DataFrame(ranking_rows), config)
+    rows_path, gate_path = _pilot_slice_paths(stage, pilot_task)
+    rows_path.parent.mkdir(parents=True, exist_ok=False)
+    ranking.to_csv(rows_path, index=False)
+    expected_matrix_rows = (
+        len(config["pilot_matrix"]["candidate_caps"])
+        * 4
+        * len(config["pilot_matrix"]["edge_limits_deg"])
+    )
+    if bool(pilot_task["include_e0"]):
+        expected_matrix_rows += 1
+    artifact_gate_count = 0
+    for row in ranking.to_dict(orient="records"):
+        if str(row["experiment"]) == "E0":
+            artifact_gate = stage / str(row["candidate_id"]) / "E0" / "gate.json"
+        else:
+            artifact_gate = (
+                stage
+                / str(row["candidate_id"])
+                / f"Nroot_{int(row['root_seed_count']):04d}"
+                / f"K_{int(row['candidate_cap']):02d}"
+                / str(row["experiment"])
+                / f"edge_{float(row['edge_limit_deg']):g}deg"
+                / "gate.json"
+            )
+        artifact_gate_count += int(artifact_gate.is_file())
+    return _write_gate(
+        gate_path,
+        checks={
+            "task_candidate_matches": set(ranking["candidate_id"])
+            == {str(pilot_task["candidate_id"])},
+            "task_root_seed_matches": set(
+                ranking.loc[
+                    ranking["experiment"] != "E0", "root_seed_count"
+                ].astype(int)
+            )
+            == {int(pilot_task["root_seed_count"])},
+            "expected_matrix_rows_complete": len(ranking)
+            == expected_matrix_rows,
+            "all_row_artifact_gates_present": artifact_gate_count
+            == len(ranking),
+        },
+        task=dict(pilot_task),
+        row_count=int(len(ranking)),
+        artifact_gate_count=artifact_gate_count,
+        targeted_empty_layer_search_complete=bool(
+            ranking.loc[
+                ranking["experiment"] != "E0",
+                "targeted_search_complete",
+            ]
+            .astype(bool)
+            .all()
+        ),
+        rows_sha256=sha256_file(rows_path),
+    )
+
+
+def _finalize_pilot_ranking(
+    *,
+    config: Mapping[str, Any],
+    stage: Path,
+    ranking: pd.DataFrame,
+) -> dict[str, Any]:
+    ranking = _sort_pilot_ranking(ranking, config)
     ranking.to_csv(stage / "pilot_matrix.csv", index=False)
     eligible = ranking[ranking["experiment"].isin(["E1", "E2", "E3", "E4"])]
     methods = (
@@ -2774,6 +2914,356 @@ def run_pilot(
         selected_formal_method=selected,
         matrix_row_count=int(len(ranking)),
         strict_pass_row_count=int(ranking["gate_pass"].sum()),
+    )
+
+
+def _pilot_slice_is_valid(stage: Path, task: Mapping[str, Any]) -> bool:
+    rows_path, gate_path = _pilot_slice_paths(stage, task)
+    if not rows_path.is_file() or not gate_path.is_file():
+        return False
+    try:
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(
+        gate.get("gate_pass")
+        and gate.get("task") == dict(task)
+        and gate.get("rows_sha256") == sha256_file(rows_path)
+    )
+
+
+def _pilot_task_has_partial_artifacts(
+    stage: Path, task: Mapping[str, Any]
+) -> bool:
+    candidate_root = (
+        stage
+        / str(task["candidate_id"])
+        / f"Nroot_{int(task['root_seed_count']):04d}"
+    )
+    e0_root = stage / str(task["candidate_id"]) / "E0"
+    return candidate_root.exists() or (
+        bool(task["include_e0"]) and e0_root.exists()
+    )
+
+
+def _read_process_usage(pid: int) -> tuple[float, int]:
+    """Return sampled CPU seconds and RSS bytes for one Linux worker."""
+
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = stat[stat.rfind(")") + 2 :].split()
+        clock_ticks = float(os.sysconf("SC_CLK_TCK"))
+        cpu_seconds = (float(fields[11]) + float(fields[12])) / clock_ticks
+        rss_kib = 0
+        for line in Path(f"/proc/{pid}/status").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            if line.startswith("VmRSS:"):
+                rss_kib = int(line.split()[1])
+                break
+        return cpu_seconds, rss_kib * 1024
+    except (FileNotFoundError, IndexError, OSError, ValueError):
+        return 0.0, 0
+
+
+def _host_memory_snapshot() -> dict[str, int]:
+    values: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            if key in {"MemTotal", "MemAvailable", "SwapTotal", "SwapFree"}:
+                values[f"{key.lower()}_bytes"] = int(raw.split()[0]) * 1024
+    except (OSError, ValueError):
+        pass
+    return values
+
+
+def _tail_text(path: Path, *, character_limit: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[
+            -character_limit:
+        ]
+    except OSError:
+        return ""
+
+
+def _run_pilot_subprocess_tasks(
+    *,
+    source_root: Path,
+    project_root: Path,
+    output: Path,
+    config_path: Path,
+    preset: str,
+    task_files: Sequence[Path],
+    task_specs: Sequence[Mapping[str, Any]],
+    effective_workers: int,
+    requested_workers: int,
+    configured_max_workers: int,
+    poll_seconds: float,
+    per_worker_blas_threads: int,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    """Run Pilot slices as independent subprocesses and record resource evidence."""
+
+    task_by_path = {
+        path: dict(spec) for path, spec in zip(task_files, task_specs, strict=True)
+    }
+    logs_dir = manifest_path.parent / "_parallel" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    started_wall = time.monotonic()
+    started_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    records: dict[str, dict[str, Any]] = {}
+    pending: list[Path] = []
+    stage = output / STAGE_DIRS["pilot"]
+    for task_file in task_files:
+        task = task_by_path[task_file]
+        if _pilot_slice_is_valid(stage, task):
+            records[str(task["task_id"])] = {
+                **task,
+                "status": "reused_valid_slice",
+                "exit_code": 0,
+                "wall_seconds": 0.0,
+                "cpu_seconds": 0.0,
+                "cpu_utilization_percent": 0.0,
+                "peak_rss_bytes": 0,
+            }
+        else:
+            if _pilot_task_has_partial_artifacts(stage, task):
+                raise RuntimeError(
+                    "Refusing to overwrite incomplete Pilot slice artifacts: "
+                    f"{task['task_id']}"
+                )
+            pending.append(task_file)
+    worker_limit_reasons = []
+    if effective_workers < requested_workers:
+        worker_limit_reasons.append(
+            "effective_workers_capped_by_configured_max_or_independent_task_count"
+        )
+    if len(task_specs) == 4:
+        worker_limit_reasons.append(
+            "current_granularity_has_four_candidate_root_seed_slices"
+        )
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "execution_model": "independent_subprocess_workers",
+        "started_utc": started_utc,
+        "status": "running",
+        "requested_workers": int(requested_workers),
+        "configured_max_workers": int(configured_max_workers),
+        "effective_workers": int(effective_workers),
+        "independent_task_count": len(task_specs),
+        "per_worker_blas_threads": int(per_worker_blas_threads),
+        "logical_cpu_count": os.cpu_count(),
+        "worker_limit_reasons": worker_limit_reasons,
+        "host_memory_start": _host_memory_snapshot(),
+        "peak_concurrent_worker_rss_bytes": 0,
+        "tasks": [],
+    }
+    atomic_write_json(manifest_path, manifest)
+    active: dict[subprocess.Popen[Any], dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
+    env = dict(os.environ)
+    for variable in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        env[variable] = str(per_worker_blas_threads)
+    env.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-v11-4")
+    while pending or active:
+        while pending and len(active) < effective_workers:
+            task_file = pending.pop(0)
+            task = task_by_path[task_file]
+            stdout_path = logs_dir / f"{task['task_id']}.stdout.log"
+            stderr_path = logs_dir / f"{task['task_id']}.stderr.log"
+            stdout_handle = stdout_path.open("w", encoding="utf-8")
+            stderr_handle = stderr_path.open("w", encoding="utf-8")
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--config",
+                    str(config_path),
+                    "--preset",
+                    str(preset),
+                    "--project-root",
+                    str(project_root),
+                    "--output",
+                    str(output),
+                    "--pilot-worker-task",
+                    str(task_file),
+                ],
+                cwd=str(source_root),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                env=env,
+            )
+            active[process] = {
+                "task": task,
+                "started": time.monotonic(),
+                "pid": int(process.pid),
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+                "stdout_handle": stdout_handle,
+                "stderr_handle": stderr_handle,
+                "peak_rss_bytes": 0,
+                "cpu_seconds": 0.0,
+            }
+        concurrent_rss = 0
+        for process, state in active.items():
+            cpu_seconds, rss_bytes = _read_process_usage(int(process.pid))
+            state["cpu_seconds"] = max(state["cpu_seconds"], cpu_seconds)
+            state["peak_rss_bytes"] = max(state["peak_rss_bytes"], rss_bytes)
+            concurrent_rss += rss_bytes
+        manifest["peak_concurrent_worker_rss_bytes"] = max(
+            int(manifest["peak_concurrent_worker_rss_bytes"]), concurrent_rss
+        )
+        completed = [
+            process for process in active if process.poll() is not None
+        ]
+        for process in completed:
+            state = active.pop(process)
+            state["stdout_handle"].close()
+            state["stderr_handle"].close()
+            wall_seconds = max(time.monotonic() - state["started"], 1.0e-9)
+            cpu_seconds = float(state["cpu_seconds"])
+            task = state["task"]
+            record = {
+                **task,
+                "status": (
+                    "completed" if process.returncode == 0 else "failed"
+                ),
+                "pid": int(state["pid"]),
+                "exit_code": int(process.returncode),
+                "wall_seconds": wall_seconds,
+                "cpu_seconds": cpu_seconds,
+                "cpu_utilization_percent": 100.0
+                * cpu_seconds
+                / wall_seconds,
+                "peak_rss_bytes": int(state["peak_rss_bytes"]),
+                "stdout_log": str(state["stdout_path"]),
+                "stderr_log": str(state["stderr_path"]),
+            }
+            records[str(task["task_id"])] = record
+            if process.returncode != 0:
+                failures.append(
+                    {
+                        **record,
+                        "stdout_tail": _tail_text(state["stdout_path"]),
+                        "stderr_tail": _tail_text(state["stderr_path"]),
+                    }
+                )
+            manifest["tasks"] = [
+                records[str(spec["task_id"])]
+                for spec in task_specs
+                if str(spec["task_id"]) in records
+            ]
+            atomic_write_json(manifest_path, manifest)
+        if pending or active:
+            time.sleep(max(0.1, float(poll_seconds)))
+    elapsed = max(time.monotonic() - started_wall, 1.0e-9)
+    total_cpu = sum(float(record["cpu_seconds"]) for record in records.values())
+    manifest.update(
+        {
+            "status": "failed" if failures else "completed",
+            "completed_utc": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            ),
+            "wall_seconds": elapsed,
+            "total_worker_cpu_seconds": total_cpu,
+            "aggregate_worker_cpu_utilization_percent": 100.0
+            * total_cpu
+            / elapsed,
+            "mean_effective_worker_utilization_percent": 100.0
+            * total_cpu
+            / (elapsed * effective_workers),
+            "host_memory_end": _host_memory_snapshot(),
+            "tasks": [
+                records[str(spec["task_id"])] for spec in task_specs
+            ],
+            "failures": failures,
+        }
+    )
+    atomic_write_json(manifest_path, manifest)
+    if failures:
+        raise RuntimeError(
+            "Pilot subprocess worker failures: "
+            + json.dumps(failures, ensure_ascii=False)
+        )
+    return manifest
+
+
+def run_pilot(
+    *,
+    config: Mapping[str, Any],
+    source_root: Path,
+    project_root: Path,
+    environment: Any,
+    output: Path,
+    config_path: Path,
+    preset: str,
+    pilot_workers: int | None = None,
+    **_unused: Any,
+) -> dict[str, Any]:
+    """Execute and deterministically merge coarse-grained Pilot slices."""
+
+    stage = output / STAGE_DIRS["pilot"]
+    parallel_root = stage / "_parallel"
+    tasks_root = parallel_root / "tasks"
+    tasks_root.mkdir(parents=True, exist_ok=True)
+    task_specs = _pilot_task_specs(config)
+    task_files = []
+    for task in task_specs:
+        task_file = tasks_root / f"{task['task_id']}.json"
+        atomic_write_json(task_file, task)
+        task_files.append(task_file)
+    configured_workers = int(config["pilot_matrix"]["parallel_workers"])
+    configured_max_workers = int(
+        config["pilot_matrix"]["max_parallel_workers"]
+    )
+    requested_workers = (
+        configured_workers if pilot_workers is None else int(pilot_workers)
+    )
+    if requested_workers < 1:
+        raise ValueError("Pilot worker count must be positive")
+    effective_workers = min(
+        requested_workers, configured_max_workers, len(task_specs)
+    )
+    _run_pilot_subprocess_tasks(
+        source_root=source_root,
+        project_root=project_root,
+        output=output,
+        config_path=config_path,
+        preset=preset,
+        task_files=task_files,
+        task_specs=task_specs,
+        effective_workers=effective_workers,
+        requested_workers=requested_workers,
+        configured_max_workers=configured_max_workers,
+        poll_seconds=float(
+            config["pilot_matrix"]["monitoring_poll_seconds"]
+        ),
+        per_worker_blas_threads=int(
+            config["pilot_matrix"]["per_worker_blas_threads"]
+        ),
+        manifest_path=stage / "pilot_parallel_manifest.json",
+    )
+    frames = []
+    for task in task_specs:
+        if not _pilot_slice_is_valid(stage, task):
+            raise RuntimeError(
+                f"Pilot slice missing or invalid after worker completion: "
+                f"{task['task_id']}"
+            )
+        rows_path, _gate_path = _pilot_slice_paths(stage, task)
+        frames.append(pd.read_csv(rows_path))
+    ranking = _sort_pilot_ranking(pd.concat(frames, ignore_index=True), config)
+    return _finalize_pilot_ranking(
+        config=config,
+        stage=stage,
+        ranking=ranking,
     )
 
 
@@ -4333,6 +4823,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Override coarse-grained Pilot subprocess worker count.",
+    )
+    parser.add_argument(
+        "--pilot-worker-task",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -4357,9 +4858,32 @@ def main() -> None:
     environment = load_environment(
         project_root, project_root / str(config["robot_config"])
     )
+    if args.pilot_worker_task is not None:
+        task_path = Path(args.pilot_worker_task).resolve()
+        pilot_task = json.loads(task_path.read_text(encoding="utf-8"))
+        expected_tasks = {
+            str(task["task_id"]): task for task in _pilot_task_specs(config)
+        }
+        if (
+            str(pilot_task.get("task_id")) not in expected_tasks
+            or expected_tasks[str(pilot_task["task_id"])] != pilot_task
+        ):
+            raise RuntimeError("Pilot worker task does not match resolved config")
+        report = _run_pilot_slice(
+            config=config,
+            project_root=project_root,
+            environment=environment,
+            output=output,
+            pilot_task=pilot_task,
+        )
+        print(json.dumps(report, indent=2, allow_nan=False))
+        return
     atlas = _reachability_atlas(project_root, config)
     common = {
         "config": config,
+        "config_path": config_path.resolve(),
+        "preset": str(args.preset),
+        "pilot_workers": args.workers,
         "source_root": source_root,
         "project_root": project_root,
         "environment": environment,

@@ -58,6 +58,10 @@ pilot_matrix:
   candidate_caps: [16, 32, 64]
   edge_limits_deg: [1.0, 2.0, 3.0]
   shared_method_across_candidates: true
+  parallel_workers: 4
+  max_parallel_workers: 8
+  per_worker_blas_threads: 1
+  monitoring_poll_seconds: 1.0
 
 cycle:
   beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
@@ -169,6 +173,8 @@ smoke:
     root_seed_counts: [16]
     candidate_caps: [4]
     edge_limits_deg: [3.0]
+    parallel_workers: 2
+    max_parallel_workers: 2
   cycle:
     top_m: 2
     max_states_per_root: 16

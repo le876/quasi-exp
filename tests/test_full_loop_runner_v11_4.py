@@ -39,6 +39,9 @@ def test_protocol_freezes_strict_gate_and_gate_driven_matrix() -> None:
     assert config["root_fiber"]["nested_seed_counts"] == [64, 256, 1024]
     assert config["pilot_matrix"]["root_seed_counts"] == [256, 1024]
     assert config["pilot_matrix"]["candidate_caps"] == [16, 32, 64]
+    assert config["pilot_matrix"]["parallel_workers"] == 4
+    assert config["pilot_matrix"]["max_parallel_workers"] == 8
+    assert config["pilot_matrix"]["per_worker_blas_threads"] == 1
     assert config["hard_feasibility"] == {
         "residual_max_mm": 3.0,
         "joint_margin_min_deg": 1.5,
@@ -59,6 +62,7 @@ def test_smoke_deep_merge_preserves_artifact_contract() -> None:
     assert config["root_fiber"]["nested_seed_counts"] == [8, 16]
     assert config["pilot_matrix"]["root_seed_counts"] == [16]
     assert config["pilot_matrix"]["candidate_caps"] == [4]
+    assert config["pilot_matrix"]["parallel_workers"] == 2
     assert set(runner.STAGE_DIRS) == {
         "protocol",
         "root_fiber",
@@ -95,6 +99,77 @@ def test_empty_root_representative_inventory_keeps_csv_schema(
     assert restored.columns.tolist() == list(
         runner.ROOT_REPRESENTATIVE_COLUMNS
     )
+
+
+def test_pilot_parallel_tasks_are_stable_candidate_root_slices() -> None:
+    runner = _runner_module()
+    source_root = Path(__file__).resolve().parents[1]
+    config = runner.load_config(
+        source_root / "configs/generalized_ellipse_region_v11_full_loop.yaml",
+        preset="formal",
+    )
+
+    tasks = runner._pilot_task_specs(config)  # noqa: SLF001
+
+    assert [
+        (task["candidate_id"], task["root_seed_count"], task["include_e0"])
+        for task in tasks
+    ] == [
+        ("A4_A2_178_r0_reverse_c0045", 256, True),
+        ("A4_A2_178_r0_reverse_c0045", 1024, False),
+        ("A4_A2_143_r1_reverse_c0045", 256, True),
+        ("A4_A2_143_r1_reverse_c0045", 1024, False),
+    ]
+    assert len({task["task_id"] for task in tasks}) == 4
+
+
+def test_pilot_ranking_merge_is_independent_of_worker_completion_order() -> None:
+    runner = _runner_module()
+    rows = pd.DataFrame(
+        [
+            {
+                "candidate_id": "B",
+                "experiment": "E2",
+                "root_seed_count": 1024,
+                "candidate_cap": 64,
+                "edge_limit_deg": 3.0,
+            },
+            {
+                "candidate_id": "A",
+                "experiment": "E1",
+                "root_seed_count": 256,
+                "candidate_cap": 16,
+                "edge_limit_deg": 1.0,
+            },
+            {
+                "candidate_id": "A",
+                "experiment": "E0",
+                "root_seed_count": 64,
+                "candidate_cap": 0,
+                "edge_limit_deg": np.nan,
+            },
+        ]
+    )
+    config = {
+        "candidates": ["A", "B"],
+        "pilot_matrix": {
+            "root_seed_counts": [256, 1024],
+            "candidate_caps": [16, 32, 64],
+            "edge_limits_deg": [1.0, 2.0, 3.0],
+        },
+    }
+
+    first = runner._sort_pilot_ranking(rows, config)  # noqa: SLF001
+    second = runner._sort_pilot_ranking(  # noqa: SLF001
+        rows.iloc[::-1].reset_index(drop=True), config
+    )
+
+    pd.testing.assert_frame_equal(first, second)
+    assert first[["candidate_id", "experiment"]].values.tolist() == [
+        ["A", "E0"],
+        ["A", "E1"],
+        ["B", "E2"],
+    ]
 
 
 def test_full_loop_viable_root_restriction_stays_empty_without_survivor() -> None:
@@ -376,6 +451,8 @@ def test_real_cli_smoke_writes_complete_branch_decision(tmp_path: Path) -> None:
             "/mnt/ML_projects/quasi_exp",
             "--output",
             str(output),
+            "--workers",
+            "2",
         ],
         cwd=source_root,
         text=True,
@@ -396,4 +473,78 @@ def test_real_cli_smoke_writes_complete_branch_decision(tmp_path: Path) -> None:
         "A4_A2_178_r0_reverse_c0045",
         "A4_A2_143_r1_reverse_c0045",
     }
+    parallel_manifest = json.loads(
+        (
+            output
+            / "03_pilot_matrix"
+            / "pilot_parallel_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert parallel_manifest["status"] == "completed"
+    assert parallel_manifest["requested_workers"] == 2
+    assert parallel_manifest["effective_workers"] == 2
+    assert parallel_manifest["independent_task_count"] == 2
+    assert parallel_manifest["per_worker_blas_threads"] == 1
+    assert {task["status"] for task in parallel_manifest["tasks"]} == {
+        "completed"
+    }
+    assert all(
+        task["peak_rss_bytes"] > 0 for task in parallel_manifest["tasks"]
+    )
     assert not (output / "05_downstream_bridge").exists()
+
+
+def test_parallel_pilot_ranking_matches_single_worker(tmp_path: Path) -> None:
+    source_root = Path(__file__).resolve().parents[1]
+    runner_path = (
+        source_root
+        / "scripts/analysis/run_generalized_ellipse_full_loop_v11_4.py"
+    )
+    outputs = {}
+    for workers in (1, 2):
+        output = tmp_path / f"workers_{workers}"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(runner_path),
+                "--preset",
+                "smoke",
+                "--stage",
+                "branch",
+                "--project-root",
+                "/mnt/ML_projects/quasi_exp",
+                "--output",
+                str(output),
+                "--workers",
+                str(workers),
+            ],
+            cwd=source_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=240,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout[-4000:]
+        outputs[workers] = output
+
+    single = pd.read_csv(
+        outputs[1] / "03_pilot_matrix" / "pilot_matrix.csv"
+    )
+    parallel = pd.read_csv(
+        outputs[2] / "03_pilot_matrix" / "pilot_matrix.csv"
+    )
+    pd.testing.assert_frame_equal(single, parallel)
+    assert json.loads(
+        (
+            outputs[1]
+            / "03_pilot_matrix"
+            / "selected_formal_method.json"
+        ).read_text(encoding="utf-8")
+    ) == json.loads(
+        (
+            outputs[2]
+            / "03_pilot_matrix"
+            / "selected_formal_method.json"
+        ).read_text(encoding="utf-8")
+    )

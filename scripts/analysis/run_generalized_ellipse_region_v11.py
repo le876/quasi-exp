@@ -637,6 +637,19 @@ def _aligned_beta_gap(left: pd.DataFrame, right: pd.DataFrame) -> dict[str, floa
     }
 
 
+class ParallelWorkerError(RuntimeError):
+    """A worker batch failed after producing auditable resource evidence."""
+
+    def __init__(
+        self, *, failures: Sequence[Mapping[str, Any]], report: Mapping[str, Any]
+    ) -> None:
+        self.failures = [dict(failure) for failure in failures]
+        self.report = dict(report)
+        super().__init__(
+            f"parallel worker failures: {json.dumps(self.failures)}"
+        )
+
+
 def _run_subprocess_tasks(
     task_files: Sequence[Path], *, worker_name: str, max_workers: int
 ) -> dict[str, Any]:
@@ -749,15 +762,14 @@ def _run_subprocess_tasks(
                         "stderr_tail": _tail_text(Path(state["stderr_path"])),
                     }
                 )
-    if failures:
-        raise RuntimeError(f"parallel worker failures: {json.dumps(failures)}")
     ordered_records = [records[path] for path in task_order]
     wall_seconds = max(time.monotonic() - started, 1.0e-9)
     total_cpu_seconds = sum(
         float(record["cpu_seconds"]) for record in ordered_records
     )
-    return {
+    report = {
         "worker_name": str(worker_name),
+        "status": "failed" if failures else "completed",
         "requested_workers": int(max_workers),
         "effective_workers": min(int(max_workers), len(task_files)),
         "task_count": len(task_files),
@@ -770,7 +782,11 @@ def _run_subprocess_tasks(
             peak_concurrent_worker_rss_bytes
         ),
         "tasks": ordered_records,
+        "failures": failures,
     }
+    if failures:
+        raise ParallelWorkerError(failures=failures, report=report)
+    return report
 
 
 def _read_process_usage(pid: int) -> tuple[float, int]:
@@ -1668,7 +1684,8 @@ def run_tube_stage(
                 worker_name="tube-surface",
                 max_workers=parallel_workers,
             )
-        except RuntimeError as error:
+        except ParallelWorkerError as error:
+            parallel_batches.append({"batch_id": batch_id, **error.report})
             write_parallel_manifest(status="failed", failure=str(error))
             raise
         parallel_batches.append({"batch_id": batch_id, **batch})
@@ -1847,8 +1864,6 @@ def run_tube_stage(
     selected = None
     repeat_gap = math.inf
     reverse_gap = math.inf
-    audit_candidates: list[dict[str, Any]] = []
-    audit_specs: list[dict[str, Any]] = []
     for _index, best in dense_pass.iterrows():
         anchor_id = str(best["anchor_id"])
         family, _anchor_beta = anchor_lookup[anchor_id]
@@ -1862,7 +1877,7 @@ def run_tube_stage(
         primary = pd.read_parquet(primary_dir / "surface.parquet")
         repeat_dir = candidate_root / "repeat"
         reverse_dir = candidate_root / "reverse_cut"
-        candidate_audit_specs = [
+        audit_specs = [
             {
                 "task_id": f"audit_repeat_{anchor_id}_r{radial:g}_p{plane:g}",
                 "anchor_id": anchor_id,
@@ -1887,35 +1902,12 @@ def run_tube_stage(
                 "cyclic_cut": count // 4,
             },
         ]
-        audit_specs.extend(candidate_audit_specs)
-        audit_candidates.append(
-            {
-                "anchor_id": anchor_id,
-                "family": family,
-                "radial_radius_mm": radial,
-                "plane_radius_mm": plane,
-                "count": count,
-                "primary": primary,
-                "primary_dir": primary_dir,
-                "repeat_dir": repeat_dir,
-                "reverse_dir": reverse_dir,
-            }
+        execute_surface_specs(
+            audit_specs,
+            batch_id=(
+                f"dense_audit_{anchor_id}_r{radial:g}_p{plane:g}"
+            ),
         )
-    execute_surface_specs(audit_specs, batch_id="dense_audits")
-    # Recompose in the same stable dense ranking used by the serial
-    # implementation.  Computing later candidates eagerly cannot affect the
-    # first passing candidate because every audit owns independent inputs,
-    # seeds and artifact directories.
-    for audit_candidate in audit_candidates:
-        anchor_id = str(audit_candidate["anchor_id"])
-        family = audit_candidate["family"]
-        radial = float(audit_candidate["radial_radius_mm"])
-        plane = float(audit_candidate["plane_radius_mm"])
-        count = int(audit_candidate["count"])
-        primary = audit_candidate["primary"]
-        primary_dir = Path(audit_candidate["primary_dir"])
-        repeat_dir = Path(audit_candidate["repeat_dir"])
-        reverse_dir = Path(audit_candidate["reverse_dir"])
         repeat_gap = _surface_aligned_gap(
             primary, pd.read_parquet(repeat_dir / "surface.parquet")
         )["beta_gap_rms_p95_deg"]

@@ -197,8 +197,8 @@ worker。已完成的 Formal/Pilot 产物没有被删除或覆盖。
 - Formal 请求 `8` 个 subprocess worker，smoke 请求 `2` 个；
 - screen、fallback、dense primary 均按
   `(anchor_id, radial_radius_mm, plane_radius_mm)` 拆成独立任务；
-- 所有 dense-pass candidate 的 repeat/reverse audit 合成一个批次，可在最多
-  8 个独立 audit 上并行；
+- dense-pass candidate 继续按原 stable ranking 逐个审计；同一 candidate 的
+  repeat/reverse 两个独立 audit 并行，首个通过者仍立即停止后续审计；
 - 每个 worker 固定一个 BLAS/OpenMP 线程，并显式注入项目 `src/` 到
   `PYTHONPATH`；
 - 每个 worker 独占 task、日志和 surface 目录；
@@ -219,21 +219,25 @@ worker。已完成的 Formal/Pilot 产物没有被删除或覆盖。
 - smoke tube gate 为 false，因为两个缩小求解均未通过 teacher gate；
   这属于数值结果，不是并行执行失败。
 
-Formal 初始 screen 只有 `2 anchors × 2 frontier widths = 4` 个独立任务，因此
-即使请求 8 workers，该批有效上限仍是 4。若有 4 个 dense-pass candidate，
-合并后的 repeat/reverse audit 批次可形成 8 个独立任务并使用 8 核。单个
-surface 内存在 phase/sweep 连续依赖，未进一步拆分，以免改变数值语义。
+V11.4 派生 downstream 配置明确覆盖为
+`2 anchors × 2 frontier widths = 4` 个初始 screen 独立任务，因此即使请求
+8 workers，该批有效上限仍是 4；每个 candidate 的 audit 批次有效上限为 2。
+基础 V11 配置自身有 6 个 frontier widths，不受这条 V11.4 数量说明约束。
+单个 surface 内存在 phase/sweep 连续依赖，未进一步拆分，以免改变数值语义。
 
 ## 5. 并行语义验证
 
 实现完成后的验证：
 
-- V11/V11.4 tube、Pilot 和 Formal 相关回归：`30 passed`；
+- V11/V11.4 tube、Pilot 和 Formal 相关回归：`31 passed`；
 - tube 调度器回归确认同一时刻保有两个 worker，且逆完成顺序不会改变任务
   归并顺序；
 - 真实 2-worker tube smoke：worker CLI、物理环境加载、独立 surface 写入和
   资源 manifest 均完成；
-- 同一 smoke 分别使用 1 worker 和 2 workers：
+- 同一 tube smoke 分别使用 1 worker 和 2 workers：
+  两个 `surface.parquet` 的 SHA-256 逐一一致，数值 metrics/checks、
+  `screen_frontier.csv` 和最终 tube gate checks 一致；
+- V11.4 Pilot 同一 smoke 分别使用 1 worker 和 2 workers：
   `pilot_matrix.csv` 逐单元一致，
   `selected_formal_method.json` 一致，Formal 数值报告和最终 decision marker
   一致；

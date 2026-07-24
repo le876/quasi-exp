@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def _runner_module():
@@ -177,6 +178,43 @@ def test_subprocess_scheduler_runs_two_workers_and_preserves_task_order(
         environment["MPLCONFIGDIR"] == "/tmp/matplotlib-v11"
         for environment in state["environments"]
     )
+
+
+def test_subprocess_scheduler_preserves_failed_batch_resource_report(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = _runner_module()
+    task_file = tmp_path / "_parallel/tasks/failing_task.json"
+    task_file.parent.mkdir(parents=True)
+    task_file.write_text("{}", encoding="utf-8")
+
+    class FailedProcess:
+        pid = 2000
+        returncode = 7
+
+        def __init__(self, _command, **_kwargs) -> None:
+            pass
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(runner.subprocess, "Popen", FailedProcess)
+    monkeypatch.setattr(
+        runner, "_read_process_usage", lambda _pid: (0.25, 4096)
+    )
+
+    with pytest.raises(runner.ParallelWorkerError) as captured:
+        runner._run_subprocess_tasks(
+            [task_file], worker_name="tube-surface", max_workers=2
+        )
+
+    report = captured.value.report
+    assert report["status"] == "failed"
+    assert report["task_count"] == 1
+    assert report["tasks"][0]["exit_code"] == 7
+    assert report["tasks"][0]["cpu_seconds"] == 0.25
+    assert report["peak_concurrent_worker_rss_bytes"] == 4096
+    assert report["failures"][0]["task_id"] == "failing_task"
 
 
 def test_relaxed_2x_protocol_doubles_upper_gates_and_halves_lower_gates() -> None:

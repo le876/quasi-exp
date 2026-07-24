@@ -92,8 +92,6 @@ candidate A2_143 / Nroot 1024
 - aggregate 和 mean effective worker utilization；
 - 完整 task 状态与 failure tail。
 
-正式运行结束后，本节补充 4-worker 实测数据、与串行基线的阶段耗时对比，以及是否需要扩大并行度的判断。
-
 ### 4.1 4-worker Pilot 实测
 
 4-worker Pilot 于 2026-07-24 完成：
@@ -159,19 +157,89 @@ Refusing to overwrite incomplete Pilot slice artifacts:
 00–02 阶段的 gate 和 artifact manifest 均重新验证通过，随后只恢复执行 Pilot，
 没有重复计算前置阶段。
 
+### 4.3 2-worker Formal 实测
+
+720-phase Formal 使用两个 candidate 级 subprocess 完成：
+
+- wall time：`18012.89 s`，即约 `5h00m13s`；
+- 两个 candidate wall time：`16930.65 s` 和 `18012.89 s`；
+- 两个 worker 的 CPU utilization 分别为 `99.924%` 和 `99.926%`；
+- aggregate worker CPU utilization：`193.85%`；
+- mean effective worker utilization：`96.92%`；
+- 并发 worker 峰值 RSS：`808,882,176 bytes`，约 `771 MiB`；
+- 两个 task 均为 `completed`；
+- Formal Gate 通过，两个 candidate 均为 outcome A；
+- 两个 candidate 的 minimal slack 各项均为 `0`；
+- downstream 已获授权。
+
+数值结果：
+
+| candidate | residual p95 / max (mm) | margin min (deg) | velocity p95 / max (deg) | acceleration p95 (deg) | seam (deg) |
+|---|---:|---:|---:|---:|---:|
+| `A4_A2_178_r0_reverse_c0045` | `0.005969 / 0.022673` | `1.500022` | `0.076032 / 0.222384` | `0.007567` | `0.031274` |
+| `A4_A2_143_r1_reverse_c0045` | `0.004877 / 0.010016` | `1.500000` | `0.057097 / 0.101018` | `0.003534` | `0.091356` |
+
+### 4.4 Downstream tube 串行瓶颈与修正
+
+Formal 通过后首次进入 downstream bridge。旧 V11 `run_tube_stage` 仍在父进程中
+逐 surface 串行求解，因此运行约 `2h08m51s` 时只有一个逻辑 CPU 持续接近
+`100%`。当时只完成了：
+
+```text
+02_tube/anchors/A4_A2_178_r0_reverse_c0045/screen/r0.5_p0.5/
+```
+
+该进程已按用户授权停止，并验证主进程及全部子 PID 均已退出；未发现残留
+worker。已完成的 Formal/Pilot 产物没有被删除或覆盖。
+
+修正后的 tube 执行模型：
+
+- Formal 请求 `8` 个 subprocess worker，smoke 请求 `2` 个；
+- screen、fallback、dense primary 均按
+  `(anchor_id, radial_radius_mm, plane_radius_mm)` 拆成独立任务；
+- 所有 dense-pass candidate 的 repeat/reverse audit 合成一个批次，可在最多
+  8 个独立 audit 上并行；
+- 每个 worker 固定一个 BLAS/OpenMP 线程，并显式注入项目 `src/` 到
+  `PYTHONPATH`；
+- 每个 worker 独占 task、日志和 surface 目录；
+- 父进程等待批次完整后，仍按原 `stable` area ranking 选择第一个通过者；
+- 随机种子、cross-section prefix、teacher policy、数值求解和 gate 均未修改；
+- 新增 `02_tube/tube_parallel_manifest.json`，记录 PID、wall/CPU time、
+  utilization、peak RSS、有效 worker 数和批次统计。
+
+真实 smoke 使用两个已通过 Formal 的 720-phase centerline 作为 anchor，并在
+`12 phase × 9 cross-section` 上运行：
+
+- 两个 screen worker 均成功完成；
+- wall time 分别为 `72.41 s` 和 `38.92 s`；
+- worker CPU utilization 分别为 `99.20%` 和 `98.47%`；
+- 批次 aggregate worker CPU utilization 为 `152.13%`；
+- 峰值并发 RSS 为 `394,809,344 bytes`，约 `377 MiB`；
+- manifest 状态为 `completed`，requested/effective worker 为 `2/2`；
+- smoke tube gate 为 false，因为两个缩小求解均未通过 teacher gate；
+  这属于数值结果，不是并行执行失败。
+
+Formal 初始 screen 只有 `2 anchors × 2 frontier widths = 4` 个独立任务，因此
+即使请求 8 workers，该批有效上限仍是 4。若有 4 个 dense-pass candidate，
+合并后的 repeat/reverse audit 批次可形成 8 个独立任务并使用 8 核。单个
+surface 内存在 phase/sweep 连续依赖，未进一步拆分，以免改变数值语义。
+
 ## 5. 并行语义验证
 
 实现完成后的验证：
 
-- V11.4 定向测试：Formal candidate 并行化后两个 Python 环境均
-  `24 passed`；
-- V11/V11.3/V11.4 相关回归：`65 passed`；
-- 真实 2-worker smoke：通过；
+- V11/V11.4 tube、Pilot 和 Formal 相关回归：`30 passed`；
+- tube 调度器回归确认同一时刻保有两个 worker，且逆完成顺序不会改变任务
+  归并顺序；
+- 真实 2-worker tube smoke：worker CLI、物理环境加载、独立 surface 写入和
+  资源 manifest 均完成；
 - 同一 smoke 分别使用 1 worker 和 2 workers：
   `pilot_matrix.csv` 逐单元一致，
   `selected_formal_method.json` 一致，Formal 数值报告和最终 decision marker
   一致；
-- 全量测试未发现新的 V11.4 回归；仍为 37 个既有 V7 失败，其中多数来自标准环境 Python 3.10 缺少 `enum.StrEnum`，其余为既有 registered gate 预期。
+- 全量测试已运行；除本次相关测试外仍有 37 个既有 V7 失败，其中多数来自
+  标准环境 Python 3.10 缺少 `enum.StrEnum`，其余为既有 registered gate
+  预期。本次改动未触及这些 V7 模块。
 
 ## 6. 结果状态
 
@@ -180,6 +248,10 @@ Refusing to overwrite incomplete Pilot slice artifacts:
 - 串行残留：已整体归档为
   `runs/generalized_ellipse_region_v11_full_loop_feasible_branch_serial_interrupted_20260723`；
 - 4-worker Pilot：完成且 Gate 通过；
-- 2-worker 720-phase Formal：等待启动；
-- Formal Gate：尚无结论；
-- downstream tube/dataset/student：未授权。
+- 2-worker 720-phase Formal：完成；
+- Formal Gate：通过，两个 candidate 均 outcome A；
+- downstream tube 串行尝试：已停止，未形成 tube gate；
+- downstream tube 并行实现：相关回归与真实 smoke 已通过；
+- 正式 downstream 恢复：等待符合 `$long-wait` 的
+  `long_wait_monitor` Terra/low role 可被当前 spawn 接口结构化选择后启动；
+- downstream dataset/student：尚未运行，不能报告结论。

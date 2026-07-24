@@ -60,6 +60,7 @@ anchor:
   directions: [forward, reverse]
 
 tube:
+  parallel_workers: 8
   frontier_mm:
     - [0.5, 0.5]
     - [1.0, 1.0]
@@ -162,6 +163,7 @@ smoke:
     cuts: [0]
     directions: [forward]
   tube:
+    parallel_workers: 2
     frontier_mm: [[0.5, 0.5]]
     screen_phase_count: 12
     screen_cross_section_count: 9

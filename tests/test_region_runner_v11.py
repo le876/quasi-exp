@@ -25,6 +25,12 @@ def test_protocol_stage_freezes_catalog_splits_and_manifest(tmp_path: Path) -> N
         source_root / "configs/generalized_ellipse_region_v11.yaml",
         preset="smoke",
     )
+    assert config["tube"]["parallel_workers"] == 2
+    formal_config = runner.load_protocol_config(
+        source_root / "configs/generalized_ellipse_region_v11.yaml",
+        preset="formal",
+    )
+    assert formal_config["tube"]["parallel_workers"] == 8
 
     report = runner.run_protocol_stage(
         config=config,
@@ -95,6 +101,81 @@ def test_stage_cache_is_invalidated_when_execution_fingerprint_changes(
             gate_path, expected_fingerprint="configuration-b"
         )
         is None
+    )
+
+
+def test_subprocess_scheduler_runs_two_workers_and_preserves_task_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = _runner_module()
+    task_dir = tmp_path / "_parallel/tasks"
+    task_dir.mkdir(parents=True)
+    task_files = [task_dir / f"task_{index}.json" for index in range(3)]
+    for task_file in task_files:
+        task_file.write_text("{}", encoding="utf-8")
+
+    state = {"alive": set(), "max_alive": 0, "environments": []}
+
+    class FakeProcess:
+        next_pid = 1000
+
+        def __init__(self, command, **kwargs) -> None:
+            del command
+            self.pid = FakeProcess.next_pid
+            FakeProcess.next_pid += 1
+            self.returncode = None
+            self.poll_count = 0
+            self.is_first = self.pid == 1000
+            state["alive"].add(self.pid)
+            state["max_alive"] = max(
+                state["max_alive"], len(state["alive"])
+            )
+            state["environments"].append(kwargs["env"])
+
+        def poll(self):
+            self.poll_count += 1
+            if self.is_first and self.poll_count == 1:
+                return None
+            self.returncode = 0
+            state["alive"].discard(self.pid)
+            return self.returncode
+
+    monkeypatch.setattr(runner.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(
+        runner, "_read_process_usage", lambda _pid: (0.01, 1024)
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    report = runner._run_subprocess_tasks(
+        task_files, worker_name="tube-surface", max_workers=2
+    )
+
+    assert state["max_alive"] == 2
+    assert report["effective_workers"] == 2
+    assert report["task_count"] == 3
+    assert [row["task_id"] for row in report["tasks"]] == [
+        "task_0",
+        "task_1",
+        "task_2",
+    ]
+    assert all(
+        environment[variable] == "1"
+        for environment in state["environments"]
+        for variable in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        )
+    )
+    expected_src = str(Path(__file__).resolve().parents[1] / "src")
+    assert all(
+        environment["PYTHONPATH"].split(":")[0] == expected_src
+        for environment in state["environments"]
+    )
+    assert all(
+        environment["MPLCONFIGDIR"] == "/tmp/matplotlib-v11"
+        for environment in state["environments"]
     )
 
 

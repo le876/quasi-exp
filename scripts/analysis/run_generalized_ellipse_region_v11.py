@@ -639,13 +639,39 @@ def _aligned_beta_gap(left: pd.DataFrame, right: pd.DataFrame) -> dict[str, floa
 
 def _run_subprocess_tasks(
     task_files: Sequence[Path], *, worker_name: str, max_workers: int
-) -> None:
+) -> dict[str, Any]:
+    if int(max_workers) < 1:
+        raise ValueError("max_workers must be at least one")
+    started = time.monotonic()
     pending = list(task_files)
-    active: dict[subprocess.Popen[str], Path] = {}
-    failures = []
+    task_order = [str(path) for path in task_files]
+    active: dict[subprocess.Popen[Any], dict[str, Any]] = {}
+    records: dict[str, dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
+    peak_concurrent_worker_rss_bytes = 0
+    env = dict(os.environ)
+    for variable in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        env[variable] = "1"
+    source_root = Path(__file__).resolve().parents[2]
+    python_paths = [str(source_root / "src")]
+    if env.get("PYTHONPATH"):
+        python_paths.append(str(env["PYTHONPATH"]))
+    env["PYTHONPATH"] = os.pathsep.join(python_paths)
+    env["MPLCONFIGDIR"] = "/tmp/matplotlib-v11"
     while pending or active:
         while pending and len(active) < int(max_workers):
             task_file = pending.pop(0)
+            logs_dir = task_file.parent.parent / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            stdout_path = logs_dir / f"{task_file.stem}.stdout.log"
+            stderr_path = logs_dir / f"{task_file.stem}.stderr.log"
+            stdout_handle = stdout_path.open("w", encoding="utf-8")
+            stderr_handle = stderr_path.open("w", encoding="utf-8")
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -655,31 +681,125 @@ def _run_subprocess_tasks(
                     "--task-file",
                     str(task_file),
                 ],
-                cwd=str(Path(__file__).resolve().parents[2]),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                cwd=str(source_root),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
                 text=True,
-                env=dict(os.environ),
+                env=env,
             )
-            active[process] = task_file
+            active[process] = {
+                "task_file": task_file,
+                "started": time.monotonic(),
+                "pid": int(process.pid),
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+                "stdout_handle": stdout_handle,
+                "stderr_handle": stderr_handle,
+                "peak_rss_bytes": 0,
+                "cpu_seconds": 0.0,
+            }
+        concurrent_rss_bytes = 0
+        for process, state in active.items():
+            cpu_seconds, rss_bytes = _read_process_usage(int(process.pid))
+            state["cpu_seconds"] = max(float(state["cpu_seconds"]), cpu_seconds)
+            state["peak_rss_bytes"] = max(
+                int(state["peak_rss_bytes"]), rss_bytes
+            )
+            concurrent_rss_bytes += rss_bytes
+        peak_concurrent_worker_rss_bytes = max(
+            peak_concurrent_worker_rss_bytes, concurrent_rss_bytes
+        )
         completed = [process for process in active if process.poll() is not None]
         if not completed:
             time.sleep(0.1)
             continue
         for process in completed:
-            task_file = active.pop(process)
-            stdout, stderr = process.communicate()
+            state = active.pop(process)
+            state["stdout_handle"].close()
+            state["stderr_handle"].close()
+            task_file = Path(state["task_file"])
+            wall_seconds = max(
+                time.monotonic() - float(state["started"]), 1.0e-9
+            )
+            cpu_seconds = float(state["cpu_seconds"])
+            record = {
+                "task_file": str(task_file),
+                "task_id": task_file.stem,
+                "worker_name": str(worker_name),
+                "status": (
+                    "completed" if process.returncode == 0 else "failed"
+                ),
+                "pid": int(state["pid"]),
+                "exit_code": int(process.returncode),
+                "wall_seconds": wall_seconds,
+                "cpu_seconds": cpu_seconds,
+                "cpu_utilization_percent": 100.0
+                * cpu_seconds
+                / wall_seconds,
+                "peak_rss_bytes": int(state["peak_rss_bytes"]),
+                "stdout_log": str(state["stdout_path"]),
+                "stderr_log": str(state["stderr_path"]),
+            }
+            records[str(task_file)] = record
             if process.returncode != 0:
                 failures.append(
                     {
-                        "task_file": str(task_file),
-                        "returncode": int(process.returncode),
-                        "stdout": stdout[-4000:],
-                        "stderr": stderr[-4000:],
+                        **record,
+                        "stdout_tail": _tail_text(Path(state["stdout_path"])),
+                        "stderr_tail": _tail_text(Path(state["stderr_path"])),
                     }
                 )
     if failures:
         raise RuntimeError(f"parallel worker failures: {json.dumps(failures)}")
+    ordered_records = [records[path] for path in task_order]
+    wall_seconds = max(time.monotonic() - started, 1.0e-9)
+    total_cpu_seconds = sum(
+        float(record["cpu_seconds"]) for record in ordered_records
+    )
+    return {
+        "worker_name": str(worker_name),
+        "requested_workers": int(max_workers),
+        "effective_workers": min(int(max_workers), len(task_files)),
+        "task_count": len(task_files),
+        "wall_seconds": wall_seconds,
+        "total_worker_cpu_seconds": total_cpu_seconds,
+        "aggregate_worker_cpu_utilization_percent": (
+            100.0 * total_cpu_seconds / wall_seconds
+        ),
+        "peak_concurrent_worker_rss_bytes": int(
+            peak_concurrent_worker_rss_bytes
+        ),
+        "tasks": ordered_records,
+    }
+
+
+def _read_process_usage(pid: int) -> tuple[float, int]:
+    """Return sampled CPU seconds and RSS bytes for one Linux worker."""
+
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = stat[stat.rfind(")") + 2 :].split()
+        clock_ticks = float(os.sysconf("SC_CLK_TCK"))
+        cpu_seconds = (float(fields[11]) + float(fields[12])) / clock_ticks
+        rss_kib = 0
+        for line in Path(f"/proc/{pid}/status").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            if line.startswith("VmRSS:"):
+                rss_kib = int(line.split()[1])
+                break
+        return cpu_seconds, rss_kib * 1024
+    except (FileNotFoundError, IndexError, OSError, ValueError):
+        return 0.0, 0
+
+
+def _tail_text(path: Path, *, character_limit: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[
+            -character_limit:
+        ]
+    except OSError:
+        return ""
 
 
 def _run_anchor_screen_worker(task_file: Path) -> dict[str, Any]:
@@ -841,6 +961,44 @@ def _run_anchor_verify_worker(task_file: Path) -> dict[str, Any]:
         **{key: float(value) for key, value in primary_report["metrics"].items()},
     }
     atomic_write_json(candidate_root / "summary.json", report)
+    return report
+
+
+def _run_tube_surface_worker(task_file: Path) -> dict[str, Any]:
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    project_root = Path(task["project_root"]).resolve()
+    config = load_protocol_config(task["config_path"], preset=str(task["preset"]))
+    centerline = pd.read_parquet(Path(task["centerline_path"])).sort_values(
+        "phase_idx", kind="stable"
+    )
+    centerline_beta = centerline[list(BETA_COLUMNS)].to_numpy(dtype=float)
+    phase_count = int(task["phase_count"])
+    environment = load_environment(
+        project_root, project_root / str(config["robot_config"])
+    )
+    cross = TubeCrossSection.master(
+        seed=int(config["seeds"]["cross_section"])
+    ).prefix(int(task["cross_section_count"]))
+    _surface, report = _solve_surface_artifact(
+        family=_family_from_payload(task["family"]),
+        phase_count=phase_count,
+        cross_section=cross,
+        radial_radius_mm=float(task["radial_radius_mm"]),
+        plane_radius_mm=float(task["plane_radius_mm"]),
+        environment=environment,
+        policy=_teacher_policy(
+            config,
+            seed=(
+                int(config["seeds"]["solver"])
+                + int(task.get("policy_seed_offset", 0))
+            ),
+        ),
+        config=config,
+        directory=Path(task["directory"]),
+        centerline_seed=_subsample_cyclic(centerline_beta, phase_count),
+        traversal_direction=str(task.get("traversal_direction", "forward")),
+        cyclic_cut=int(task.get("cyclic_cut", 0)),
+    )
     return report
 
 
@@ -1343,6 +1501,59 @@ def _load_region_anchor(output: Path) -> tuple[EllipseFamilySpec, np.ndarray]:
     return family, centerline[list(BETA_COLUMNS)].to_numpy(dtype=float)
 
 
+def _tube_centerline_paths(output: Path) -> dict[str, Path]:
+    anchor_stage = output / STAGE_DIRS["anchor"]
+    payloads = json.loads(
+        (anchor_stage / "passing_anchors.json").read_text(encoding="utf-8")
+    )
+    return {
+        str(payload["candidate_id"]): (
+            anchor_stage / str(payload["centerline_path"])
+        ).resolve()
+        for payload in payloads
+    }
+
+
+def _write_tube_surface_task(
+    *,
+    stage: Path,
+    task_id: str,
+    config: Mapping[str, Any],
+    project_root: Path,
+    family: EllipseFamilySpec,
+    centerline_path: Path,
+    phase_count: int,
+    cross_section_count: int,
+    radial_radius_mm: float,
+    plane_radius_mm: float,
+    directory: Path,
+    policy_seed_offset: int = 0,
+    traversal_direction: str = "forward",
+    cyclic_cut: int = 0,
+) -> Path:
+    task_file = stage / "_parallel" / "tasks" / f"{task_id}.json"
+    atomic_write_json(
+        task_file,
+        {
+            "task_id": task_id,
+            "family": _family_payload(family),
+            "centerline_path": str(centerline_path.resolve()),
+            "phase_count": int(phase_count),
+            "cross_section_count": int(cross_section_count),
+            "radial_radius_mm": float(radial_radius_mm),
+            "plane_radius_mm": float(plane_radius_mm),
+            "directory": str(directory.resolve()),
+            "policy_seed_offset": int(policy_seed_offset),
+            "traversal_direction": str(traversal_direction),
+            "cyclic_cut": int(cyclic_cut),
+            "config_path": str(config["config_path"]),
+            "preset": str(config["preset"]),
+            "project_root": str(project_root),
+        },
+    )
+    return task_file
+
+
 def run_tube_stage(
     *,
     config: Mapping[str, Any],
@@ -1364,9 +1575,6 @@ def run_tube_stage(
     if cached is not None:
         return cached
     stage.mkdir(parents=True, exist_ok=True)
-    environment = load_environment(
-        project_root, project_root / str(config["robot_config"])
-    )
     anchors = _load_passing_anchors(output)
     if not anchors:
         raise RuntimeError("tube stage requires at least one passing anchor")
@@ -1374,86 +1582,201 @@ def run_tube_stage(
         anchor_id: (family, anchor_beta)
         for anchor_id, family, anchor_beta in anchors
     }
-    master = TubeCrossSection.master(seed=int(config["seeds"]["cross_section"]))
-    policy = _teacher_policy(config)
+    centerline_paths = _tube_centerline_paths(output)
     candidates = [tuple(map(float, row)) for row in config["tube"]["frontier_mm"]]
-    screen_rows = []
-    for anchor_id, family, anchor_beta in anchors:
-        anchor_rows = []
-        for radial, plane in candidates:
-            count = int(config["tube"]["screen_phase_count"])
-            cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
-            _surface, report = _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=radial,
-                plane_radius_mm=plane,
-                environment=environment,
-                policy=policy,
-                config=config,
-                directory=(
-                    stage / "anchors" / anchor_id / "screen" / f"r{radial:g}_p{plane:g}"
+    parallel_workers = int(config["tube"]["parallel_workers"])
+    parallel_manifest_path = stage / "tube_parallel_manifest.json"
+    parallel_started = time.monotonic()
+    parallel_batches: list[dict[str, Any]] = []
+
+    def write_parallel_manifest(
+        *, status: str, failure: str | None = None
+    ) -> None:
+        task_records = [
+            task
+            for batch in parallel_batches
+            for task in batch["tasks"]
+        ]
+        wall_seconds = max(time.monotonic() - parallel_started, 1.0e-9)
+        total_cpu_seconds = sum(
+            float(task["cpu_seconds"]) for task in task_records
+        )
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "execution_model": "deterministic_independent_subprocess_workers",
+            "status": status,
+            "requested_workers": parallel_workers,
+            "effective_workers_max": max(
+                (
+                    int(batch["effective_workers"])
+                    for batch in parallel_batches
                 ),
-                centerline_seed=_subsample_cyclic(anchor_beta, count),
+                default=0,
+            ),
+            "logical_cpu_count": os.cpu_count(),
+            "per_worker_blas_threads": 1,
+            "batch_count": len(parallel_batches),
+            "task_count": len(task_records),
+            "wall_seconds": wall_seconds,
+            "total_worker_cpu_seconds": total_cpu_seconds,
+            "aggregate_worker_cpu_utilization_percent": (
+                100.0 * total_cpu_seconds / wall_seconds
+            ),
+            "peak_concurrent_worker_rss_bytes": max(
+                (
+                    int(batch["peak_concurrent_worker_rss_bytes"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "batches": parallel_batches,
+            "tasks": task_records,
+        }
+        if failure is not None:
+            payload["failure"] = failure
+        atomic_write_json(parallel_manifest_path, payload)
+
+    write_parallel_manifest(status="running")
+
+    def execute_surface_specs(
+        specs: list[dict[str, Any]], *, batch_id: str
+    ) -> None:
+        task_files = [
+            _write_tube_surface_task(
+                stage=stage,
+                task_id=str(spec["task_id"]),
+                config=config,
+                project_root=project_root,
+                family=spec["family"],
+                centerline_path=centerline_paths[str(spec["anchor_id"])],
+                phase_count=int(spec["phase_count"]),
+                cross_section_count=int(spec["cross_section_count"]),
+                radial_radius_mm=float(spec["radial_radius_mm"]),
+                plane_radius_mm=float(spec["plane_radius_mm"]),
+                directory=spec["directory"],
+                policy_seed_offset=int(spec.get("policy_seed_offset", 0)),
+                traversal_direction=str(
+                    spec.get("traversal_direction", "forward")
+                ),
+                cyclic_cut=int(spec.get("cyclic_cut", 0)),
             )
-            anchor_rows.append(
+            for spec in specs
+        ]
+        try:
+            batch = _run_subprocess_tasks(
+                task_files,
+                worker_name="tube-surface",
+                max_workers=parallel_workers,
+            )
+        except RuntimeError as error:
+            write_parallel_manifest(status="failed", failure=str(error))
+            raise
+        parallel_batches.append({"batch_id": batch_id, **batch})
+        write_parallel_manifest(status="running")
+
+    screen_count = int(config["tube"]["screen_phase_count"])
+    screen_cross_count = int(config["tube"]["screen_cross_section_count"])
+    initial_screen_specs: list[dict[str, Any]] = []
+    for anchor_index, (anchor_id, family, _anchor_beta) in enumerate(anchors):
+        for candidate_index, (radial, plane) in enumerate(candidates):
+            initial_screen_specs.append(
                 {
+                    "task_id": (
+                        f"screen_a{anchor_index:02d}_c{candidate_index:02d}"
+                    ),
                     "anchor_id": anchor_id,
+                    "family": family,
+                    "phase_count": screen_count,
+                    "cross_section_count": screen_cross_count,
                     "radial_radius_mm": radial,
                     "plane_radius_mm": plane,
-                    "area_score_mm2": radial * plane,
-                    "gate_pass": bool(report["gate_pass"]),
-                    **{key: float(value) for key, value in report["metrics"].items()},
+                    "directory": (
+                        stage
+                        / "anchors"
+                        / anchor_id
+                        / "screen"
+                        / f"r{radial:g}_p{plane:g}"
+                    ),
                 }
             )
+    execute_surface_specs(initial_screen_specs, batch_id="screen_initial")
+    specs_by_anchor: dict[str, list[dict[str, Any]]] = {
+        anchor_id: [] for anchor_id, _family, _anchor_beta in anchors
+    }
+    for spec in initial_screen_specs:
+        specs_by_anchor[str(spec["anchor_id"])].append(spec)
+
+    fallback_specs: list[dict[str, Any]] = []
+    for anchor_index, (anchor_id, family, _anchor_beta) in enumerate(anchors):
+        anchor_specs = specs_by_anchor[anchor_id]
         one_by_one = [
-            row
-            for row in anchor_rows
-            if math.isclose(float(row["radial_radius_mm"]), 1.0)
-            and math.isclose(float(row["plane_radius_mm"]), 1.0)
+            spec
+            for spec in anchor_specs
+            if math.isclose(float(spec["radial_radius_mm"]), 1.0)
+            and math.isclose(float(spec["plane_radius_mm"]), 1.0)
         ]
-        if one_by_one and not bool(one_by_one[0]["gate_pass"]):
+        if one_by_one:
+            one_report = json.loads(
+                (Path(one_by_one[0]["directory"]) / "report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        else:
+            one_report = {"gate_pass": True}
+        if one_by_one and not bool(one_report["gate_pass"]):
             tested = {(float(left), float(right)) for left, right in candidates}
             widths = tuple(float(value) for value in config["tube"]["fallback_widths_mm"])
             for radial in widths:
                 for plane in widths:
                     if (radial, plane) in tested:
                         continue
-                    count = int(config["tube"]["screen_phase_count"])
-                    cross = master.prefix(int(config["tube"]["screen_cross_section_count"]))
-                    _surface, report = _solve_surface_artifact(
-                        family=family,
-                        phase_count=count,
-                        cross_section=cross,
-                        radial_radius_mm=radial,
-                        plane_radius_mm=plane,
-                        environment=environment,
-                        policy=policy,
-                        config=config,
-                        directory=(
+                    spec = {
+                        "task_id": (
+                            f"screen_fallback_a{anchor_index:02d}"
+                            f"_r{radial:g}_p{plane:g}"
+                        ),
+                        "anchor_id": anchor_id,
+                        "family": family,
+                        "phase_count": screen_count,
+                        "cross_section_count": screen_cross_count,
+                        "radial_radius_mm": radial,
+                        "plane_radius_mm": plane,
+                        "directory": (
                             stage
                             / "anchors"
                             / anchor_id
                             / "screen"
                             / f"r{radial:g}_p{plane:g}"
                         ),
-                        centerline_seed=_subsample_cyclic(anchor_beta, count),
-                    )
-                    anchor_rows.append(
-                        {
-                            "anchor_id": anchor_id,
-                            "radial_radius_mm": radial,
-                            "plane_radius_mm": plane,
-                            "area_score_mm2": radial * plane,
-                            "gate_pass": bool(report["gate_pass"]),
-                            **{
-                                key: float(value)
-                                for key, value in report["metrics"].items()
-                            },
-                        }
-                    )
-        screen_rows.extend(anchor_rows)
+                    }
+                    anchor_specs.append(spec)
+                    fallback_specs.append(spec)
+    if fallback_specs:
+        execute_surface_specs(fallback_specs, batch_id="screen_fallback")
+
+    screen_rows = []
+    for anchor_id, _family, _anchor_beta in anchors:
+        for spec in specs_by_anchor[anchor_id]:
+            radial = float(spec["radial_radius_mm"])
+            plane = float(spec["plane_radius_mm"])
+            report = json.loads(
+                (Path(spec["directory"]) / "report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            screen_rows.append(
+                {
+                    "anchor_id": anchor_id,
+                    "radial_radius_mm": radial,
+                    "plane_radius_mm": plane,
+                    "area_score_mm2": radial * plane,
+                    "gate_pass": bool(report["gate_pass"]),
+                    **{
+                        key: float(value)
+                        for key, value in report["metrics"].items()
+                    },
+                }
+            )
     screen = pd.DataFrame(screen_rows)
     screen.to_csv(stage / "screen_frontier.csv", index=False)
     screen_pass = screen[screen["gate_pass"]].sort_values(
@@ -1461,33 +1784,44 @@ def run_tube_stage(
         ascending=[False, True, True],
         kind="stable",
     )
-    dense_rows = []
-    # Dense-audit all screen-pass contenders; no failed phase or point is removed.
-    for row in screen_pass.itertuples(index=False):
+    dense_count = int(config["tube"]["dense_phase_count"])
+    dense_cross_count = int(config["tube"]["dense_cross_section_count"])
+    dense_specs: list[dict[str, Any]] = []
+    for dense_index, row in enumerate(screen_pass.itertuples(index=False)):
         anchor_id = str(row.anchor_id)
-        family, anchor_beta = anchor_lookup[anchor_id]
+        family, _anchor_beta = anchor_lookup[anchor_id]
         radial = float(row.radial_radius_mm)
         plane = float(row.plane_radius_mm)
-        count = int(config["tube"]["dense_phase_count"])
-        cross = master.prefix(int(config["tube"]["dense_cross_section_count"]))
-        _surface, report = _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=radial,
-            plane_radius_mm=plane,
-            environment=environment,
-            policy=policy,
-            config=config,
-            directory=(
-                stage
-                / "anchors"
-                / anchor_id
-                / "dense"
-                / f"r{radial:g}_p{plane:g}"
-                / "primary"
-            ),
-            centerline_seed=_subsample_cyclic(anchor_beta, count),
+        dense_specs.append(
+            {
+                "task_id": f"dense_primary_{dense_index:03d}",
+                "anchor_id": anchor_id,
+                "family": family,
+                "phase_count": dense_count,
+                "cross_section_count": dense_cross_count,
+                "radial_radius_mm": radial,
+                "plane_radius_mm": plane,
+                "directory": (
+                    stage
+                    / "anchors"
+                    / anchor_id
+                    / "dense"
+                    / f"r{radial:g}_p{plane:g}"
+                    / "primary"
+                ),
+            }
+        )
+    execute_surface_specs(dense_specs, batch_id="dense_primary")
+    dense_rows = []
+    # Dense-audit all screen-pass contenders; no failed phase or point is removed.
+    for spec in dense_specs:
+        anchor_id = str(spec["anchor_id"])
+        radial = float(spec["radial_radius_mm"])
+        plane = float(spec["plane_radius_mm"])
+        report = json.loads(
+            (Path(spec["directory"]) / "report.json").read_text(
+                encoding="utf-8"
+            )
         )
         dense_rows.append(
             {
@@ -1513,49 +1847,78 @@ def run_tube_stage(
     selected = None
     repeat_gap = math.inf
     reverse_gap = math.inf
+    audit_candidates: list[dict[str, Any]] = []
+    audit_specs: list[dict[str, Any]] = []
     for _index, best in dense_pass.iterrows():
         anchor_id = str(best["anchor_id"])
-        family, anchor_beta = anchor_lookup[anchor_id]
+        family, _anchor_beta = anchor_lookup[anchor_id]
         radial = float(best["radial_radius_mm"])
         plane = float(best["plane_radius_mm"])
-        count = int(config["tube"]["dense_phase_count"])
-        cross = master.prefix(int(config["tube"]["dense_cross_section_count"]))
+        count = dense_count
         candidate_root = (
             stage / "anchors" / anchor_id / "dense" / f"r{radial:g}_p{plane:g}"
         )
         primary_dir = candidate_root / "primary"
         primary = pd.read_parquet(primary_dir / "surface.parquet")
         repeat_dir = candidate_root / "repeat"
-        _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=radial,
-            plane_radius_mm=plane,
-            environment=environment,
-            policy=_teacher_policy(config, seed=int(config["seeds"]["solver"]) + 1),
-            config=config,
-            directory=repeat_dir,
-            centerline_seed=_subsample_cyclic(anchor_beta, count),
+        reverse_dir = candidate_root / "reverse_cut"
+        candidate_audit_specs = [
+            {
+                "task_id": f"audit_repeat_{anchor_id}_r{radial:g}_p{plane:g}",
+                "anchor_id": anchor_id,
+                "family": family,
+                "phase_count": count,
+                "cross_section_count": dense_cross_count,
+                "radial_radius_mm": radial,
+                "plane_radius_mm": plane,
+                "directory": repeat_dir,
+                "policy_seed_offset": 1,
+            },
+            {
+                "task_id": f"audit_reverse_{anchor_id}_r{radial:g}_p{plane:g}",
+                "anchor_id": anchor_id,
+                "family": family,
+                "phase_count": count,
+                "cross_section_count": dense_cross_count,
+                "radial_radius_mm": radial,
+                "plane_radius_mm": plane,
+                "directory": reverse_dir,
+                "traversal_direction": "reverse",
+                "cyclic_cut": count // 4,
+            },
+        ]
+        audit_specs.extend(candidate_audit_specs)
+        audit_candidates.append(
+            {
+                "anchor_id": anchor_id,
+                "family": family,
+                "radial_radius_mm": radial,
+                "plane_radius_mm": plane,
+                "count": count,
+                "primary": primary,
+                "primary_dir": primary_dir,
+                "repeat_dir": repeat_dir,
+                "reverse_dir": reverse_dir,
+            }
         )
+    execute_surface_specs(audit_specs, batch_id="dense_audits")
+    # Recompose in the same stable dense ranking used by the serial
+    # implementation.  Computing later candidates eagerly cannot affect the
+    # first passing candidate because every audit owns independent inputs,
+    # seeds and artifact directories.
+    for audit_candidate in audit_candidates:
+        anchor_id = str(audit_candidate["anchor_id"])
+        family = audit_candidate["family"]
+        radial = float(audit_candidate["radial_radius_mm"])
+        plane = float(audit_candidate["plane_radius_mm"])
+        count = int(audit_candidate["count"])
+        primary = audit_candidate["primary"]
+        primary_dir = Path(audit_candidate["primary_dir"])
+        repeat_dir = Path(audit_candidate["repeat_dir"])
+        reverse_dir = Path(audit_candidate["reverse_dir"])
         repeat_gap = _surface_aligned_gap(
             primary, pd.read_parquet(repeat_dir / "surface.parquet")
         )["beta_gap_rms_p95_deg"]
-        reverse_dir = candidate_root / "reverse_cut"
-        _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=radial,
-            plane_radius_mm=plane,
-            environment=environment,
-            policy=policy,
-            config=config,
-            directory=reverse_dir,
-            centerline_seed=_subsample_cyclic(anchor_beta, count),
-            traversal_direction="reverse",
-            cyclic_cut=count // 4,
-        )
         reverse_gap = _surface_aligned_gap(
             primary, pd.read_parquet(reverse_dir / "surface.parquet")
         )["beta_gap_rms_p95_deg"]
@@ -1572,7 +1935,7 @@ def run_tube_stage(
                 "radial_radius_mm": radial,
                 "plane_radius_mm": plane,
                 "phase_count": count,
-                "cross_section_count": int(len(cross.points)),
+                "cross_section_count": dense_cross_count,
                 "repeat_beta_rms_p95_deg": repeat_gap,
                 "reverse_cut_beta_rms_p95_deg": reverse_gap,
             }
@@ -1611,6 +1974,7 @@ def run_tube_stage(
             <= float(config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"])
         ),
     }
+    write_parallel_manifest(status="completed")
     return _write_gate(
         gate_path,
         checks=checks,
@@ -3220,7 +3584,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--internal-worker",
-        choices=("anchor-screen", "anchor-verify"),
+        choices=("anchor-screen", "anchor-verify", "tube-surface"),
         default=None,
     )
     parser.add_argument("--task-file", type=Path, default=None)
@@ -3236,6 +3600,8 @@ def main() -> None:
             report = _run_anchor_screen_worker(args.task_file)
         elif args.internal_worker == "anchor-verify":
             report = _run_anchor_verify_worker(args.task_file)
+        elif args.internal_worker == "tube-surface":
+            report = _run_tube_surface_worker(args.task_file)
         else:  # pragma: no cover - argparse owns the choices
             raise ValueError(f"unknown internal worker: {args.internal_worker}")
         print(json.dumps(report, allow_nan=False))

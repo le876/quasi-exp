@@ -227,6 +227,107 @@ V11.4 派生 downstream 配置明确覆盖为
 基础 V11 配置自身有 6 个 frontier widths，不受这条 V11.4 数量说明约束。
 单个 surface 内存在 phase/sweep 连续依赖，未进一步拆分，以免改变数值语义。
 
+### 4.5 Formal downstream tube 终态
+
+正式 bridge 恢复任务：
+
+```text
+v11_4_downstream_bridge_parallel8_20260724
+```
+
+于 `2026-07-24 13:59:23` 启动，于 `2026-07-24 18:42:55`
+正常结束，wall time 约 `4h43m32s`。任务进程退出码为 `0`，其含义是流水线
+按预注册决策边界正常完成；它不表示科学 Gate 通过。最终：
+
+```text
+02_tube/gate.json:             gate_pass=false
+05_downstream_bridge/gate.json gate_pass=false
+```
+
+不存在 `V11_4_END_TO_END_COMPLETED.json`。已有
+`FULL_LOOP_EXPERIMENT_COMPLETED.json` 只封存 V11.4 的 720-phase centerline
+Formal 通过及 downstream 授权，不代表 downstream tube、数据集或 Student
+训练完成。
+
+#### 4.5.1 并行执行与硬件现象
+
+Tube screen 共完成 8 个独立 surface：
+
+- initial：`2 anchors × {(0.5,0.5), (1.0,1.0)} = 4` 个任务；
+- fallback：`2 anchors × {(0.5,1.0), (1.0,0.5)} = 4` 个任务；
+- 两批均请求 8 workers，但各批天然只有 4 个独立任务，因此
+  effective workers 为 4；
+- 8 个 worker 均正常完成，无非零退出或 failure；
+- 每个 worker CPU utilization 均约 `99.91%`；
+- 两批 aggregate worker CPU utilization 分别为 `361.78%` 和
+  `394.36%`；
+- 整体 aggregate worker CPU utilization 为 `377.00%`；
+- 峰值并发 worker RSS 为 `975,126,528 bytes`，约 `930 MiB`；
+- 单任务 wall time 为约 `2.14–2.52 h`；
+- 8 个任务累计 worker CPU time 约 `17.81 h`，实际 wall time 约
+  `4.72 h`，与约 4 路粗粒度并行一致；
+- 每 worker 的 BLAS/OpenMP 线程继续固定为 1；
+- `dense_primary` 的 task count 为 0，因为 screen 没有通过项，不是调度器
+  漏跑。
+
+审计证据保存在：
+
+```text
+runs/generalized_ellipse_region_v11_full_loop_downstream/
+  02_tube/tube_parallel_manifest.json
+```
+
+这一阶段已经利用了当前不改变数值语义时的 4 个天然独立 surface。单个
+surface 的 9 个 cross-section 节点及 phase/sweep 使用顺序 warm start 和
+Gauss-Seidel 更新；继续拆分会改变 branch 选择、浮点执行顺序和 Gate 结果，
+因此没有为了占满 16 个逻辑 CPU 而修改求解语义。
+
+#### 4.5.2 Tube 数值结果
+
+8 个 surface 均满足：
+
+- `rows=1620`，即 `180 phases × 9 cross-sections`；
+- `success_rate=1.0`；
+- `all_rows_success=true`；
+- residual p95/max、cyclic seam、phase velocity/acceleration 均通过；
+- 但 `joint_margin=false`；
+- 且 `whole_surface_block_convergence=false`。
+
+最接近严格 Gate 的是 `A4_A2_143_r1_reverse_c0045`。其四个 width 的
+joint margin min 为 `1.492581–1.492904 deg`，距离 `1.5 deg` Gate 尚差
+约 `0.0071–0.0074 deg`；surface block update RMS max 为
+`0.097718–0.099175 deg`，而收敛 Gate 为 `0.05 deg`。因此即使 margin
+非常接近边界，也不能把未收敛 surface 事后改判为可用数据。
+
+`A4_A2_178_r0_reverse_c0045` 的三个较小/混合 width 的 margin min 为
+`1.485992–1.487527 deg`，surface block update RMS max 为
+`0.136762–0.137295 deg`。其 `(1.0,1.0) mm` surface 更明显失稳：
+
+```text
+joint_margin_min_deg                 0.214145
+surface_block_update_rms_max_deg     7.090321
+surface_edge_beta_rms_p95_deg        4.974803
+local_5mm_beta_gap_p95_deg           3.777253
+```
+
+该项除 margin 和 whole-surface convergence 外，还失败于 local consistency
+及 normal smoothness。全部 8 个 screen candidate 均为 false，所以：
+
+```text
+screen_candidate_count = 8
+dense_candidate_count  = 0
+selected_tube           = null
+```
+
+按照计划中的情况 D/early-stop 语义，当前证据只能说明：
+
+> 720-phase centerline 的严格闭环可行性已经建立，但它尚未扩展成满足
+> 1.5° margin 和 whole-surface convergence 的 ±0.5 mm 区域 teacher。
+
+因此 full-tube branch audit、正式区域数据集、Student learning curve、
+sealed evaluation 和 downstream verify 均未启动。此处不存在可报告的训练
+指标，也不能用未通过的 screen surface 生成监督标签。
+
 ## 5. 并行语义验证
 
 实现完成后的验证：
@@ -256,8 +357,15 @@ V11.4 派生 downstream 配置明确覆盖为
 - 4-worker Pilot：完成且 Gate 通过；
 - 2-worker 720-phase Formal：完成；
 - Formal Gate：通过，两个 candidate 均 outcome A；
-- downstream tube 串行尝试：已停止，未形成 tube gate；
+- downstream tube 串行尝试：已停止并归档；
 - downstream tube 并行实现：相关回归与真实 smoke 已通过；
-- 正式 downstream 恢复：等待符合 `$long-wait` 的
-  `long_wait_monitor` Terra/low role 可被当前 spawn 接口结构化选择后启动；
-- downstream dataset/student：尚未运行，不能报告结论。
+- 正式 downstream tube：8 个 screen surface 已完成，4 个 worker 均满核，
+  `tube gate_pass=false`；
+- downstream bridge：按预注册 early stop 正常结束，
+  `bridge gate_pass=false`；
+- full-tube branch audit：因 tube Gate 未通过而未运行；
+- downstream dataset/student/evaluation：因 tube Gate 未通过而未运行，
+  不能报告训练或泛化结论；
+- V11.4 当前 fixed point：严格 centerline 可行，但严格 ±0.5 mm 区域
+  teacher 尚不可用；主要直接瓶颈是 whole-surface block convergence，
+  同时所有 screen surface 的 minimum joint margin 略低于 1.5°。

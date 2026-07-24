@@ -44,6 +44,7 @@ def test_protocol_freezes_strict_gate_and_gate_driven_matrix() -> None:
     assert config["pilot_matrix"]["per_worker_blas_threads"] == 1
     assert config["formal_audit"]["parallel_workers"] == 2
     assert config["formal_audit"]["per_worker_blas_threads"] == 1
+    assert config["downstream"]["full_branch_audit_parallel_workers"] == 8
     assert config["hard_feasibility"] == {
         "residual_max_mm": 3.0,
         "joint_margin_min_deg": 1.5,
@@ -65,6 +66,7 @@ def test_smoke_deep_merge_preserves_artifact_contract() -> None:
     assert config["pilot_matrix"]["root_seed_counts"] == [16]
     assert config["pilot_matrix"]["candidate_caps"] == [4]
     assert config["pilot_matrix"]["parallel_workers"] == 2
+    assert config["downstream"]["full_branch_audit_parallel_workers"] == 2
     assert set(runner.STAGE_DIRS) == {
         "protocol",
         "root_fiber",
@@ -319,6 +321,50 @@ def test_formal_audit_uses_phase_and_degree_cut_union() -> None:
     )
     cuts = {int(row[2]) for row in variants}
     assert cuts == {0, 45, 90, 135, 180, 270}
+
+
+def test_downstream_full_branch_audit_tasks_are_stable() -> None:
+    runner = _runner_module()
+    frontier = pd.DataFrame(
+        [
+            {
+                "anchor_id": "A",
+                "radial_radius_mm": 1.0,
+                "plane_radius_mm": 1.0,
+            },
+            {
+                "anchor_id": "B",
+                "radial_radius_mm": 0.5,
+                "plane_radius_mm": 0.5,
+            },
+        ]
+    )
+
+    tasks = runner._downstream_full_audit_task_specs(  # noqa: SLF001
+        frontier,
+        cuts={90, 0},
+    )
+
+    assert [
+        (
+            task["candidate_index"],
+            task["anchor_id"],
+            task["direction"],
+            task["cut"],
+            task["policy_seed_offset"],
+        )
+        for task in tasks
+    ] == [
+        (0, "A", "forward", 0, 0),
+        (0, "A", "forward", 90, 90),
+        (0, "A", "reverse", 0, 10000),
+        (0, "A", "reverse", 90, 10090),
+        (1, "B", "forward", 0, 100000),
+        (1, "B", "forward", 90, 100090),
+        (1, "B", "reverse", 0, 110000),
+        (1, "B", "reverse", 90, 110090),
+    ]
+    assert len({task["task_id"] for task in tasks}) == len(tasks)
 
 
 def test_downstream_bridge_preserves_every_passing_anchor(

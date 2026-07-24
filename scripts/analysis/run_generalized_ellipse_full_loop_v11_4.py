@@ -4722,6 +4722,43 @@ def _rewrite_downstream_tube_gate(
     )
 
 
+def _downstream_full_audit_task_specs(
+    frontier: pd.DataFrame, *, cuts: Sequence[int]
+) -> list[dict[str, Any]]:
+    """Build a stable, deterministic task order for dense branch audits."""
+
+    specs: list[dict[str, Any]] = []
+    stable_cuts = sorted({int(cut) for cut in cuts})
+    for candidate_index, candidate in frontier.reset_index(drop=True).iterrows():
+        for direction in ("forward", "reverse"):
+            for cut in stable_cuts:
+                specs.append(
+                    {
+                        "task_id": (
+                            f"full_branch_c{candidate_index:03d}"
+                            f"_{direction}_cut{cut:04d}"
+                        ),
+                        "candidate_index": int(candidate_index),
+                        "anchor_id": str(candidate["anchor_id"]),
+                        "radial_radius_mm": float(
+                            candidate["radial_radius_mm"]
+                        ),
+                        "plane_radius_mm": float(
+                            candidate["plane_radius_mm"]
+                        ),
+                        "direction": direction,
+                        "cut": int(cut),
+                        "variant": f"{direction}_cut{cut:04d}",
+                        "policy_seed_offset": (
+                            100000 * int(candidate_index)
+                            + int(cut)
+                            + (10000 if direction == "reverse" else 0)
+                        ),
+                    }
+                )
+    return specs
+
+
 def _run_downstream_full_branch_audit(
     *,
     config: Mapping[str, Any],
@@ -4771,9 +4808,133 @@ def _run_downstream_full_branch_audit(
             & np.isclose(dense["plane_radius_mm"], 1.0)
         )
     ]
+    specs = _downstream_full_audit_task_specs(frontier, cuts=cuts)
+    centerline_paths = v11._tube_centerline_paths(  # noqa: SLF001
+        downstream_output
+    )
+    task_files: list[Path] = []
+    variant_directories: dict[str, Path] = {}
+    for spec in specs:
+        anchor_id = str(spec["anchor_id"])
+        family, _centerline = anchors[anchor_id]
+        radial = float(spec["radial_radius_mm"])
+        plane = float(spec["plane_radius_mm"])
+        variant_directory = (
+            directory
+            / anchor_id
+            / f"r{radial:g}_p{plane:g}"
+            / str(spec["variant"])
+        )
+        variant_directories[str(spec["task_id"])] = variant_directory
+        task_files.append(
+            v11._write_tube_surface_task(  # noqa: SLF001
+                stage=directory,
+                task_id=str(spec["task_id"]),
+                config=downstream_config,
+                project_root=project_root,
+                family=family,
+                centerline_path=centerline_paths[anchor_id],
+                phase_count=count,
+                cross_section_count=int(len(cross.points)),
+                radial_radius_mm=radial,
+                plane_radius_mm=plane,
+                directory=variant_directory,
+                policy_seed_offset=int(spec["policy_seed_offset"]),
+                traversal_direction=str(spec["direction"]),
+                cyclic_cut=int(spec["cut"]),
+            )
+        )
+    parallel_manifest_path = directory / "full_branch_parallel_manifest.json"
+    requested_workers = int(
+        config["downstream"]["full_branch_audit_parallel_workers"]
+    )
+    atomic_write_json(
+        parallel_manifest_path,
+        {
+            "schema_version": 1,
+            "execution_model": (
+                "deterministic_independent_subprocess_workers"
+            ),
+            "status": "running",
+            "requested_workers": requested_workers,
+            "independent_task_count": len(task_files),
+            "per_worker_blas_threads": 1,
+            "task_ids": [str(spec["task_id"]) for spec in specs],
+        },
+    )
+    try:
+        batch_report = v11._run_subprocess_tasks(  # noqa: SLF001
+            task_files,
+            worker_name="tube-surface",
+            max_workers=requested_workers,
+        )
+    except v11.ParallelWorkerError as error:
+        atomic_write_json(
+            parallel_manifest_path,
+            {
+                "schema_version": 1,
+                "execution_model": (
+                    "deterministic_independent_subprocess_workers"
+                ),
+                "status": "failed",
+                "independent_task_count": len(task_files),
+                "per_worker_blas_threads": 1,
+                **error.report,
+            },
+        )
+        raise
+    atomic_write_json(
+        parallel_manifest_path,
+        {
+            "schema_version": 1,
+            "execution_model": (
+                "deterministic_independent_subprocess_workers"
+            ),
+            "status": "completed",
+            "independent_task_count": len(task_files),
+            "per_worker_blas_threads": 1,
+            **batch_report,
+        },
+    )
+
+    rows_by_candidate: dict[int, list[dict[str, Any]]] = {
+        int(index): [] for index in range(len(frontier))
+    }
+    for spec in specs:
+        anchor_id = str(spec["anchor_id"])
+        radial = float(spec["radial_radius_mm"])
+        plane = float(spec["plane_radius_mm"])
+        size_name = f"r{radial:g}_p{plane:g}"
+        primary_path = (
+            tube_stage
+            / "anchors"
+            / anchor_id
+            / "dense"
+            / size_name
+            / "primary"
+            / "surface.parquet"
+        )
+        variant_directory = variant_directories[str(spec["task_id"])]
+        report = json.loads(
+            (variant_directory / "report.json").read_text(encoding="utf-8")
+        )
+        gap = v11._surface_aligned_gap(  # noqa: SLF001
+            pd.read_parquet(primary_path),
+            pd.read_parquet(variant_directory / "surface.parquet"),
+        )
+        row = {
+            "anchor_id": anchor_id,
+            "radial_radius_mm": radial,
+            "plane_radius_mm": plane,
+            "variant": str(spec["variant"]),
+            "solver_gate_pass": bool(report["gate_pass"]),
+            **gap,
+        }
+        rows.append(row)
+        rows_by_candidate[int(spec["candidate_index"])].append(row)
+
     for candidate_index, candidate in frontier.reset_index(drop=True).iterrows():
         anchor_id = str(candidate["anchor_id"])
-        family, centerline = anchors[anchor_id]
         radial = float(candidate["radial_radius_mm"])
         plane = float(candidate["plane_radius_mm"])
         size_name = f"r{radial:g}_p{plane:g}"
@@ -4786,53 +4947,7 @@ def _run_downstream_full_branch_audit(
             / "primary"
             / "surface.parquet"
         )
-        primary = pd.read_parquet(primary_path)
-        one_rows: list[dict[str, Any]] = []
-        candidate_dir = directory / anchor_id / size_name
-        for direction in ("forward", "reverse"):
-            for cut in sorted(cuts):
-                name = f"{direction}_cut{cut:04d}"
-                _surface, report = v11._solve_surface_artifact(  # noqa: SLF001
-                    family=family,
-                    phase_count=count,
-                    cross_section=cross,
-                    radial_radius_mm=radial,
-                    plane_radius_mm=plane,
-                    environment=environment,
-                    policy=v11._teacher_policy(  # noqa: SLF001
-                        downstream_config,
-                        seed=(
-                            int(downstream_config["seeds"]["solver"])
-                            + 100000 * candidate_index
-                            + cut
-                            + (10000 if direction == "reverse" else 0)
-                        ),
-                    ),
-                    config=downstream_config,
-                    directory=candidate_dir / name,
-                    centerline_seed=v11._subsample_cyclic(  # noqa: SLF001
-                        centerline, count
-                    ),
-                    traversal_direction=direction,
-                    cyclic_cut=cut,
-                )
-                variant = pd.read_parquet(
-                    candidate_dir / name / "surface.parquet"
-                )
-                gap = v11._surface_aligned_gap(  # noqa: SLF001
-                    primary, variant
-                )
-                one_rows.append(
-                    {
-                        "anchor_id": anchor_id,
-                        "radial_radius_mm": radial,
-                        "plane_radius_mm": plane,
-                        "variant": name,
-                        "solver_gate_pass": bool(report["gate_pass"]),
-                        **gap,
-                    }
-                )
-        rows.extend(one_rows)
+        one_rows = rows_by_candidate[int(candidate_index)]
         one_table = pd.DataFrame(one_rows)
         audit_pass = bool(
             len(one_table) == 2 * len(cuts)

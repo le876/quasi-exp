@@ -27,11 +27,20 @@ def test_protocol_stage_freezes_catalog_splits_and_manifest(tmp_path: Path) -> N
         preset="smoke",
     )
     assert config["tube"]["parallel_workers"] == 2
+    assert config["core"]["parallel_workers"] == 2
+    assert config["pilot"]["parallel_workers"] == 2
+    assert config["formal"]["parallel_workers"] == 2
+    assert config["training"]["parallel_workers"] == 2
+    assert config["evaluate"]["parallel_workers"] == 2
     formal_config = runner.load_protocol_config(
         source_root / "configs/generalized_ellipse_region_v11.yaml",
         preset="formal",
     )
     assert formal_config["tube"]["parallel_workers"] == 8
+    assert formal_config["pilot"]["parallel_workers"] == 8
+    assert formal_config["formal"]["parallel_workers"] == 8
+    assert formal_config["training"]["parallel_workers"] == 5
+    assert formal_config["evaluate"]["parallel_workers"] == 8
 
     report = runner.run_protocol_stage(
         config=config,

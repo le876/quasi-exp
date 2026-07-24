@@ -79,16 +79,19 @@ tube:
   surface_convergence_tol_deg: 0.05
 
 core:
+  parallel_workers: 2
   phase_count: 720
   cross_section_count: 81
   coverage_probe_phase_count: 1440
   coverage_probe_cross_section_count: 49
 
 pilot:
+  parallel_workers: 8
   phase_count: 180
   cross_section_count: 25
 
 formal:
+  parallel_workers: 8
   phase_count: 720
   cross_section_count: 25
   nested_train_sizes: [20000, 50000, 100000, 200000, 252000]
@@ -140,11 +143,15 @@ representation:
   ambiguous_voxel_max: 0
 
 training:
+  parallel_workers: 5
   batch_size: 256
   learning_rate: 0.001
   lambda_fk: 0.1
   max_epochs: 300
   patience: 30
+
+evaluate:
+  parallel_workers: 8
 
 smoke:
   teacher_policy:
@@ -174,19 +181,25 @@ smoke:
     max_surface_sweeps: 1
     surface_convergence_tol_deg: 0.5
   core:
+    parallel_workers: 2
     phase_count: 12
     cross_section_count: 9
     coverage_probe_phase_count: 24
     coverage_probe_cross_section_count: 9
   pilot:
+    parallel_workers: 2
     phase_count: 12
     cross_section_count: 9
   formal:
+    parallel_workers: 2
     phase_count: 12
     cross_section_count: 9
     nested_train_sizes: [100, 200]
     sealed_eval_phase_count: 24
     sealed_eval_cross_section_count: 9
   training:
+    parallel_workers: 2
     max_epochs: 2
     patience: 1
+  evaluate:
+    parallel_workers: 2

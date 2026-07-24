@@ -554,7 +554,7 @@ def _solve_centerline_artifact(
     family: EllipseFamilySpec,
     phase_count: int,
     environment: Any,
-    atlas: ReachabilityAtlas,
+    atlas: ReachabilityAtlas | None,
     policy: TeacherPolicy,
     config: Mapping[str, Any],
     directory: Path,
@@ -566,6 +566,10 @@ def _solve_centerline_artifact(
     parquet_path = directory / "centerline.parquet"
     targets = family.centerline(phase_count=int(phase_count))
     if initial_beta is None:
+        if atlas is None:
+            raise ValueError(
+                "centerline solve requires an atlas when initial_beta is absent"
+            )
         initial_beta = atlas.match_targets(targets).initial_beta_path_rad
     cache_fingerprint = _canonical_sha(
         {
@@ -668,6 +672,8 @@ def _run_subprocess_tasks(
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
+        "TF_NUM_INTRAOP_THREADS",
+        "TF_NUM_INTEROP_THREADS",
     ):
         env[variable] = "1"
     source_root = Path(__file__).resolve().parents[2]
@@ -993,7 +999,12 @@ def _run_tube_surface_worker(task_file: Path) -> dict[str, Any]:
         project_root, project_root / str(config["robot_config"])
     )
     cross = TubeCrossSection.master(
-        seed=int(config["seeds"]["cross_section"])
+        seed=int(
+            task.get(
+                "cross_section_seed",
+                config["seeds"]["cross_section"],
+            )
+        )
     ).prefix(int(task["cross_section_count"]))
     _surface, report = _solve_surface_artifact(
         family=_family_from_payload(task["family"]),
@@ -1012,6 +1023,38 @@ def _run_tube_surface_worker(task_file: Path) -> dict[str, Any]:
         config=config,
         directory=Path(task["directory"]),
         centerline_seed=_subsample_cyclic(centerline_beta, phase_count),
+        traversal_direction=str(task.get("traversal_direction", "forward")),
+        cyclic_cut=int(task.get("cyclic_cut", 0)),
+        phase_offset_rad=float(task.get("phase_offset_rad", 0.0)),
+    )
+    return report
+
+
+def _run_centerline_worker(task_file: Path) -> dict[str, Any]:
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    project_root = Path(task["project_root"]).resolve()
+    config = load_protocol_config(task["config_path"], preset=str(task["preset"]))
+    initial = pd.read_parquet(Path(task["initial_beta_path"])).sort_values(
+        "phase_idx", kind="stable"
+    )
+    environment = load_environment(
+        project_root, project_root / str(config["robot_config"])
+    )
+    _trajectory, report = _solve_centerline_artifact(
+        family=_family_from_payload(task["family"]),
+        phase_count=int(task["phase_count"]),
+        environment=environment,
+        atlas=None,
+        policy=_teacher_policy(
+            config,
+            seed=(
+                int(config["seeds"]["solver"])
+                + int(task.get("policy_seed_offset", 0))
+            ),
+        ),
+        config=config,
+        directory=Path(task["directory"]),
+        initial_beta=initial[list(BETA_COLUMNS)].to_numpy(dtype=float),
         traversal_direction=str(task.get("traversal_direction", "forward")),
         cyclic_cut=int(task.get("cyclic_cut", 0)),
     )
@@ -1367,6 +1410,7 @@ def _solve_surface_artifact(
     traversal_direction: str = "forward",
     cyclic_cut: int = 0,
     phase_offset_rad: float = 0.0,
+    cross_section_seed: int | None = None,
 ) -> tuple[TeacherSurface | None, dict[str, Any]]:
     report_path = directory / "report.json"
     parquet_path = directory / "surface.parquet"
@@ -1396,6 +1440,11 @@ def _solve_surface_artifact(
             "traversal_direction": str(traversal_direction),
             "cyclic_cut": int(cyclic_cut),
             "phase_offset_rad": float(phase_offset_rad),
+            "cross_section_seed": int(
+                config["seeds"]["cross_section"]
+                if cross_section_seed is None
+                else cross_section_seed
+            ),
         }
     )
     cached = read_valid_gate(report_path, expected_fingerprint=cache_fingerprint)
@@ -1546,6 +1595,7 @@ def _write_tube_surface_task(
     policy_seed_offset: int = 0,
     traversal_direction: str = "forward",
     cyclic_cut: int = 0,
+    phase_offset_rad: float = 0.0,
 ) -> Path:
     task_file = stage / "_parallel" / "tasks" / f"{task_id}.json"
     atomic_write_json(
@@ -1558,6 +1608,41 @@ def _write_tube_surface_task(
             "cross_section_count": int(cross_section_count),
             "radial_radius_mm": float(radial_radius_mm),
             "plane_radius_mm": float(plane_radius_mm),
+            "directory": str(directory.resolve()),
+            "policy_seed_offset": int(policy_seed_offset),
+            "traversal_direction": str(traversal_direction),
+            "cyclic_cut": int(cyclic_cut),
+            "phase_offset_rad": float(phase_offset_rad),
+            "config_path": str(config["config_path"]),
+            "preset": str(config["preset"]),
+            "project_root": str(project_root),
+        },
+    )
+    return task_file
+
+
+def _write_centerline_task(
+    *,
+    stage: Path,
+    task_id: str,
+    config: Mapping[str, Any],
+    project_root: Path,
+    family: EllipseFamilySpec,
+    initial_beta_path: Path,
+    phase_count: int,
+    directory: Path,
+    policy_seed_offset: int = 0,
+    traversal_direction: str = "forward",
+    cyclic_cut: int = 0,
+) -> Path:
+    task_file = stage / "_parallel" / "tasks" / f"{task_id}.json"
+    atomic_write_json(
+        task_file,
+        {
+            "task_id": task_id,
+            "family": _family_payload(family),
+            "initial_beta_path": str(initial_beta_path.resolve()),
+            "phase_count": int(phase_count),
             "directory": str(directory.resolve()),
             "policy_seed_offset": int(policy_seed_offset),
             "traversal_direction": str(traversal_direction),
@@ -2025,31 +2110,73 @@ def run_core_stage(
     _atomic_parquet(primary, stage / "D_core_0p5m.parquet")
     repeat_dir = stage / "repeat"
     reverse_dir = stage / "reverse_cut"
-    _solve_surface_artifact(
-        family=family,
-        phase_count=count,
-        cross_section=cross,
-        radial_radius_mm=float(tube["radial_radius_mm"]),
-        plane_radius_mm=float(tube["plane_radius_mm"]),
-        environment=environment,
-        policy=_teacher_policy(config, seed=int(config["seeds"]["solver"]) + 1),
-        config=config,
-        directory=repeat_dir,
-        centerline_seed=_subsample_cyclic(anchor_beta, count),
+    centerline_path = (
+        output
+        / STAGE_DIRS["tube"]
+        / "selected_region_centerline.parquet"
     )
-    _solve_surface_artifact(
-        family=family,
-        phase_count=count,
-        cross_section=cross,
-        radial_radius_mm=float(tube["radial_radius_mm"]),
-        plane_radius_mm=float(tube["plane_radius_mm"]),
-        environment=environment,
-        policy=_teacher_policy(config),
-        config=config,
-        directory=reverse_dir,
-        centerline_seed=_subsample_cyclic(anchor_beta, count),
-        traversal_direction="reverse",
-        cyclic_cut=count // 4,
+    audit_tasks = [
+        _write_tube_surface_task(
+            stage=stage,
+            task_id="core_repeat",
+            config=config,
+            project_root=project_root,
+            family=family,
+            centerline_path=centerline_path,
+            phase_count=count,
+            cross_section_count=len(cross.points),
+            radial_radius_mm=float(tube["radial_radius_mm"]),
+            plane_radius_mm=float(tube["plane_radius_mm"]),
+            directory=repeat_dir,
+            policy_seed_offset=1,
+        ),
+        _write_tube_surface_task(
+            stage=stage,
+            task_id="core_reverse_cut",
+            config=config,
+            project_root=project_root,
+            family=family,
+            centerline_path=centerline_path,
+            phase_count=count,
+            cross_section_count=len(cross.points),
+            radial_radius_mm=float(tube["radial_radius_mm"]),
+            plane_radius_mm=float(tube["plane_radius_mm"]),
+            directory=reverse_dir,
+            traversal_direction="reverse",
+            cyclic_cut=count // 4,
+        ),
+    ]
+    try:
+        audit_parallel = _run_subprocess_tasks(
+            audit_tasks,
+            worker_name="tube-surface",
+            max_workers=int(config["core"]["parallel_workers"]),
+        )
+    except ParallelWorkerError as error:
+        atomic_write_json(
+            stage / "core_parallel_manifest.json",
+            {
+                "schema_version": 1,
+                "execution_model": (
+                    "serial_primary_then_independent_subprocess_audits"
+                ),
+                "status": "failed",
+                "per_worker_blas_threads": 1,
+                **error.report,
+            },
+        )
+        raise
+    atomic_write_json(
+        stage / "core_parallel_manifest.json",
+        {
+            "schema_version": 1,
+            "execution_model": (
+                "serial_primary_then_independent_subprocess_audits"
+            ),
+            "status": "completed",
+            "per_worker_blas_threads": 1,
+            **audit_parallel,
+        },
     )
     repeat_gap = _surface_aligned_gap(
         primary, pd.read_parquet(repeat_dir / "surface.parquet")
@@ -2284,6 +2411,59 @@ def run_pilot_stage(
     quality["complete_gate_pass"] = False
     report_metrics: dict[str, dict[str, Any]] = {}
     quota = {"train": 14, "validation": 5}
+    parallel_workers = int(config["pilot"]["parallel_workers"])
+    parallel_started = time.monotonic()
+    parallel_batches: list[dict[str, Any]] = []
+    parallel_manifest_path = stage / "pilot_parallel_manifest.json"
+
+    def write_pilot_parallel_manifest(
+        *, status: str, failure: str | None = None
+    ) -> None:
+        task_records = [
+            task for batch in parallel_batches for task in batch["tasks"]
+        ]
+        wall_seconds = max(time.monotonic() - parallel_started, 1.0e-9)
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "execution_model": (
+                "stable_priority_waves_of_independent_subprocess_workers"
+            ),
+            "status": status,
+            "requested_workers": parallel_workers,
+            "effective_workers_max": max(
+                (
+                    int(batch["effective_workers"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "per_worker_blas_threads": 1,
+            "batch_count": len(parallel_batches),
+            "task_count": len(task_records),
+            "wall_seconds": wall_seconds,
+            "total_worker_cpu_seconds": sum(
+                float(task["cpu_seconds"]) for task in task_records
+            ),
+            "aggregate_worker_cpu_utilization_percent": (
+                100.0
+                * sum(float(task["cpu_seconds"]) for task in task_records)
+                / wall_seconds
+            ),
+            "peak_concurrent_worker_rss_bytes": max(
+                (
+                    int(batch["peak_concurrent_worker_rss_bytes"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "batches": parallel_batches,
+            "tasks": task_records,
+        }
+        if failure is not None:
+            payload["failure"] = failure
+        atomic_write_json(parallel_manifest_path, payload)
+
+    write_pilot_parallel_manifest(status="running")
     for role, required in quota.items():
         role_rows = catalog.frame[catalog.frame["role"].eq(role)].copy()
         role_rows["priority"] = np.where(
@@ -2291,32 +2471,82 @@ def run_pilot_stage(
         )
         role_rows = role_rows.sort_values("priority", kind="stable")
         passed = 0
-        for row in role_rows.itertuples(index=False):
-            if passed >= required:
-                break
-            family_id = str(row.family_id)
-            family = catalog.family(family_id)
-            seed_path = atlas.match_targets(
-                family.centerline(phase_count=count)
-            ).initial_beta_path_rad
-            _surface, report = _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(config),
-                config=config,
-                directory=stage / "families" / family_id,
-                centerline_seed=seed_path,
+        cursor = 0
+        stable_rows = list(role_rows.itertuples(index=False))
+        while passed < required and cursor < len(stable_rows):
+            wave = stable_rows[cursor : cursor + parallel_workers]
+            task_files: list[Path] = []
+            task_directories: list[tuple[str, Path]] = []
+            for wave_offset, row in enumerate(wave):
+                family_id = str(row.family_id)
+                family = catalog.family(family_id)
+                initial_beta = atlas.match_targets(
+                    family.centerline(phase_count=count)
+                ).initial_beta_path_rad
+                task_id = (
+                    f"pilot_{role}_{cursor + wave_offset:03d}"
+                )
+                seed_path = stage / "_parallel" / "seeds" / f"{task_id}.parquet"
+                seed_frame = pd.DataFrame(initial_beta, columns=BETA_COLUMNS)
+                seed_frame.insert(0, "phase_idx", np.arange(len(seed_frame)))
+                _atomic_parquet(seed_frame, seed_path)
+                task_directory = stage / "families" / family_id
+                task_files.append(
+                    _write_tube_surface_task(
+                        stage=stage,
+                        task_id=task_id,
+                        config=config,
+                        project_root=project_root,
+                        family=family,
+                        centerline_path=seed_path,
+                        phase_count=count,
+                        cross_section_count=len(cross.points),
+                        radial_radius_mm=float(tube["radial_radius_mm"]),
+                        plane_radius_mm=float(tube["plane_radius_mm"]),
+                        directory=task_directory,
+                    )
+                )
+                task_directories.append((family_id, task_directory))
+            try:
+                batch = _run_subprocess_tasks(
+                    task_files,
+                    worker_name="tube-surface",
+                    max_workers=parallel_workers,
+                )
+            except ParallelWorkerError as error:
+                parallel_batches.append(
+                    {
+                        "batch_id": f"{role}_wave_{cursor:03d}",
+                        **error.report,
+                    }
+                )
+                write_pilot_parallel_manifest(
+                    status="failed", failure=str(error)
+                )
+                raise
+            parallel_batches.append(
+                {
+                    "batch_id": f"{role}_wave_{cursor:03d}",
+                    **batch,
+                }
             )
-            mask = quality["family_id"].astype(str).eq(family_id)
-            quality.loc[mask, "solved"] = True
-            quality.loc[mask, "complete_gate_pass"] = bool(report["gate_pass"])
-            report_metrics[family_id] = report
-            if report["gate_pass"]:
-                passed += 1
+            write_pilot_parallel_manifest(status="running")
+            for family_id, task_directory in task_directories:
+                report = json.loads(
+                    (task_directory / "report.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                mask = quality["family_id"].astype(str).eq(family_id)
+                quality.loc[mask, "solved"] = True
+                quality.loc[mask, "complete_gate_pass"] = bool(
+                    report["gate_pass"]
+                )
+                report_metrics[family_id] = report
+                if report["gate_pass"]:
+                    passed += 1
+            cursor += len(wave)
+    write_pilot_parallel_manifest(status="completed")
     quality.to_csv(stage / "family_quality.csv", index=False)
     selected_parts = []
     for role, required in quota.items():
@@ -2560,44 +2790,175 @@ def run_formal_stage(
     family_frames: list[pd.DataFrame] = []
     family_reports = []
     centerline_invariance = []
-    for selected_row in formal_selection.itertuples(index=False):
+    parallel_workers = int(config["formal"]["parallel_workers"])
+    surface_tasks: list[Path] = []
+    formal_specs: list[dict[str, Any]] = []
+    for selection_index, selected_row in enumerate(
+        formal_selection.itertuples(index=False)
+    ):
         family_id = str(selected_row.family_id)
         role = str(selected_row.role)
         family = catalog.family(family_id)
-        seed_path = atlas.match_targets(
+        initial_beta = atlas.match_targets(
             family.centerline(phase_count=count)
         ).initial_beta_path_rad
+        task_id = f"formal_family_{selection_index:03d}"
+        seed_path = stage / "_parallel" / "seeds" / f"{task_id}.parquet"
+        seed_frame = pd.DataFrame(initial_beta, columns=BETA_COLUMNS)
+        seed_frame.insert(0, "phase_idx", np.arange(len(seed_frame)))
+        _atomic_parquet(seed_frame, seed_path)
         family_dir = stage / "families" / family_id / "primary"
-        _surface, report = _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=float(tube["radial_radius_mm"]),
-            plane_radius_mm=float(tube["plane_radius_mm"]),
-            environment=environment,
-            policy=_teacher_policy(config),
-            config=config,
-            directory=family_dir,
-            centerline_seed=seed_path,
+        surface_tasks.append(
+            _write_tube_surface_task(
+                stage=stage,
+                task_id=task_id,
+                config=config,
+                project_root=project_root,
+                family=family,
+                centerline_path=seed_path,
+                phase_count=count,
+                cross_section_count=len(cross.points),
+                radial_radius_mm=float(tube["radial_radius_mm"]),
+                plane_radius_mm=float(tube["plane_radius_mm"]),
+                directory=family_dir,
+            )
+        )
+        formal_specs.append(
+            {
+                "family_id": family_id,
+                "role": role,
+                "family": family,
+                "seed_path": seed_path,
+                "family_dir": family_dir,
+                "task_id": task_id,
+            }
+        )
+    parallel_started = time.monotonic()
+    parallel_batches: list[dict[str, Any]] = []
+    parallel_manifest_path = stage / "formal_parallel_manifest.json"
+
+    def write_formal_parallel_manifest(
+        *, status: str, failure: str | None = None
+    ) -> None:
+        task_records = [
+            task for batch in parallel_batches for task in batch["tasks"]
+        ]
+        wall_seconds = max(time.monotonic() - parallel_started, 1.0e-9)
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "execution_model": (
+                "two_stable_batches_of_independent_subprocess_workers"
+            ),
+            "status": status,
+            "requested_workers": parallel_workers,
+            "effective_workers_max": max(
+                (
+                    int(batch["effective_workers"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "per_worker_blas_threads": 1,
+            "batch_count": len(parallel_batches),
+            "task_count": len(task_records),
+            "wall_seconds": wall_seconds,
+            "total_worker_cpu_seconds": sum(
+                float(task["cpu_seconds"]) for task in task_records
+            ),
+            "aggregate_worker_cpu_utilization_percent": (
+                100.0
+                * sum(float(task["cpu_seconds"]) for task in task_records)
+                / wall_seconds
+            ),
+            "peak_concurrent_worker_rss_bytes": max(
+                (
+                    int(batch["peak_concurrent_worker_rss_bytes"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "batches": parallel_batches,
+            "tasks": task_records,
+        }
+        if failure is not None:
+            payload["failure"] = failure
+        atomic_write_json(parallel_manifest_path, payload)
+
+    write_formal_parallel_manifest(status="running")
+    try:
+        surface_batch = _run_subprocess_tasks(
+            surface_tasks,
+            worker_name="tube-surface",
+            max_workers=parallel_workers,
+        )
+    except ParallelWorkerError as error:
+        parallel_batches.append(
+            {"batch_id": "family_surfaces", **error.report}
+        )
+        write_formal_parallel_manifest(status="failed", failure=str(error))
+        raise
+    parallel_batches.append(
+        {"batch_id": "family_surfaces", **surface_batch}
+    )
+    write_formal_parallel_manifest(status="running")
+
+    repeat_tasks: list[Path] = []
+    for spec in formal_specs:
+        family_id = str(spec["family_id"])
+        role = str(spec["role"])
+        family = spec["family"]
+        family_dir = Path(spec["family_dir"])
+        report = json.loads(
+            (family_dir / "report.json").read_text(encoding="utf-8")
         )
         frame = pd.read_parquet(family_dir / "surface.parquet")
         frame["role"] = role
         family_frames.append(frame)
         family_reports.append(
-            {"family_id": family_id, "role": role, "gate_pass": bool(report["gate_pass"])}
+            {
+                "family_id": family_id,
+                "role": role,
+                "gate_pass": bool(report["gate_pass"]),
+            }
         )
+        repeat_tasks.append(
+            _write_centerline_task(
+                stage=stage,
+                task_id=f"{spec['task_id']}_centerline_repeat",
+                config=config,
+                project_root=project_root,
+                family=family,
+                initial_beta_path=Path(spec["seed_path"]),
+                phase_count=count,
+                directory=stage
+                / "families"
+                / family_id
+                / "centerline_repeat",
+                policy_seed_offset=1,
+            )
+        )
+    try:
+        repeat_batch = _run_subprocess_tasks(
+            repeat_tasks,
+            worker_name="centerline",
+            max_workers=parallel_workers,
+        )
+    except ParallelWorkerError as error:
+        parallel_batches.append(
+            {"batch_id": "centerline_repeats", **error.report}
+        )
+        write_formal_parallel_manifest(status="failed", failure=str(error))
+        raise
+    parallel_batches.append(
+        {"batch_id": "centerline_repeats", **repeat_batch}
+    )
+    write_formal_parallel_manifest(status="completed")
+
+    for spec, frame in zip(formal_specs, family_frames, strict=True):
+        family_id = str(spec["family_id"])
+        role = str(spec["role"])
         primary_center = frame[frame["cross_section_idx"].eq(0)].copy()
         repeat_dir = stage / "families" / family_id / "centerline_repeat"
-        _solve_centerline_artifact(
-            family=family,
-            phase_count=count,
-            environment=environment,
-            atlas=atlas,
-            policy=_teacher_policy(config, seed=int(config["seeds"]["solver"]) + 1),
-            config=config,
-            directory=repeat_dir,
-            initial_beta=seed_path,
-        )
         repeat_center = pd.read_parquet(repeat_dir / "centerline.parquet")
         gap = _aligned_beta_gap(primary_center, repeat_center)
         centerline_invariance.append(
@@ -2834,6 +3195,51 @@ def _train_one_static_model(
     return report
 
 
+def _write_model_train_task(
+    *,
+    stage: Path,
+    task_id: str,
+    config: Mapping[str, Any],
+    project_root: Path,
+    train_path: Path,
+    validation_path: Path,
+    seed: int,
+    directory: Path,
+) -> Path:
+    task_file = stage / "_parallel" / "tasks" / f"{task_id}.json"
+    atomic_write_json(
+        task_file,
+        {
+            "task_id": task_id,
+            "train_path": str(train_path.resolve()),
+            "validation_path": str(validation_path.resolve()),
+            "seed": int(seed),
+            "directory": str(directory.resolve()),
+            "config_path": str(config["config_path"]),
+            "preset": str(config["preset"]),
+            "project_root": str(project_root),
+        },
+    )
+    return task_file
+
+
+def _run_model_train_worker(task_file: Path) -> dict[str, Any]:
+    task = json.loads(task_file.read_text(encoding="utf-8"))
+    project_root = Path(task["project_root"]).resolve()
+    config = load_protocol_config(task["config_path"], preset=str(task["preset"]))
+    environment = load_environment(
+        project_root, project_root / str(config["robot_config"])
+    )
+    return _train_one_static_model(
+        train=pd.read_parquet(Path(task["train_path"])),
+        validation=pd.read_parquet(Path(task["validation_path"])),
+        environment=environment,
+        config=config,
+        seed=int(task["seed"]),
+        directory=Path(task["directory"]),
+    )
+
+
 def run_train_stage(
     *, config: Mapping[str, Any], source_root: Path, project_root: Path, output: Path
 ) -> dict[str, Any]:
@@ -2872,34 +3278,142 @@ def run_train_stage(
     subset_manifest = json.loads(
         (formal / "nested_subset_manifest.json").read_text(encoding="utf-8")
     )
-    environment = load_environment(project_root, project_root / str(config["robot_config"]))
     seeds = tuple(int(value) for value in config["seeds"]["formal_train"])
+    parallel_workers = int(config["training"]["parallel_workers"])
+    validation_path = stage / "_parallel" / "validation.parquet"
+    _atomic_parquet(validation, validation_path)
+    validation = pd.read_parquet(validation_path)
+    parallel_started = time.monotonic()
+    parallel_batches: list[dict[str, Any]] = []
+    parallel_manifest_path = stage / "training_parallel_manifest.json"
+
+    def write_training_parallel_manifest(
+        *, status: str, failure: str | None = None
+    ) -> None:
+        task_records = [
+            task for batch in parallel_batches for task in batch["tasks"]
+        ]
+        wall_seconds = max(time.monotonic() - parallel_started, 1.0e-9)
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "execution_model": (
+                "stable_subset_batches_with_independent_seed_workers"
+            ),
+            "status": status,
+            "requested_workers": parallel_workers,
+            "effective_workers_max": max(
+                (
+                    int(batch["effective_workers"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "per_worker_blas_threads": 1,
+            "per_worker_tensorflow_intraop_threads": 1,
+            "per_worker_tensorflow_interop_threads": 1,
+            "batch_count": len(parallel_batches),
+            "task_count": len(task_records),
+            "wall_seconds": wall_seconds,
+            "total_worker_cpu_seconds": sum(
+                float(task["cpu_seconds"]) for task in task_records
+            ),
+            "aggregate_worker_cpu_utilization_percent": (
+                100.0
+                * sum(float(task["cpu_seconds"]) for task in task_records)
+                / wall_seconds
+            ),
+            "peak_concurrent_worker_rss_bytes": max(
+                (
+                    int(batch["peak_concurrent_worker_rss_bytes"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "batches": parallel_batches,
+            "tasks": task_records,
+        }
+        if failure is not None:
+            payload["failure"] = failure
+        atomic_write_json(parallel_manifest_path, payload)
+
+    def train_seed_batch(
+        *,
+        batch_id: str,
+        train: pd.DataFrame,
+        train_path: Path,
+        directory_root: Path,
+    ) -> list[dict[str, Any]]:
+        task_files: list[Path] = []
+        directories: list[tuple[int, Path, str]] = []
+        for seed in seeds:
+            directory = directory_root / f"seed_{seed}"
+            model_fingerprint = _model_cache_fingerprint(
+                train=train,
+                validation=validation,
+                config=config,
+                seed=seed,
+            )
+            cached_report = read_valid_gate(
+                directory / "report.json",
+                expected_fingerprint=model_fingerprint,
+            )
+            if (
+                cached_report is None
+                or not (directory / "model.keras").is_file()
+            ):
+                task_files.append(
+                    _write_model_train_task(
+                        stage=stage,
+                        task_id=f"{batch_id}_seed_{seed}",
+                        config=config,
+                        project_root=project_root,
+                        train_path=train_path,
+                        validation_path=validation_path,
+                        seed=seed,
+                        directory=directory,
+                    )
+                )
+            directories.append((seed, directory, model_fingerprint))
+        try:
+            batch = _run_subprocess_tasks(
+                task_files,
+                worker_name="model-train",
+                max_workers=parallel_workers,
+            )
+        except ParallelWorkerError as error:
+            parallel_batches.append({"batch_id": batch_id, **error.report})
+            write_training_parallel_manifest(
+                status="failed", failure=str(error)
+            )
+            raise
+        parallel_batches.append({"batch_id": batch_id, **batch})
+        write_training_parallel_manifest(status="running")
+        reports = []
+        for _seed, directory, model_fingerprint in directories:
+            report = read_valid_gate(
+                directory / "report.json",
+                expected_fingerprint=model_fingerprint,
+            )
+            if report is None or not (directory / "model.keras").is_file():
+                raise RuntimeError(
+                    f"training worker did not seal {directory}"
+                )
+            reports.append(report)
+        return reports
+
+    write_training_parallel_manifest(status="running")
     learning_curve = []
     for subset in subset_manifest:
         train_path = formal / "train" / f"{subset['name']}.parquet"
         train = pd.read_parquet(train_path)
-        reports = []
-        for seed in seeds:
-            directory = stage / "learning_curve" / str(subset["name"]) / f"seed_{seed}"
-            model_fingerprint = _model_cache_fingerprint(
-                train=train, validation=validation, config=config, seed=seed
-            )
-            cached_report = read_valid_gate(
-                directory / "report.json", expected_fingerprint=model_fingerprint
-            )
-            report = (
-                cached_report
-                if cached_report is not None and (directory / "model.keras").is_file()
-                else _train_one_static_model(
-                    train=train,
-                    validation=validation,
-                    environment=environment,
-                    config=config,
-                    seed=seed,
-                    directory=directory,
-                )
-            )
-            reports.append(report)
+        reports = train_seed_batch(
+            batch_id=f"learning_{subset['name']}",
+            train=train,
+            train_path=train_path,
+            directory_root=stage
+            / "learning_curve"
+            / str(subset["name"]),
+        )
         learning_curve.append(
             {
                 "name": subset["name"],
@@ -2921,6 +3435,9 @@ def run_train_stage(
     if selected is not None:
         train = pd.read_parquet(formal / "train" / f"{selected['name']}.parquet")
         final_train = pd.concat([train, validation.drop(columns=["major_semiaxis_m"])], ignore_index=True)
+        final_train_path = stage / "_parallel" / "final_train.parquet"
+        _atomic_parquet(final_train, final_train_path)
+        final_train = pd.read_parquet(final_train_path)
         # Model lock is written before any sealed-test loader is invoked.
         prelock = {
             "representation": "static",
@@ -2933,30 +3450,12 @@ def run_train_stage(
             "virgin_test_opened": False,
         }
         atomic_write_json(stage / "MODEL_LOCKED.json", prelock)
-        for seed in seeds:
-            directory = stage / "final" / f"seed_{seed}"
-            model_fingerprint = _model_cache_fingerprint(
-                train=final_train,
-                validation=validation,
-                config=config,
-                seed=seed,
-            )
-            cached_report = read_valid_gate(
-                directory / "report.json", expected_fingerprint=model_fingerprint
-            )
-            report = (
-                cached_report
-                if cached_report is not None and (directory / "model.keras").is_file()
-                else _train_one_static_model(
-                    train=final_train,
-                    validation=validation,
-                    environment=environment,
-                    config=config,
-                    seed=seed,
-                    directory=directory,
-                )
-            )
-            final_reports.append(report)
+        final_reports = train_seed_batch(
+            batch_id="final",
+            train=final_train,
+            train_path=final_train_path,
+            directory_root=stage / "final",
+        )
         lock = {
             **prelock,
             "final_model_sha256": {
@@ -2965,6 +3464,7 @@ def run_train_stage(
             },
         }
         atomic_write_json(stage / "model_lock_manifest.json", lock)
+    write_training_parallel_manifest(status="completed")
     checks = {
         "at_least_one_nested_size_passes_4_of_5_seeds": bool(selected is not None),
         "model_locked_before_sealed_test": bool((stage / "MODEL_LOCKED.json").is_file()),
@@ -3135,84 +3635,242 @@ def _materialize_sealed_test_after_lock(
     reverse_limit = float(
         config["gates"]["repeatability"]["reverse_cut_beta_rms_p95_deg"]
     )
-    for row in candidates.itertuples(index=False):
-        if len(selected) >= 5:
-            break
-        family_id = str(row.family_id)
-        family = catalog.family(family_id)
-        seed_path = atlas.match_targets(
-            family.centerline(phase_count=count)
-        ).initial_beta_path_rad
-        candidate_dir = stage / "sealed_teacher/candidates" / family_id
-        _surface, primary_report = _solve_surface_artifact(
-            family=family,
-            phase_count=count,
-            cross_section=cross,
-            radial_radius_mm=float(tube["radial_radius_mm"]),
-            plane_radius_mm=float(tube["plane_radius_mm"]),
-            environment=environment,
-            policy=_teacher_policy(config),
-            config=config,
-            directory=candidate_dir / "primary",
-            centerline_seed=seed_path,
-        )
-        full_pass = bool(primary_report["gate_pass"])
-        repeat_gap = math.inf
-        reverse_gap = math.inf
-        if full_pass:
-            _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(
-                    config, seed=int(config["seeds"]["solver"]) + 1
-                ),
-                config=config,
-                directory=candidate_dir / "repeat",
-                centerline_seed=seed_path,
+    parallel_workers = int(config["evaluate"]["parallel_workers"])
+    parallel_started = time.monotonic()
+    parallel_batches: list[dict[str, Any]] = []
+    stable_candidates = list(candidates.itertuples(index=False))
+    cursor = 0
+    while len(selected) < 5 and cursor < len(stable_candidates):
+        wave = stable_candidates[cursor : cursor + parallel_workers]
+        wave_specs: list[dict[str, Any]] = []
+        primary_tasks: list[Path] = []
+        for wave_offset, row in enumerate(wave):
+            family_id = str(row.family_id)
+            family = catalog.family(family_id)
+            initial_beta = atlas.match_targets(
+                family.centerline(phase_count=count)
+            ).initial_beta_path_rad
+            task_id = f"sealed_{cursor + wave_offset:03d}"
+            seed_path = (
+                stage / "_parallel" / "seeds" / f"{task_id}.parquet"
             )
-            _solve_surface_artifact(
-                family=family,
-                phase_count=count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(config),
-                config=config,
-                directory=candidate_dir / "reverse_cut",
-                centerline_seed=seed_path,
-                traversal_direction="reverse",
-                cyclic_cut=count // 4,
+            seed_frame = pd.DataFrame(initial_beta, columns=BETA_COLUMNS)
+            seed_frame.insert(0, "phase_idx", np.arange(len(seed_frame)))
+            _atomic_parquet(seed_frame, seed_path)
+            candidate_dir = stage / "sealed_teacher/candidates" / family_id
+            primary_tasks.append(
+                _write_tube_surface_task(
+                    stage=stage,
+                    task_id=f"{task_id}_primary",
+                    config=config,
+                    project_root=project_root,
+                    family=family,
+                    centerline_path=seed_path,
+                    phase_count=count,
+                    cross_section_count=len(cross.points),
+                    radial_radius_mm=float(tube["radial_radius_mm"]),
+                    plane_radius_mm=float(tube["plane_radius_mm"]),
+                    directory=candidate_dir / "primary",
+                )
             )
-            primary = pd.read_parquet(candidate_dir / "primary/surface.parquet")
-            repeat_gap = _surface_aligned_gap(
-                primary, pd.read_parquet(candidate_dir / "repeat/surface.parquet")
-            )["beta_gap_rms_p95_deg"]
-            reverse_gap = _surface_aligned_gap(
-                primary,
-                pd.read_parquet(candidate_dir / "reverse_cut/surface.parquet"),
-            )["beta_gap_rms_p95_deg"]
-            full_pass = bool(
-                repeat_gap <= repeat_limit and reverse_gap <= reverse_limit
+            wave_specs.append(
+                {
+                    "task_id": task_id,
+                    "family_id": family_id,
+                    "family": family,
+                    "seed_path": seed_path,
+                    "candidate_dir": candidate_dir,
+                }
             )
-        audit_rows.append(
+        try:
+            primary_batch = _run_subprocess_tasks(
+                primary_tasks,
+                worker_name="tube-surface",
+                max_workers=parallel_workers,
+            )
+        except ParallelWorkerError as error:
+            parallel_batches.append(
+                {
+                    "batch_id": f"sealed_primary_{cursor:03d}",
+                    **error.report,
+                }
+            )
+            atomic_write_json(
+                stage / "sealed_teacher_parallel_manifest.json",
+                {
+                    "schema_version": 1,
+                    "execution_model": (
+                        "stable_priority_waves_of_independent_subprocess_workers"
+                    ),
+                    "status": "failed",
+                    "per_worker_blas_threads": 1,
+                    "batches": parallel_batches,
+                    "failure": str(error),
+                },
+            )
+            raise
+        parallel_batches.append(
             {
-                "family_id": family_id,
-                "teacher_gate_pass": bool(primary_report["gate_pass"]),
-                "repeat_beta_rms_p95_deg": repeat_gap,
-                "reverse_cut_beta_rms_p95_deg": reverse_gap,
-                "full_gate_pass": full_pass,
+                "batch_id": f"sealed_primary_{cursor:03d}",
+                **primary_batch,
             }
         )
-        if full_pass:
-            selected.append(family_id)
-            frame = pd.read_parquet(candidate_dir / "primary/surface.parquet")
-            frame["role"] = "virgin_test"
-            frames.append(frame)
+        audit_tasks: list[Path] = []
+        for spec in wave_specs:
+            primary_report = json.loads(
+                (
+                    Path(spec["candidate_dir"]) / "primary/report.json"
+                ).read_text(encoding="utf-8")
+            )
+            spec["primary_report"] = primary_report
+            if not bool(primary_report["gate_pass"]):
+                continue
+            for variant, seed_offset, direction, cut in (
+                ("repeat", 1, "forward", 0),
+                ("reverse_cut", 0, "reverse", count // 4),
+            ):
+                audit_tasks.append(
+                    _write_tube_surface_task(
+                        stage=stage,
+                        task_id=f"{spec['task_id']}_{variant}",
+                        config=config,
+                        project_root=project_root,
+                        family=spec["family"],
+                        centerline_path=Path(spec["seed_path"]),
+                        phase_count=count,
+                        cross_section_count=len(cross.points),
+                        radial_radius_mm=float(tube["radial_radius_mm"]),
+                        plane_radius_mm=float(tube["plane_radius_mm"]),
+                        directory=Path(spec["candidate_dir"]) / variant,
+                        policy_seed_offset=seed_offset,
+                        traversal_direction=direction,
+                        cyclic_cut=cut,
+                    )
+                )
+        try:
+            audit_batch = _run_subprocess_tasks(
+                audit_tasks,
+                worker_name="tube-surface",
+                max_workers=parallel_workers,
+            )
+        except ParallelWorkerError as error:
+            parallel_batches.append(
+                {
+                    "batch_id": f"sealed_audit_{cursor:03d}",
+                    **error.report,
+                }
+            )
+            atomic_write_json(
+                stage / "sealed_teacher_parallel_manifest.json",
+                {
+                    "schema_version": 1,
+                    "execution_model": (
+                        "stable_priority_waves_of_independent_subprocess_workers"
+                    ),
+                    "status": "failed",
+                    "per_worker_blas_threads": 1,
+                    "batches": parallel_batches,
+                    "failure": str(error),
+                },
+            )
+            raise
+        parallel_batches.append(
+            {
+                "batch_id": f"sealed_audit_{cursor:03d}",
+                **audit_batch,
+            }
+        )
+        for spec in wave_specs:
+            if len(selected) >= 5:
+                break
+            family_id = str(spec["family_id"])
+            candidate_dir = Path(spec["candidate_dir"])
+            primary_report = spec["primary_report"]
+            full_pass = bool(primary_report["gate_pass"])
+            repeat_gap = math.inf
+            reverse_gap = math.inf
+            if full_pass:
+                primary = pd.read_parquet(
+                    candidate_dir / "primary/surface.parquet"
+                )
+                repeat_gap = _surface_aligned_gap(
+                    primary,
+                    pd.read_parquet(
+                        candidate_dir / "repeat/surface.parquet"
+                    ),
+                )["beta_gap_rms_p95_deg"]
+                reverse_gap = _surface_aligned_gap(
+                    primary,
+                    pd.read_parquet(
+                        candidate_dir / "reverse_cut/surface.parquet"
+                    ),
+                )["beta_gap_rms_p95_deg"]
+                full_pass = bool(
+                    repeat_gap <= repeat_limit
+                    and reverse_gap <= reverse_limit
+                )
+            audit_rows.append(
+                {
+                    "family_id": family_id,
+                    "teacher_gate_pass": bool(
+                        primary_report["gate_pass"]
+                    ),
+                    "repeat_beta_rms_p95_deg": repeat_gap,
+                    "reverse_cut_beta_rms_p95_deg": reverse_gap,
+                    "full_gate_pass": full_pass,
+                }
+            )
+            if full_pass:
+                selected.append(family_id)
+                frame = pd.read_parquet(
+                    candidate_dir / "primary/surface.parquet"
+                )
+                frame["role"] = "virgin_test"
+                frames.append(frame)
+        cursor += len(wave)
+    task_records = [
+        task for batch in parallel_batches for task in batch["tasks"]
+    ]
+    wall_seconds = max(time.monotonic() - parallel_started, 1.0e-9)
+    atomic_write_json(
+        stage / "sealed_teacher_parallel_manifest.json",
+        {
+            "schema_version": 1,
+            "execution_model": (
+                "stable_priority_waves_of_independent_subprocess_workers"
+            ),
+            "status": "completed",
+            "requested_workers": parallel_workers,
+            "effective_workers_max": max(
+                (
+                    int(batch["effective_workers"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "per_worker_blas_threads": 1,
+            "batch_count": len(parallel_batches),
+            "task_count": len(task_records),
+            "wall_seconds": wall_seconds,
+            "total_worker_cpu_seconds": sum(
+                float(task["cpu_seconds"]) for task in task_records
+            ),
+            "aggregate_worker_cpu_utilization_percent": (
+                100.0
+                * sum(float(task["cpu_seconds"]) for task in task_records)
+                / wall_seconds
+            ),
+            "peak_concurrent_worker_rss_bytes": max(
+                (
+                    int(batch["peak_concurrent_worker_rss_bytes"])
+                    for batch in parallel_batches
+                ),
+                default=0,
+            ),
+            "batches": parallel_batches,
+            "tasks": task_records,
+        },
+    )
     audit = pd.DataFrame(audit_rows)
     audit.to_csv(stage / "sealed_teacher/family_quality.csv", index=False)
     dataset = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
@@ -3249,35 +3907,98 @@ def _validate_evaluation_family_surfaces(
     atlas = _reachability_atlas(project_root, config)
     phase_count = int(phase_count)
     cross = cross_section
-    rows = []
+    rows: list[dict[str, Any]] = []
+    specs: list[dict[str, Any]] = []
+    task_files: list[Path] = []
+    task_index = 0
     for category, families in category_families.items():
         for family in families:
-            seed_path = atlas.match_targets(
+            initial_beta = atlas.match_targets(
                 family.centerline(
                     phase_count=phase_count,
                     phase_offset_rad=math.pi / phase_count,
                 )
             ).initial_beta_path_rad
-            _surface, report = _solve_surface_artifact(
-                family=family,
-                phase_count=phase_count,
-                cross_section=cross,
-                radial_radius_mm=float(tube["radial_radius_mm"]),
-                plane_radius_mm=float(tube["plane_radius_mm"]),
-                environment=environment,
-                policy=_teacher_policy(config),
-                config=config,
-                directory=stage / "category_teacher" / category / family.family_id,
-                centerline_seed=seed_path,
-                phase_offset_rad=math.pi / phase_count,
+            task_id = f"category_teacher_{task_index:03d}"
+            seed_path = (
+                stage / "_parallel" / "seeds" / f"{task_id}.parquet"
             )
-            rows.append(
+            seed_frame = pd.DataFrame(initial_beta, columns=BETA_COLUMNS)
+            seed_frame.insert(0, "phase_idx", np.arange(len(seed_frame)))
+            _atomic_parquet(seed_frame, seed_path)
+            directory = (
+                stage / "category_teacher" / category / family.family_id
+            )
+            task_files.append(
+                _write_tube_surface_task(
+                    stage=stage,
+                    task_id=task_id,
+                    config=config,
+                    project_root=project_root,
+                    family=family,
+                    centerline_path=seed_path,
+                    phase_count=phase_count,
+                    cross_section_count=len(cross.points),
+                    radial_radius_mm=float(tube["radial_radius_mm"]),
+                    plane_radius_mm=float(tube["plane_radius_mm"]),
+                    directory=directory,
+                    phase_offset_rad=math.pi / phase_count,
+                    cross_section_seed=int(config["seeds"]["audit"]),
+                )
+            )
+            specs.append(
                 {
                     "category": category,
                     "family_id": family.family_id,
-                    "gate_pass": bool(report["gate_pass"]),
+                    "directory": directory,
                 }
             )
+            task_index += 1
+    try:
+        parallel = _run_subprocess_tasks(
+            task_files,
+            worker_name="tube-surface",
+            max_workers=int(config["evaluate"]["parallel_workers"]),
+        )
+    except ParallelWorkerError as error:
+        atomic_write_json(
+            stage / "category_teacher_parallel_manifest.json",
+            {
+                "schema_version": 1,
+                "execution_model": (
+                    "deterministic_independent_subprocess_workers"
+                ),
+                "status": "failed",
+                "per_worker_blas_threads": 1,
+                **error.report,
+            },
+        )
+        raise
+    atomic_write_json(
+        stage / "category_teacher_parallel_manifest.json",
+        {
+            "schema_version": 1,
+            "execution_model": (
+                "deterministic_independent_subprocess_workers"
+            ),
+            "status": "completed",
+            "per_worker_blas_threads": 1,
+            **parallel,
+        },
+    )
+    for spec in specs:
+        report = json.loads(
+            (Path(spec["directory"]) / "report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        rows.append(
+            {
+                "category": str(spec["category"]),
+                "family_id": str(spec["family_id"]),
+                "gate_pass": bool(report["gate_pass"]),
+            }
+        )
     frame = pd.DataFrame(rows)
     frame.to_csv(stage / "category_teacher_quality.csv", index=False)
     report = {
@@ -3576,7 +4297,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--internal-worker",
-        choices=("anchor-screen", "anchor-verify", "tube-surface"),
+        choices=(
+            "anchor-screen",
+            "anchor-verify",
+            "tube-surface",
+            "centerline",
+            "model-train",
+        ),
         default=None,
     )
     parser.add_argument("--task-file", type=Path, default=None)
@@ -3594,6 +4321,10 @@ def main() -> None:
             report = _run_anchor_verify_worker(args.task_file)
         elif args.internal_worker == "tube-surface":
             report = _run_tube_surface_worker(args.task_file)
+        elif args.internal_worker == "centerline":
+            report = _run_centerline_worker(args.task_file)
+        elif args.internal_worker == "model-train":
+            report = _run_model_train_worker(args.task_file)
         else:  # pragma: no cover - argparse owns the choices
             raise ValueError(f"unknown internal worker: {args.internal_worker}")
         print(json.dumps(report, allow_nan=False))

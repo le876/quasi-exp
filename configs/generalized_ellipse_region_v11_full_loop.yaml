@@ -131,6 +131,7 @@ downstream:
   authorized_only_after_formal_outcome: A
   base_config: configs/generalized_ellipse_region_v11.yaml
   output_root: runs/generalized_ellipse_region_v11_full_loop_downstream
+  full_branch_audit_parallel_workers: 8
   tube_frontier_mm: [[0.5, 0.5], [1.0, 1.0]]
   tube_fallback_widths_mm: [0.5, 1.0]
   static_mapping_conflict_policy: fail_closed
@@ -192,3 +193,5 @@ smoke:
   formal_audit:
     cut_phase_indices: [0, 3]
     cut_angles_deg: [0, 90]
+  downstream:
+    full_branch_audit_parallel_workers: 2

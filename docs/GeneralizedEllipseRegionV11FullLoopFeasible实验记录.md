@@ -190,7 +190,9 @@ Formal 通过后首次进入 downstream bridge。旧 V11 `run_tube_stage` 仍在
 ```
 
 该进程已按用户授权停止，并验证主进程及全部子 PID 均已退出；未发现残留
-worker。已完成的 Formal/Pilot 产物没有被删除或覆盖。
+worker。原 `02_tube` 已整体保留为
+`02_tube_serial_interrupted_20260724`（`212 KiB`），新并行 run 将使用干净的
+`02_tube`；已完成的 Formal/Pilot 产物没有被删除或覆盖。
 
 修正后的 tube 执行模型：
 

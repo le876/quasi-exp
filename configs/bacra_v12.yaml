@@ -1,0 +1,190 @@
+protocol_id: branch-aware-canonical-region-atlas-v12
+schema_version: 1
+claim_scope: simulation_canonical_atlas_and_student_diagnostics
+deployment_claim_gate_pass: false
+uncertainty_budget_calibrated: false
+
+robot_config: configs/robot_rods_only_standard_100k.yaml
+output_root: runs/branch_aware_canonical_region_atlas_v12
+source_formal_gate: runs/generalized_ellipse_region_v11_full_loop_feasible_branch/04_formal/gate.json
+primary_centerline: runs/generalized_ellipse_region_v11_full_loop_feasible_branch/04_formal/A4_A2_178_r0_reverse_c0045/selected_cycle/cycle.parquet
+comparison_centerline: runs/generalized_ellipse_region_v11_full_loop_feasible_branch/04_formal/A4_A2_143_r1_reverse_c0045/selected_cycle/cycle.parquet
+incompatible_legacy_pool: runs/true_ellipse_reachability_atlas_v2/01_reachability_pool/sobol_current_bounds_1m.parquet
+
+expected_source_sha256:
+  robot_config: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+  formal_gate: a94b3a6bad74ab4b388288ac8dc040d8ba6d043c0da4c1544140109deab83d11
+  primary_centerline: cce9ebdaee5f5376fe98347d1131607325d9ab1666af5b3ea72a4503ce3a5c59
+  comparison_centerline: 512b1deb278686e229929485fe59fe004cc7816ab094b6012da27dfc8bdf6fb3
+
+seeds:
+  capability: 20260730
+  task_region: 20260731
+  candidates: 20260732
+  graph: 20260733
+  audit: 20260734
+  dense: 20260735
+  split: 20260736
+  models: [20260737, 20260738, 20260739, 20260740, 20260741]
+  sealed: 20260742
+
+capability:
+  pool_rows: 1048576
+  formal_pool_rows: 4194304
+  voxel_mm: 10.0
+  formal_voxel_mm: 5.0
+  jacobian_eps_rad: 1.0e-4
+  chunk_rows: 8192
+  roi_radii_mm_desc: [20.0, 10.0, 5.0, 2.0]
+  centerline_core_support_min: 0.95
+
+task_region:
+  node_count: 2000
+  formal_node_count: 5000
+  interior_fraction: 0.60
+  boundary_fraction: 0.25
+  difficult_fraction: 0.15
+  knn_k: 12
+  max_edge_to_median_nn: 1.5
+
+candidates:
+  nearest_pool_count: 64
+  representative_seed_count: 8
+  ordinary_seed_budget: 16
+  difficult_seed_budget: 32
+  formal_difficult_seed_budget: 64
+  damping: 0.001
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  max_step_deg: 3.0
+  max_corrector_iterations: 100
+  residual_p95_mm: 1.0
+  residual_max_mm: 3.0
+  gold_margin_deg: 1.5
+  cluster_threshold_deg: 0.5
+  cluster_sensitivity_deg: [0.25, 0.5, 1.0]
+  synthetic_recovery_min: 0.995
+  gold_node_ratio_min: 0.95
+  ordinary_gold_candidate_median_min: 4
+
+atlas:
+  edge_match_deg: 0.5
+  edge_weights:
+    transition: 1.0
+    posture: 0.05
+    condition: 0.01
+    margin: 0.10
+  root_count: 8
+  formal_root_count: 16
+  icm_max_sweeps: 50
+  top_section_count: 8
+  split_gap_deg: 1.0
+  merge_overlap_p95_deg: 0.5
+  minimum_chart_coverage: 0.80
+
+audit:
+  endpoint_count: 100
+  formal_endpoint_count: 500
+  paths_per_endpoint: 3
+  formal_paths_per_endpoint: 5
+  loop_count: 100
+  formal_loop_count: 500
+  path_p95_deg: 0.5
+  loop_p95_deg: 0.5
+  direction_p95_deg: 0.5
+  overlap_p95_deg: 0.5
+  repeat_p95_deg: 0.2
+  common_max_deg: 1.0
+
+dense:
+  row_count: 50000
+  nested_rows: [100000, 150000, 200000]
+  attempt_multiplier: 3
+  dual_anchor_gap_deg: 0.5
+  acceptance_ratio_min: 0.95
+  nn_p95_mm: 3.0
+  nn_max_mm: 5.0
+  local_5mm_beta_p95_deg: 0.5
+  local_10mm_beta_p95_deg: 1.0
+  conflict_voxel_mm: 2.0
+  conflict_beta_deg: 1.0
+  learning_curve_improvement_min: 0.05
+
+split:
+  macro_voxel_mm: 20.0
+  train_fraction: 0.70
+  validation_fraction: 0.15
+  sealed_fraction: 0.15
+  buffer_mm: 5.0
+
+student:
+  hidden_units: [128, 128, 64]
+  res_hidden_units: [128, 128, 128, 128]
+  lambda_fk: [0.0, 0.1, 1.0]
+  learning_rate: 0.001
+  batch_size: 256
+  max_epochs: 300
+  patience: 30
+  probe_seed_count: 3
+  pilot_improvement_min: 0.10
+  interpolation_p95_mm: 5.0
+  near_ood_p95_mm: 7.5
+  absolute_max_mm: 10.0
+  required_seed_passes: 4
+
+parallel:
+  benchmark_worker_counts: [8, 12, 14]
+  default_workers: 12
+  reserve_memory_gib: 8.0
+  minimum_speedup_fraction: 0.05
+  minimum_cpu_fraction: 0.70
+  max_swap_io_mib: 64.0
+  student_cpu_workers: 5
+  student_intraop_threads: 2
+  student_interop_threads: 1
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_smoke
+  capability:
+    pool_rows: 65536
+    formal_pool_rows: 65536
+    voxel_mm: 20.0
+    formal_voxel_mm: 20.0
+    chunk_rows: 4096
+    roi_radii_mm_desc: [20.0, 10.0, 5.0, 2.0]
+    centerline_core_support_min: 0.0
+  task_region:
+    node_count: 200
+    formal_node_count: 200
+    knn_k: 8
+  candidates:
+    nearest_pool_count: 16
+    representative_seed_count: 4
+    ordinary_seed_budget: 8
+    difficult_seed_budget: 8
+    formal_difficult_seed_budget: 8
+    max_corrector_iterations: 30
+    synthetic_recovery_min: 0.0
+    gold_node_ratio_min: 0.0
+    ordinary_gold_candidate_median_min: 0
+  atlas:
+    root_count: 4
+    formal_root_count: 4
+    minimum_chart_coverage: 0.0
+  audit:
+    endpoint_count: 20
+    formal_endpoint_count: 20
+    paths_per_endpoint: 2
+    formal_paths_per_endpoint: 2
+    loop_count: 20
+    formal_loop_count: 20
+  dense:
+    row_count: 2000
+    nested_rows: [2000]
+    attempt_multiplier: 2
+    acceptance_ratio_min: 0.0
+    nn_p95_mm: 1000.0
+    nn_max_mm: 1000.0
+  parallel:
+    benchmark_worker_counts: [2, 4]
+    default_workers: 4
+    student_cpu_workers: 2

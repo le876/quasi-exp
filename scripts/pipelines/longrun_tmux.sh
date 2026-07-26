@@ -2,10 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-STATE_DIR="${ROOT_DIR}/runs/maintenance/longrun"
+STATE_DIR="${TMUX_LONGRUN_STATE_DIR:-${ROOT_DIR}/runs/maintenance/longrun}"
 SESSION_NAME="${TMUX_LONGRUN_SESSION:-quasi_exp_longrun}"
 WINDOW_NAME="${TMUX_LONGRUN_WINDOW:-worker}"
 WORKER_SCRIPT="${ROOT_DIR}/scripts/pipelines/longrun_worker.sh"
+WAIT_POLL_SECONDS=300
+WAIT_STATE_ERROR_RC=6
+STARTUP_CHECK_ATTEMPTS=100
+STARTUP_CHECK_INTERVAL_SECONDS=0.1
 
 TASK_FILE="${STATE_DIR}/current.task"
 LOG_FILE_PTR="${STATE_DIR}/current.log"
@@ -22,6 +26,7 @@ usage() {
   cat <<'EOF'
 Usage:
   longrun_tmux.sh start <task_name> <log_file> -- <command...>
+  longrun_tmux.sh wait
   longrun_tmux.sh status
   longrun_tmux.sh logs [lines]
   longrun_tmux.sh attach
@@ -52,9 +57,26 @@ pid_running() {
   if [[ ! -f "${PID_FILE}" ]]; then
     return 1
   fi
-  local pid
+  local pid pane_pid pane_dead
   pid="$(cat "${PID_FILE}")"
-  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+  if [[ ! "${pid}" =~ ^[1-9][0-9]*$ ]]; then
+    return 1
+  fi
+  if kill -0 "${pid}" 2>/dev/null; then
+    return 0
+  fi
+
+  # A Codex sandbox can be in a child PID namespace where the tmux server's
+  # host PID is not visible to kill(2).  tmux still exposes the pane PID
+  # read-only, so use it as a namespace-safe fallback.
+  if read -r pane_pid pane_dead < <(
+    tmux display-message -p -t "${SESSION_NAME}:${WINDOW_NAME}" \
+      '#{pane_pid} #{pane_dead}' 2>/dev/null
+  ); then
+    [[ "${pane_pid}" == "${pid}" && "${pane_dead}" == "0" ]]
+    return
+  fi
+  return 1
 }
 
 prepare_state() {
@@ -69,6 +91,39 @@ render_command() {
     out+=$(printf '%q ' "${token}")
   done
   printf '%s' "${out}"
+}
+
+read_recorded_rc() {
+  local rc
+  rc="$(read_file "${RC_FILE}")"
+  if [[ ! "${rc}" =~ ^[0-9]{1,3}$ ]] || (( 10#${rc} > 255 )); then
+    return 1
+  fi
+  printf '%s' "$((10#${rc}))"
+}
+
+clear_lifecycle_state() {
+  rm -f "${STATUS_FILE}" "${PID_FILE}" "${RC_FILE}" \
+    "${START_FILE}" "${END_FILE}" "${HB_FILE}"
+}
+
+wait_for_worker_state() {
+  local attempt status
+  for ((attempt = 0; attempt < STARTUP_CHECK_ATTEMPTS; attempt++)); do
+    status="$(read_file "${STATUS_FILE}")"
+    case "${status}" in
+      success|failed|stopped_by_user)
+        return 0
+        ;;
+      running)
+        if pid_running; then
+          return 0
+        fi
+        ;;
+    esac
+    sleep "${STARTUP_CHECK_INTERVAL_SECONDS}"
+  done
+  return 1
 }
 
 cmd_start() {
@@ -120,13 +175,56 @@ ${rendered}
 EOF
   chmod +x "${CMD_FILE}"
 
+  clear_lifecycle_state
   tmux respawn-pane -k -t "${SESSION_NAME}:${WINDOW_NAME}" "bash ${WORKER_SCRIPT@Q} ${STATE_DIR@Q}"
+  if ! wait_for_worker_state; then
+    echo "[longrun] worker did not publish a running or terminal state within 10 seconds" >&2
+    exit 7
+  fi
 
   echo "[longrun] started"
   echo "  session=${SESSION_NAME}"
   echo "  window=${WINDOW_NAME}"
   echo "  task=${task_name}"
   echo "  log=${abs_log}"
+}
+
+cmd_wait() {
+  local status rc pid
+  while true; do
+    status="$(read_file "${STATUS_FILE}")"
+    case "${status}" in
+      success)
+        if ! rc="$(read_recorded_rc)"; then
+          echo "[longrun] invalid or missing exit code for terminal status: success" >&2
+          return "${WAIT_STATE_ERROR_RC}"
+        fi
+        echo "[longrun] terminal status=success rc=${rc}"
+        return "${rc}"
+        ;;
+      failed|stopped_by_user)
+        if ! rc="$(read_recorded_rc)"; then
+          echo "[longrun] invalid or missing exit code for terminal status: ${status}" >&2
+          return "${WAIT_STATE_ERROR_RC}"
+        fi
+        if (( rc == 0 )); then
+          echo "[longrun] terminal failure status has a zero exit code: ${status}" >&2
+          return "${WAIT_STATE_ERROR_RC}"
+        fi
+        echo "[longrun] terminal status=${status} rc=${rc}"
+        return "${rc}"
+        ;;
+    esac
+
+    if pid_running; then
+      sleep "${WAIT_POLL_SECONDS}"
+      continue
+    fi
+
+    pid="$(read_file "${PID_FILE}")"
+    echo "[longrun] no live worker for non-terminal status: status=${status:-unknown} pid=${pid:-none}" >&2
+    return "${WAIT_STATE_ERROR_RC}"
+  done
 }
 
 cmd_status() {
@@ -200,6 +298,7 @@ cmd_stop() {
       kill -KILL "${pid}" 2>/dev/null || true
     fi
   fi
+  echo "130" > "${RC_FILE}"
   echo "stopped_by_user" > "${STATUS_FILE}"
   date '+%F %T' > "${END_FILE}"
   rm -f "${PID_FILE}"
@@ -226,6 +325,7 @@ main() {
   shift
   case "${cmd}" in
     start) cmd_start "$@" ;;
+    wait) cmd_wait ;;
     status) cmd_status ;;
     logs) cmd_logs "$@" ;;
     attach) cmd_attach ;;

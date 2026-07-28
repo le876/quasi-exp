@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -54,6 +54,7 @@ def student_loss_terms(
     *,
     geometry: StudentGeometry,
     lambda_fk: float,
+    beta_loss_scale_deg: float | Sequence[float] | None = None,
 ) -> dict[str, Any]:
     """Return normalized beta and millimetre-scale differentiable FK losses."""
 
@@ -62,9 +63,21 @@ def student_loss_terms(
     packed = tf.convert_to_tensor(y_true_packed, dtype=beta_pred.dtype)
     beta_true = packed[..., :6]
     xyz_true = packed[..., 6:9]
-    bounds = tf.constant(geometry.beta_bounds_rad, dtype=beta_pred.dtype)
-    span = tf.maximum(bounds[:, 1] - bounds[:, 0], tf.cast(1.0e-6, beta_pred.dtype))
-    beta_delta = (beta_pred - beta_true) / span
+    if beta_loss_scale_deg is None:
+        bounds = tf.constant(geometry.beta_bounds_rad, dtype=beta_pred.dtype)
+        scale = tf.maximum(
+            bounds[:, 1] - bounds[:, 0],
+            tf.cast(1.0e-6, beta_pred.dtype),
+        )
+    else:
+        scale_deg = np.asarray(beta_loss_scale_deg, dtype=np.float32)
+        if scale_deg.ndim == 0:
+            scale_deg = np.full(6, float(scale_deg), dtype=np.float32)
+        scale_deg = scale_deg.reshape(6)
+        if not np.isfinite(scale_deg).all() or np.any(scale_deg <= 0.0):
+            raise ValueError("beta_loss_scale_deg must be finite and positive")
+        scale = tf.constant(np.deg2rad(scale_deg), dtype=beta_pred.dtype)
+    beta_delta = (beta_pred - beta_true) / scale
     beta_loss = tf.reduce_mean(tf.keras.losses.huber(beta_delta, tf.zeros_like(beta_delta)))
     if float(lambda_fk) == 0.0:
         zero = tf.zeros((), dtype=beta_pred.dtype)
@@ -99,16 +112,33 @@ def build_static_model(
     geometry: StudentGeometry,
     output_mode: OutputMode,
     hidden_units: tuple[int, ...] = (128, 128, 64),
+    beta5_head_units: tuple[int, ...] = (),
 ) -> Any:
     import tensorflow as tf
 
     inputs = tf.keras.Input((3,), name="target_xyz_m")
     normalization = tf.keras.layers.Normalization(name="xyz_normalization")
     normalization.adapt(np.asarray(train_xyz, dtype=np.float32))
-    hidden = normalization(inputs)
+    normalized = normalization(inputs)
+    hidden = normalized
     for index, units in enumerate(hidden_units):
         hidden = tf.keras.layers.Dense(int(units), activation="gelu", name=f"dense_{index}")(hidden)
-    latent = tf.keras.layers.Dense(6, name="beta_latent")(hidden)
+    if beta5_head_units:
+        beta14 = tf.keras.layers.Dense(4, name="beta14_latent")(hidden)
+        beta6 = tf.keras.layers.Dense(1, name="beta6_latent")(hidden)
+        beta5_hidden = normalized
+        for index, units in enumerate(beta5_head_units):
+            beta5_hidden = tf.keras.layers.Dense(
+                int(units),
+                activation="gelu",
+                name=f"beta5_dense_{index}",
+            )(beta5_hidden)
+        beta5 = tf.keras.layers.Dense(1, name="beta5_latent")(beta5_hidden)
+        latent = tf.keras.layers.Concatenate(name="beta_latent")(
+            [beta14, beta5, beta6]
+        )
+    else:
+        latent = tf.keras.layers.Dense(6, name="beta_latent")(hidden)
     beta = _keras_beta_output(latent, geometry=geometry, output_mode=output_mode)
     return tf.keras.Model(inputs, beta, name=f"static_student_{output_mode}")
 
@@ -125,7 +155,14 @@ def _keras_beta_output(latent: Any, *, geometry: StudentGeometry, output_mode: O
     return tf.keras.layers.Rescaling(halfspan, offset=midpoint, name="beta_rad")(unit_beta)
 
 
-def compile_student(model: Any, *, geometry: StudentGeometry, lambda_fk: float, learning_rate: float) -> None:
+def compile_student(
+    model: Any,
+    *,
+    geometry: StudentGeometry,
+    lambda_fk: float,
+    learning_rate: float,
+    beta_loss_scale_deg: float | Sequence[float] | None = None,
+) -> None:
     import tensorflow as tf
 
     def loss(y_true: Any, y_pred: Any) -> Any:
@@ -134,6 +171,7 @@ def compile_student(model: Any, *, geometry: StudentGeometry, lambda_fk: float, 
             y_pred,
             geometry=geometry,
             lambda_fk=float(lambda_fk),
+            beta_loss_scale_deg=beta_loss_scale_deg,
         )["total"]
 
     model.compile(optimizer=tf.keras.optimizers.Adam(float(learning_rate)), loss=loss)

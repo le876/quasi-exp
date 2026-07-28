@@ -407,6 +407,7 @@ def solve_candidate_bank(
     capability_beta_rad: np.ndarray | None = None,
     capability_xyz_m: np.ndarray | None = None,
     neighbor_beta_rad: Mapping[int, np.ndarray] | None = None,
+    node_seed_beta_rad: Mapping[int, np.ndarray] | None = None,
     difficult_node_ids: Sequence[int] = (),
 ) -> CandidateBank:
     """Solve an auditable, stable multi-IK bank for every target point.
@@ -422,6 +423,10 @@ def solve_candidate_bank(
     bounds = _bounds(environment)
     difficult = {int(value) for value in difficult_node_ids}
     neighbours = {} if neighbor_beta_rad is None else {int(key): np.asarray(value, dtype=float).reshape(-1, 6) for key, value in neighbor_beta_rad.items()}
+    exact_seeds = {} if node_seed_beta_rad is None else {
+        int(key): np.asarray(value, dtype=float).reshape(6)
+        for key, value in node_seed_beta_rad.items()
+    }
     records: list[CandidateRecord] = []
     reports: dict[int, Mapping[str, Any]] = {}
     midpoint = 0.5 * (bounds[:, 0] + bounds[:, 1])
@@ -440,7 +445,10 @@ def solve_candidate_bank(
             frozen_policy,
             capability_tree,
         )
-        source_seeds: list[tuple[str, np.ndarray]] = [("capability", value) for value in seeds]
+        source_seeds: list[tuple[str, np.ndarray]] = []
+        if node_id in exact_seeds:
+            source_seeds.append(("node_exact_seed", exact_seeds[node_id].copy()))
+        source_seeds.extend(("capability", value) for value in seeds)
         for rank, value in enumerate(neighbours.get(node_id, np.empty((0, 6)))):
             source_seeds.append((f"neighbor_warm_start_{rank:03d}", value.copy()))
         if not source_seeds:

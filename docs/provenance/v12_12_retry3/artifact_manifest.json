@@ -1,0 +1,985 @@
+{
+  "artifact_id": "branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3",
+  "family_disposition": {
+    "amendment_type": "posthoc_lineage_amendment",
+    "core00_03_semantics": "historical_formal_core_validation",
+    "existing_numeric_results_or_gates_rewritten": false,
+    "path": "docs/provenance/v12_12_retry3/family_disposition.json",
+    "sha256": "5ce4bda5db5064458af11fb710ea0ae89e9ee50ebb1b5137c84f8a2aef2dc049",
+    "stress00_03_semantics_from_now_on": "development_boundary_families"
+  },
+  "implementation_fixed_point": {
+    "execution_closure": {
+      "audit_method": "recursive static local-import closure from the five V12 runner entrypoints, including executed package __init__ modules, plus the full formal config chain and family disposition policy",
+      "code_file_count": 38,
+      "formal_config_file_count": 12,
+      "policy_file_count": 1,
+      "total_file_count": 51
+    },
+    "execution_sources": [
+      {
+        "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry.yaml",
+        "role": "formal_config_chain",
+        "sha256": "67ca418779ecaaf873aba7d177ff6f85dbdc8f5b0366684cadb455962e8d740b",
+        "size_bytes": 1161
+      },
+      {
+        "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+        "role": "formal_config_chain",
+        "sha256": "1eca7edeec56ce22c9d4b4ecf7d15c84a9e7db06dbe52cc84488c7b69687db7a",
+        "size_bytes": 288
+      },
+      {
+        "path": "configs/bacra_v12_12_independent_gold_set_holdout.yaml",
+        "role": "formal_config_chain",
+        "sha256": "df29f019632b99c2cc643148fa4a6122f40d77570bf15ecb1a115a64915c1e3a",
+        "size_bytes": 3489
+      },
+      {
+        "path": "configs/bacra_v12_1_capability_bridge.yaml",
+        "role": "formal_config_chain",
+        "sha256": "0d1df6656897bb0e0627fb8d242f96a8911edaa6c326816da3f8eef8cd0dbb4c",
+        "size_bytes": 7202
+      },
+      {
+        "path": "configs/bacra_v12_2_topology_preserving.yaml",
+        "role": "formal_config_chain",
+        "sha256": "5c27b3eb0b6b9b6048999a81732334d3e600439db11613493958b0b6884af6dd",
+        "size_bytes": 2725
+      },
+      {
+        "path": "configs/bacra_v12_3_branch_lift_closure.yaml",
+        "role": "formal_config_chain",
+        "sha256": "46af777e288a7b85199c4c97c166ddf214c218e653d206646baa8a786a6a9f7f",
+        "size_bytes": 3107
+      },
+      {
+        "path": "configs/bacra_v12_4_constructive_section.yaml",
+        "role": "formal_config_chain",
+        "sha256": "e8772bce90166f56d7402e5fad4541f63c90e2cc598d29b4666d3f6a411b5fa1",
+        "size_bytes": 3567
+      },
+      {
+        "path": "configs/bacra_v12_5_composable_lift.yaml",
+        "role": "formal_config_chain",
+        "sha256": "f6485b7d1c7e4ff1f99c0fe656c2efd5656bfdc688df6d56a6e4e929393ab666",
+        "size_bytes": 4772
+      },
+      {
+        "path": "configs/bacra_v12_7_5_nullspace_projection.yaml",
+        "role": "formal_config_chain",
+        "sha256": "447825075cff3655f1506ca024bdeca0ab92b8885a2a4c3638be6aeccb0c4cf1",
+        "size_bytes": 1362
+      },
+      {
+        "path": "configs/bacra_v12_7_canonical_student.yaml",
+        "role": "formal_config_chain",
+        "sha256": "833e5f7ebba62e205980db09c7eb3538fdcfa9b14b1399c111d205eb92828da7",
+        "size_bytes": 1235
+      },
+      {
+        "path": "configs/bacra_v12_8_independent_geometry_loops.yaml",
+        "role": "formal_config_chain",
+        "sha256": "82312749be4b0b563192116af1a9c681c3a13cdc47ad405e0e7c458e1c878b88",
+        "size_bytes": 3975
+      },
+      {
+        "path": "configs/bacra_v12_9_gap_directed_bridge.yaml",
+        "role": "formal_config_chain",
+        "sha256": "714f43dbcc556e174f21f93f95f14bf09e5314e4b18264768a76e75a8a33c61c",
+        "size_bytes": 1606
+      },
+      {
+        "path": "docs/provenance/v12_12_retry3/family_disposition.json",
+        "role": "family_disposition_policy",
+        "sha256": "5ce4bda5db5064458af11fb710ea0ae89e9ee50ebb1b5137c84f8a2aef2dc049",
+        "size_bytes": 2856
+      },
+      {
+        "path": "scripts/analysis/run_bacra_v12.py",
+        "role": "runner_dependency",
+        "sha256": "8bc78857540eab82c95228a08dafff558987aa8129feb830201d54ca1cb2350c",
+        "size_bytes": 96521
+      },
+      {
+        "path": "scripts/analysis/run_bacra_v12_11_gold_set_student.py",
+        "role": "runner_dependency",
+        "sha256": "a6d1912a119f111428a90f463384cbeca3755a2fa268bd51671070f15a770115",
+        "size_bytes": 33212
+      },
+      {
+        "path": "scripts/analysis/run_bacra_v12_12_independent_gold_set_holdout.py",
+        "role": "formal_runner",
+        "sha256": "7238e9ebaf7c53af7771386b55cc092ec995b843ed9f903c7772581b5360fd85",
+        "size_bytes": 77571
+      },
+      {
+        "path": "scripts/analysis/run_bacra_v12_7_canonical_student.py",
+        "role": "runner_dependency",
+        "sha256": "4a0a2b698605ef4a8bda2f6fb6cdeb4be0885815f0991ff7b710a46af60355d1",
+        "size_bytes": 22620
+      },
+      {
+        "path": "scripts/analysis/run_bacra_v12_8_geometry_holdout.py",
+        "role": "runner_dependency",
+        "sha256": "f98221dbe7d3849da088c8f949cc91efc4786b6c924f75a7d4128d10be77d137",
+        "size_bytes": 38095
+      },
+      {
+        "path": "scripts/analysis/run_trajectory_canonical_teacher_v10.py",
+        "role": "runner_dependency",
+        "sha256": "91a2ee164321f9695f0abf47d3877ad097e6d0e5631dfe1ad211088b48aefc98",
+        "size_bytes": 21705
+      },
+      {
+        "path": "src/quasi_exp/__init__.py",
+        "role": "local_import_dependency",
+        "sha256": "b91ce5bd645075f9fdfb20e07b3b729ab3d8446041d09950dd80aa3f3d84bd93",
+        "size_bytes": 34
+      },
+      {
+        "path": "src/quasi_exp/io/__init__.py",
+        "role": "local_import_dependency",
+        "sha256": "857a5441b5c77e51edefbe23db5d272f8f8b54efd0016a481bfeb74c22c5e6b0",
+        "size_bytes": 153
+      },
+      {
+        "path": "src/quasi_exp/io/config.py",
+        "role": "local_import_dependency",
+        "sha256": "4d33287d0d31cba5833aadc3edd9e25849ee8582ee89f32fd935dafd6f5ab2a9",
+        "size_bytes": 407
+      },
+      {
+        "path": "src/quasi_exp/io/robot_inputs.py",
+        "role": "local_import_dependency",
+        "sha256": "1da705d2deaddc6bb624f23b76894e81763d13876707bd3e7a8bb1e98390360f",
+        "size_bytes": 7167
+      },
+      {
+        "path": "src/quasi_exp/model/__init__.py",
+        "role": "local_import_dependency",
+        "sha256": "04fdfe42651f6d45c7df6bd6304277738769c4786d59e694c31fee93d79978d2",
+        "size_bytes": 177
+      },
+      {
+        "path": "src/quasi_exp/model/cable_geometry.py",
+        "role": "local_import_dependency",
+        "sha256": "20bb62e54ae7a1f8b060353d81e51ba0028319a70fabca7ad7a2311509489523",
+        "size_bytes": 1531
+      },
+      {
+        "path": "src/quasi_exp/model/kinematics.py",
+        "role": "local_import_dependency",
+        "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96",
+        "size_bytes": 2430
+      },
+      {
+        "path": "src/quasi_exp/model/kinematics_tf.py",
+        "role": "local_import_dependency",
+        "sha256": "433a7a0c893f9de56d17994738c5cdbb862361b3179aa8443950dbb78e3bdeeb",
+        "size_bytes": 2766
+      },
+      {
+        "path": "src/quasi_exp/model/sampling.py",
+        "role": "local_import_dependency",
+        "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f",
+        "size_bytes": 18277
+      },
+      {
+        "path": "src/quasi_exp/provenance.py",
+        "role": "source_lock_dependency",
+        "sha256": "b9bd6ed7b3645e11f133599e2b005211d7f63d4cee118ee40f790a4cbacc5f2f",
+        "size_bytes": 25983
+      },
+      {
+        "path": "src/quasi_exp/teacher/__init__.py",
+        "role": "local_import_dependency",
+        "sha256": "3a6660b813c00ef9e59dd4cf8bdcb71de7017064889e2c07a57836b5ab9bb2f0",
+        "size_bytes": 724
+      },
+      {
+        "path": "src/quasi_exp/teacher/atlas.py",
+        "role": "local_import_dependency",
+        "sha256": "599dad70abf5d0710490b62b808f5269c04552babc607e22524bbc9ffe6bf636",
+        "size_bytes": 3729
+      },
+      {
+        "path": "src/quasi_exp/teacher/atlas_audit.py",
+        "role": "local_import_dependency",
+        "sha256": "b53ff787f738f85086ea4e3e84c5f877ffe996ef08a40726ce614b7f9e08053f",
+        "size_bytes": 34223
+      },
+      {
+        "path": "src/quasi_exp/teacher/bacra_canonical_student.py",
+        "role": "local_import_dependency",
+        "sha256": "6aeb8e6ad8a126afcebcc103c381642a2ccae029b0eacd6b81fe43a18ce47ebd",
+        "size_bytes": 8925
+      },
+      {
+        "path": "src/quasi_exp/teacher/bacra_dataset.py",
+        "role": "local_import_dependency",
+        "sha256": "a9fca707494c6218ac5de8ad81473051d9e81d153b0eb691426bfed3e6919014",
+        "size_bytes": 12025
+      },
+      {
+        "path": "src/quasi_exp/teacher/bacra_geometry_holdout.py",
+        "role": "geometry_solver",
+        "sha256": "95babb5b9b20af7765b88727cfc15fa1e4187c2bdfd88955b1cdd241c1ac1970",
+        "size_bytes": 69662
+      },
+      {
+        "path": "src/quasi_exp/teacher/bacra_student.py",
+        "role": "local_import_dependency",
+        "sha256": "fa59ec5176f26fa6e8fc327b8f1168d1e7caa93fcc179c669f96a92fb1f184e2",
+        "size_bytes": 9473
+      },
+      {
+        "path": "src/quasi_exp/teacher/canonical.py",
+        "role": "local_import_dependency",
+        "sha256": "76bdd3f12f70e55af81a5c5b0aa29eb503e227643d561b69ed1a42724c8a40b6",
+        "size_bytes": 29241
+      },
+      {
+        "path": "src/quasi_exp/teacher/canonical_atlas.py",
+        "role": "local_import_dependency",
+        "sha256": "a9ad9596fe4b43023961e83333708408a18b77e39157255417cedb8fc4cf69dc",
+        "size_bytes": 48664
+      },
+      {
+        "path": "src/quasi_exp/teacher/capability_map.py",
+        "role": "local_import_dependency",
+        "sha256": "e527d8da6b0b6b993b805d6b07047fcf70f23653c0dff8e5a38470df166f5c3e",
+        "size_bytes": 37054
+      },
+      {
+        "path": "src/quasi_exp/teacher/capability_path_bridge.py",
+        "role": "local_import_dependency",
+        "sha256": "ccf7f3b1f68cf64cd64456ff8b54eebb31b82dc5860f484a319fb2e3ba2323c1",
+        "size_bytes": 19182
+      },
+      {
+        "path": "src/quasi_exp/teacher/dataset.py",
+        "role": "local_import_dependency",
+        "sha256": "a382c8393e5114418e3b1691a7b7c5845f5ed928325d220cc98320725b6188b2",
+        "size_bytes": 8467
+      },
+      {
+        "path": "src/quasi_exp/teacher/dense_chart_sampling.py",
+        "role": "local_import_dependency",
+        "sha256": "f5c570f8d0ce5a78c413b3408d82527d930d3bae3b80c2f9d3d0ad31081f2e5c",
+        "size_bytes": 23024
+      },
+      {
+        "path": "src/quasi_exp/teacher/experiment.py",
+        "role": "local_import_dependency",
+        "sha256": "ff5b4934701aec0de84e7ad0370be12ec2a8a1cefa8fd6edec3cb43bbf3e5290",
+        "size_bytes": 3591
+      },
+      {
+        "path": "src/quasi_exp/teacher/forward.py",
+        "role": "local_import_dependency",
+        "sha256": "4e8a66a283a9708fece7c8ef6be9659c18b4649107f904de93f5a1a99bc9201d",
+        "size_bytes": 14265
+      },
+      {
+        "path": "src/quasi_exp/teacher/gold_set_student.py",
+        "role": "gold_assignment",
+        "sha256": "183aaa1143306399b21496dcb50ba51c8db2e97ba2e22867613372bd7ec65c04",
+        "size_bytes": 12037
+      },
+      {
+        "path": "src/quasi_exp/teacher/large_scale.py",
+        "role": "local_import_dependency",
+        "sha256": "fe4ffd119677540d3160262cc0b881f07f2dd2d8515afb043ee423dbb9a4fc33",
+        "size_bytes": 14565
+      },
+      {
+        "path": "src/quasi_exp/teacher/multi_ik_candidates.py",
+        "role": "local_import_dependency",
+        "sha256": "62dcf1ebac4f621df0ee85e13736e624e90aec3fb4159128dc101499e07db78f",
+        "size_bytes": 23905
+      },
+      {
+        "path": "src/quasi_exp/teacher/region.py",
+        "role": "local_import_dependency",
+        "sha256": "e828694e588bfbbe4bd7b4bbdf742fe27426c8e4b81d83daa55fc009930ba0e6",
+        "size_bytes": 23458
+      },
+      {
+        "path": "src/quasi_exp/teacher/student.py",
+        "role": "local_import_dependency",
+        "sha256": "094fcf451af101ef6ee42d43aed71c12ce1ef1d52f5f74841fb1f7f42fd594cb",
+        "size_bytes": 8090
+      },
+      {
+        "path": "src/quasi_exp/teacher/student_tracking_tf.py",
+        "role": "local_import_dependency",
+        "sha256": "8093caea0ffb8ee5864f0d3fee16e3adb4f99a8b5106d4efac4b6750f388550b",
+        "size_bytes": 10235
+      },
+      {
+        "path": "src/quasi_exp/teacher/topology_task_region.py",
+        "role": "local_import_dependency",
+        "sha256": "095c927fb51a9976da273d17bf1300ba1f71068ff46c0d62abe8cadc74953b70",
+        "size_bytes": 31659
+      }
+    ],
+    "formal_config": {
+      "artifact_frozen_config": {
+        "comparison_rule": "resolved JSON must match after normalizing only checkout-specific config_path and JSON object-key stringification",
+        "logical_path": "runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3/00_protocol/frozen_config.json",
+        "sha256": "3d2be288845c8d86927f65bfdde5eced85376a317303a3c414b9043c01f52f7d",
+        "size_bytes": 22434
+      },
+      "entrypoint": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+      "extends_chain": [
+        {
+          "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+          "role": "formal_config_chain",
+          "sha256": "1eca7edeec56ce22c9d4b4ecf7d15c84a9e7db06dbe52cc84488c7b69687db7a",
+          "size_bytes": 288
+        },
+        {
+          "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry.yaml",
+          "role": "formal_config_chain",
+          "sha256": "67ca418779ecaaf873aba7d177ff6f85dbdc8f5b0366684cadb455962e8d740b",
+          "size_bytes": 1161
+        },
+        {
+          "path": "configs/bacra_v12_12_independent_gold_set_holdout.yaml",
+          "role": "formal_config_chain",
+          "sha256": "df29f019632b99c2cc643148fa4a6122f40d77570bf15ecb1a115a64915c1e3a",
+          "size_bytes": 3489
+        },
+        {
+          "path": "configs/bacra_v12_9_gap_directed_bridge.yaml",
+          "role": "formal_config_chain",
+          "sha256": "714f43dbcc556e174f21f93f95f14bf09e5314e4b18264768a76e75a8a33c61c",
+          "size_bytes": 1606
+        },
+        {
+          "path": "configs/bacra_v12_8_independent_geometry_loops.yaml",
+          "role": "formal_config_chain",
+          "sha256": "82312749be4b0b563192116af1a9c681c3a13cdc47ad405e0e7c458e1c878b88",
+          "size_bytes": 3975
+        },
+        {
+          "path": "configs/bacra_v12_7_5_nullspace_projection.yaml",
+          "role": "formal_config_chain",
+          "sha256": "447825075cff3655f1506ca024bdeca0ab92b8885a2a4c3638be6aeccb0c4cf1",
+          "size_bytes": 1362
+        },
+        {
+          "path": "configs/bacra_v12_7_canonical_student.yaml",
+          "role": "formal_config_chain",
+          "sha256": "833e5f7ebba62e205980db09c7eb3538fdcfa9b14b1399c111d205eb92828da7",
+          "size_bytes": 1235
+        },
+        {
+          "path": "configs/bacra_v12_5_composable_lift.yaml",
+          "role": "formal_config_chain",
+          "sha256": "f6485b7d1c7e4ff1f99c0fe656c2efd5656bfdc688df6d56a6e4e929393ab666",
+          "size_bytes": 4772
+        },
+        {
+          "path": "configs/bacra_v12_4_constructive_section.yaml",
+          "role": "formal_config_chain",
+          "sha256": "e8772bce90166f56d7402e5fad4541f63c90e2cc598d29b4666d3f6a411b5fa1",
+          "size_bytes": 3567
+        },
+        {
+          "path": "configs/bacra_v12_3_branch_lift_closure.yaml",
+          "role": "formal_config_chain",
+          "sha256": "46af777e288a7b85199c4c97c166ddf214c218e653d206646baa8a786a6a9f7f",
+          "size_bytes": 3107
+        },
+        {
+          "path": "configs/bacra_v12_2_topology_preserving.yaml",
+          "role": "formal_config_chain",
+          "sha256": "5c27b3eb0b6b9b6048999a81732334d3e600439db11613493958b0b6884af6dd",
+          "size_bytes": 2725
+        },
+        {
+          "path": "configs/bacra_v12_1_capability_bridge.yaml",
+          "role": "formal_config_chain",
+          "sha256": "0d1df6656897bb0e0627fb8d242f96a8911edaa6c326816da3f8eef8cd0dbb4c",
+          "size_bytes": 7202
+        }
+      ],
+      "extends_chain_order": "child_to_base",
+      "preset": "formal"
+    },
+    "geometry_solver": {
+      "path": "src/quasi_exp/teacher/bacra_geometry_holdout.py",
+      "role": "geometry_solver",
+      "sha256": "95babb5b9b20af7765b88727cfc15fa1e4187c2bdfd88955b1cdd241c1ac1970",
+      "size_bytes": 69662
+    },
+    "gold_assignment": {
+      "path": "src/quasi_exp/teacher/gold_set_student.py",
+      "role": "gold_assignment",
+      "sha256": "183aaa1143306399b21496dcb50ba51c8db2e97ba2e22867613372bd7ec65c04",
+      "size_bytes": 12037
+    },
+    "historical_artifact_source_manifest": {
+      "limitation": "This original manifest records the protocol-time implementation only; it does not represent teacher-to-summary source continuity and cannot describe the later final-stage runner.",
+      "logical_path": "runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3/00_protocol/source_manifest.json",
+      "recorded_runner_sha256": "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8",
+      "scope": [
+        "protocol"
+      ],
+      "sha256": "620dffc24a78280f98012a92088d0483f90f0ea2997a7682f77d5581fa8ce892",
+      "size_bytes": 3253
+    },
+    "source_fixed_point_path": "docs/provenance/v12_12_retry3/source_fixed_point.json",
+    "source_fixed_point_sha256": "d13e2628ed3b1e3d1519630effd13842353f7bc6f0b05809139da7b5b34dd006"
+  },
+  "logical_root": "runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3",
+  "manifest_type": "quasi_exp.artifact_manifest",
+  "runner_lineage": {
+    "protocol": {
+      "lineage_status": "historically_recovered_and_hash_verified",
+      "sha256": "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8",
+      "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_protocol_teacher_7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8.py"
+    },
+    "student": {
+      "lineage_status": "byte_identical_final_successful_runner_snapshot",
+      "sha256": "6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130",
+      "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_student_visualize_summary_6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130.py"
+    },
+    "summary": {
+      "lineage_status": "byte_identical_final_successful_runner_snapshot",
+      "sha256": "6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130",
+      "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_student_visualize_summary_6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130.py"
+    },
+    "teacher": {
+      "lineage_status": "historically_recovered_and_hash_verified",
+      "sha256": "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8",
+      "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_protocol_teacher_7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8.py"
+    },
+    "visualize": {
+      "lineage_status": "byte_identical_final_successful_runner_snapshot",
+      "sha256": "6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130",
+      "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_student_visualize_summary_6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130.py"
+    }
+  },
+  "schema_version": 1,
+  "seal": {
+    "limitations": [
+      "This manifest proves the exact byte state observed at retrospective sealing time only.",
+      "It does not prove that the artifact was continuously immutable before this manifest existed.",
+      "The original 00_protocol/source_manifest.json records protocol-time source only and does not prove source continuity through later stages.",
+      "The artifact has mixed runner lineage and must not be represented by one runner SHA."
+    ],
+    "sealed_at_utc": "2026-07-28T13:04:11Z",
+    "status": "retrospectively_sealed_current_state"
+  },
+  "tree": {
+    "canonicalization": "SHA256 over UTF-8 '<path>\\0<size_bytes>\\0<sha256>\\n' records sorted by normalized POSIX path",
+    "file_count": 100,
+    "files": [
+      {
+        "path": "00_protocol/frozen_config.json",
+        "sha256": "3d2be288845c8d86927f65bfdde5eced85376a317303a3c414b9043c01f52f7d",
+        "size_bytes": 22434
+      },
+      {
+        "path": "00_protocol/gate.json",
+        "sha256": "82f50962a7183065d7c5cddb2fac5b5fa7260971b937dd1f8177b412eff50180",
+        "size_bytes": 2221
+      },
+      {
+        "path": "00_protocol/model_lock.json",
+        "sha256": "dfa97e08b1eb98e000da9aa3ea829d7dda7dfc980f22f25b8655f40fb4a371ef",
+        "size_bytes": 2575
+      },
+      {
+        "path": "00_protocol/new_geometry_catalog.csv",
+        "sha256": "9aded47186a6b3bb3e08287a72331bc199ae18f80c96fa4b13116ecda85673c5",
+        "size_bytes": 3894
+      },
+      {
+        "path": "00_protocol/new_geometry_catalog.parquet",
+        "sha256": "0dda9f10b9bcacfb685ad1373557bfc354a9b1a3c1983b0dc78500b17c4ff614",
+        "size_bytes": 18432
+      },
+      {
+        "path": "00_protocol/runtime.json",
+        "sha256": "5e5dc589acd32e1d7685d6717f057194a98640d597ab644dbffaa83c62a234e8",
+        "size_bytes": 782
+      },
+      {
+        "path": "00_protocol/source_manifest.json",
+        "sha256": "620dffc24a78280f98012a92088d0483f90f0ea2997a7682f77d5581fa8ce892",
+        "size_bytes": 3253
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_00/gold_candidates.parquet",
+        "sha256": "65d46eb094af94a83060a6f752a25d5997234deb2276f621becddd7526f41b0c",
+        "size_bytes": 1839983
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_00/reference.parquet",
+        "sha256": "bfc200f48eb7b4c58a373636f575ac2ecae7ca0667e271aedd2f4ef7d9a8300b",
+        "size_bytes": 246568
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_00/report.json",
+        "sha256": "43dd049d58678200ae83b75a1d985604f4ac002c47652a27cf7d64d70ec84936",
+        "size_bytes": 118716
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_01/gold_candidates.parquet",
+        "sha256": "a338e5d297646251239c80f0960ce2aee501b8ab43e30bcc2c6a48165f9ae190",
+        "size_bytes": 74736
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_01/reference.parquet",
+        "sha256": "e18fa1aeada8ad32ff4891c81792e6ade67f2fcbfe8cfd110b21036aea67f4d6",
+        "size_bytes": 293042
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_01/report.json",
+        "sha256": "76bd246a191940d43d0936b07c7d4a3a2130a48431fee446580dd20b9055036a",
+        "size_bytes": 3560
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_02/gold_candidates.parquet",
+        "sha256": "a209ccc63208b7ca7248272ba57b24aa03a6cb808f2324bb076a7dc8095c1f15",
+        "size_bytes": 1853785
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_02/reference.parquet",
+        "sha256": "414abae0930092f8c585f9c9471fd897b99ae445c97f2fd3aef6ec25efc46a2d",
+        "size_bytes": 245428
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_02/report.json",
+        "sha256": "7938efe83249508a91406f1097a1113ce2e51aad4465cdc984f745f23b63b7e2",
+        "size_bytes": 200663
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_03/gold_candidates.parquet",
+        "sha256": "586b2bf033c5facd1b45f99d06f8c6092af1731ed162a619e34c686da66244d7",
+        "size_bytes": 1873253
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_03/reference.parquet",
+        "sha256": "3de68cb283f3ea36dc08b3a3685d4edac898cf742e6e07e232502e80fe753e4e",
+        "size_bytes": 248513
+      },
+      {
+        "path": "01_teacher_reference/families/independent_core_03/report.json",
+        "sha256": "36f85e6ebf9efd86d234a804bf14dc62c1b2b9287271ba6ca838a93fee86472f",
+        "size_bytes": 579037
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_00/gold_candidates.parquet",
+        "sha256": "dd3a80cd64ed53469bf049e885aa91f9d57cca5c8192f779a18ea3e16b1e136b",
+        "size_bytes": 1880770
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_00/reference.parquet",
+        "sha256": "5fbe10eaaf151c8c8c23c461567bdde919c8812451ea14e728c8f08ffb0dca1c",
+        "size_bytes": 244376
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_00/report.json",
+        "sha256": "ac2a441400e208127e784836f6999863f7dcfcc0c01d5bcf50ad81ca8bb0df11",
+        "size_bytes": 816281
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_01/gold_candidates.parquet",
+        "sha256": "ecc6d78b8b763b68bc7da6bb0e31ba29bff002598f227709bd6eb8f54cf8b386",
+        "size_bytes": 1824229
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_01/reference.parquet",
+        "sha256": "fd55b5446567e86d7a548550ee5ad7f5c20fc15d464ca78f0ee7575715e058cd",
+        "size_bytes": 122782
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_01/report.json",
+        "sha256": "f033e791e42d8443e972554c4d932b383b0c4e4982c9f6f5d995967be4c21cec",
+        "size_bytes": 1194030
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_02/gold_candidates.parquet",
+        "sha256": "2ab7dc93c8c96e8053843f4b1506870bc9cc3d5f95dcd3e13895257f8db70b54",
+        "size_bytes": 1671767
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_02/reference.parquet",
+        "sha256": "35a55090de552d7895600e838a9b12a5f80e76f69434f19977a70b964d48051e",
+        "size_bytes": 184907
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_02/report.json",
+        "sha256": "86fbdae7aae2c137e4b06b11909c61ed9a288d5bebfd203843d440ad246aeef3",
+        "size_bytes": 3535
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_03/gold_candidates.parquet",
+        "sha256": "90e10e28a50f0d3387e8841477bd5d007dc3c4d89abc3e5ba3adeb5196215ebf",
+        "size_bytes": 1759058
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_03/reference.parquet",
+        "sha256": "c92947540ba0a939be7249aae1141daa8e53e674af03caa4312ab55f78baccf1",
+        "size_bytes": 121935
+      },
+      {
+        "path": "01_teacher_reference/families/independent_stress_03/report.json",
+        "sha256": "4e53374b1f4af7bcaadd91dd8a1dea75edc108f6d829690689da7f421a1e759c",
+        "size_bytes": 1261599
+      },
+      {
+        "path": "01_teacher_reference/gate.json",
+        "sha256": "20cbb77e408124a51b8e4c8e02c68f0b79faaa96201f8d805a1df16358eadc55",
+        "size_bytes": 4808
+      },
+      {
+        "path": "01_teacher_reference/logs/independent_core_01.log",
+        "sha256": "5f84073d46f8dca8fea8b07f2ad533fefcf2bda8b1c6be6571fe6033a4903c0b",
+        "size_bytes": 239
+      },
+      {
+        "path": "01_teacher_reference/parallel_manifest.json",
+        "sha256": "ee3475e4ded68129c53db8c59679d935cbac5cd5a6f1d3d7ff9567c3640a1c80",
+        "size_bytes": 648
+      },
+      {
+        "path": "01_teacher_reference/reference_dataset.parquet",
+        "sha256": "104f1e9d4a433bd7227cc12a031541a1380c9c7f9a1070ae711e9c5eee232ff9",
+        "size_bytes": 1443130
+      },
+      {
+        "path": "01_teacher_reference/teacher_artifact_reuse.json",
+        "sha256": "afa92c960eb77a6d1d2dbc84c63446c3d0f7243c13864518649dcb8ef8e7f7d3",
+        "size_bytes": 3453
+      },
+      {
+        "path": "01_teacher_reference/teacher_metrics_per_family.parquet",
+        "sha256": "ae97f8725435a5273067d5ac65faaceaed70195f589006a17fa778cda79f2678",
+        "size_bytes": 83494
+      },
+      {
+        "path": "02_student_evaluation/evaluation_parallel_manifest.json",
+        "sha256": "ead116d99c61ea96362e211756debd9cc378addbc4b38cde1df9610d3e2d8ee0",
+        "size_bytes": 1481
+      },
+      {
+        "path": "02_student_evaluation/gate.json",
+        "sha256": "f2bdd85f7321d71ad37c8c530f6f2b25447bf8a1ef83cad4446fc1dc6ae637df",
+        "size_bytes": 4252
+      },
+      {
+        "path": "02_student_evaluation/logs/gpu_batch_prediction.log",
+        "sha256": "0bb6533743543fa88a55edf3ea7beb23ece8219a61235490bd79c7ca58de185a",
+        "size_bytes": 3343
+      },
+      {
+        "path": "02_student_evaluation/logs/seed_20260737.log",
+        "sha256": "cd89922617b3c293bdbc9581d847a637fb3a409499dc11850861150e1c1e1f0f",
+        "size_bytes": 38
+      },
+      {
+        "path": "02_student_evaluation/logs/seed_20260738.log",
+        "sha256": "b30d0c7a9d1de654241fdfdd6ac0a3861039504137298f2d59665cb1914ee19b",
+        "size_bytes": 38
+      },
+      {
+        "path": "02_student_evaluation/logs/seed_20260739.log",
+        "sha256": "d44a7c628fd0f595994cec11022b625833c131052254abec47148b63c0c173df",
+        "size_bytes": 38
+      },
+      {
+        "path": "02_student_evaluation/logs/seed_20260740.log",
+        "sha256": "c0ca5b355d97060b4e653115f27c6867d736a09bbb97523458b7f869462e9578",
+        "size_bytes": 38
+      },
+      {
+        "path": "02_student_evaluation/metrics_per_family_seed.parquet",
+        "sha256": "e3499b690abb0c00a5d09c94e37b6548ac5b03c33bc857b55945d6c9f826ed12",
+        "size_bytes": 53900
+      },
+      {
+        "path": "02_student_evaluation/metrics_per_seed.parquet",
+        "sha256": "603c6dda2ae83dbab3053ce1ce1bb4a76c48219b83102e8778e7c2c15fce8049",
+        "size_bytes": 4046
+      },
+      {
+        "path": "02_student_evaluation/prediction/predictions.parquet",
+        "sha256": "123f0abc0bc966e70ae6553289cd36dd1cfa5b1916e04bae4b2d4892145f2acd",
+        "size_bytes": 1367616
+      },
+      {
+        "path": "02_student_evaluation/prediction/report.json",
+        "sha256": "b45a08933d42b157174187a0d90eb174c5a7e1865dc65473acf34e96c227a60a",
+        "size_bytes": 1277
+      },
+      {
+        "path": "02_student_evaluation/prediction_parallel_manifest.json",
+        "sha256": "9837f53403a980b6dfb1924bc3ae209acc4c5513466e4d537527b12c1197da75",
+        "size_bytes": 647
+      },
+      {
+        "path": "02_student_evaluation/seed_20260737/assigned_gold_sections.parquet",
+        "sha256": "d516ac3b09971d38df3303b265e21aafc13f082828a6f837cdf060e23fc9bc83",
+        "size_bytes": 393426
+      },
+      {
+        "path": "02_student_evaluation/seed_20260737/report.json",
+        "sha256": "54808cbb145603f031d7814145219471aa5df20306fe7b98dacc339a20e07d9d",
+        "size_bytes": 18828
+      },
+      {
+        "path": "02_student_evaluation/seed_20260737/tracking_details.parquet",
+        "sha256": "3438505132cff6d80bc2c3d28b6ed16d530f7eafdbc16105c84a79e10c99dcc6",
+        "size_bytes": 1357572
+      },
+      {
+        "path": "02_student_evaluation/seed_20260738/assigned_gold_sections.parquet",
+        "sha256": "9f733e6e6a4b13983584f30bf1778722dad5efe72d0ec059a4f4dae25afad479",
+        "size_bytes": 393475
+      },
+      {
+        "path": "02_student_evaluation/seed_20260738/report.json",
+        "sha256": "8eabc9ec80d3efdf6451fa1b77fab7ac360b11eac39be07ef24fc8be199de08c",
+        "size_bytes": 18810
+      },
+      {
+        "path": "02_student_evaluation/seed_20260738/tracking_details.parquet",
+        "sha256": "2a948fe1a74e395a7fd368eb8906dc37b991cdf14c53746f4c7e0ad31cd4aaba",
+        "size_bytes": 1357683
+      },
+      {
+        "path": "02_student_evaluation/seed_20260739/assigned_gold_sections.parquet",
+        "sha256": "f7cabde6154ced922f02351a675358b6bfe72503123ddd97336e693e05bfc71e",
+        "size_bytes": 393526
+      },
+      {
+        "path": "02_student_evaluation/seed_20260739/report.json",
+        "sha256": "fe4ef3e77dab53e44956a67e1d2fb8fb10dd5ae28afbbefb4c3ff7d932edc833",
+        "size_bytes": 18822
+      },
+      {
+        "path": "02_student_evaluation/seed_20260739/tracking_details.parquet",
+        "sha256": "d5707ab9139dd5f2eb3d55e83e6a9cb770a192ad55cd25c0f973895349e47721",
+        "size_bytes": 1357653
+      },
+      {
+        "path": "02_student_evaluation/seed_20260740/assigned_gold_sections.parquet",
+        "sha256": "e891cc19f6578595e5f0a2eb43f188ec26072ae0ee9de0a45776bf9b3356fb17",
+        "size_bytes": 393421
+      },
+      {
+        "path": "02_student_evaluation/seed_20260740/report.json",
+        "sha256": "de4abf480e2ba721b3288b4863b256eabac3ff97b0e5e8aa1f6d903950d55f6b",
+        "size_bytes": 18831
+      },
+      {
+        "path": "02_student_evaluation/seed_20260740/tracking_details.parquet",
+        "sha256": "ec6cbdc5c761a5bd642a5cdfe8f15a8a049c1f7f1cce6969f1bf44dadf1f271d",
+        "size_bytes": 1357417
+      },
+      {
+        "path": "03_visualization/best_model_tracking_overview.png",
+        "sha256": "08cd62b034badf1c2896ad99db6b2d3d01cec51f979b5f82523f68c7b6725641",
+        "size_bytes": 448482
+      },
+      {
+        "path": "03_visualization/gate.json",
+        "sha256": "1285ed52b0099f150e3068d8d86ccee49cd223adcea1e2268cf1c7f433afd089",
+        "size_bytes": 2141
+      },
+      {
+        "path": "03_visualization/manifest.json",
+        "sha256": "9ce923e5463a577dde632852afaaf26e8f976fb157d13c720d69de04984b1ee3",
+        "size_bytes": 1679
+      },
+      {
+        "path": "03_visualization/seed_20260737/independent_core_00_tracking.png",
+        "sha256": "9710b6e2eae2e79d7ecdffd5600c3a075bb5c7cda17d7b1cf57e83511eb250fa",
+        "size_bytes": 382603
+      },
+      {
+        "path": "03_visualization/seed_20260737/independent_core_01_tracking.png",
+        "sha256": "f182301daaba2b0c945d0e5482cd1644fda538a63bec211cc0c6a518aa786223",
+        "size_bytes": 388181
+      },
+      {
+        "path": "03_visualization/seed_20260737/independent_core_02_tracking.png",
+        "sha256": "9d71360073f433ff96b423d7fb2568ae355701501a0f69114d375621ee806511",
+        "size_bytes": 384646
+      },
+      {
+        "path": "03_visualization/seed_20260737/independent_core_03_tracking.png",
+        "sha256": "3a6f9778924e3eed4b107d5341b46ebbe0d31e945a298d17d406850a34ac4cc4",
+        "size_bytes": 392590
+      },
+      {
+        "path": "03_visualization/seed_20260738/independent_core_00_tracking.png",
+        "sha256": "7bb945d5f4ebddea87495325f8eaf61e040b86bebafe5e19fe761fbe68ce2522",
+        "size_bytes": 381116
+      },
+      {
+        "path": "03_visualization/seed_20260738/independent_core_01_tracking.png",
+        "sha256": "5cc5bddbadf9d8818a6222b77bb5dc11ea89b4197fa1829ca79bcdc9d9ef228a",
+        "size_bytes": 385109
+      },
+      {
+        "path": "03_visualization/seed_20260738/independent_core_02_tracking.png",
+        "sha256": "9591274a5761d3121a35d6be32fa05fafbbb44104f7c154bb8c5b585c8254d4a",
+        "size_bytes": 381415
+      },
+      {
+        "path": "03_visualization/seed_20260738/independent_core_03_tracking.png",
+        "sha256": "4d0d654a06e7d9a3c25adf5cba7e11a3aa02df6dd1e7f8d87b276ac2fb607612",
+        "size_bytes": 389498
+      },
+      {
+        "path": "03_visualization/seed_20260739/independent_core_00_tracking.png",
+        "sha256": "1bb39aa1b81ad37e8395745425f3a836b252d92abe8c030d65cc692823051887",
+        "size_bytes": 384449
+      },
+      {
+        "path": "03_visualization/seed_20260739/independent_core_01_tracking.png",
+        "sha256": "dee260eb990c3dcd402cb8969fb40105c939784bc76e7ec22db48fad5b15853b",
+        "size_bytes": 387896
+      },
+      {
+        "path": "03_visualization/seed_20260739/independent_core_02_tracking.png",
+        "sha256": "79b08125f7b721a20d408d8b82c5dd403bf1b98cc5d50d81e2c0101d0acdd783",
+        "size_bytes": 383873
+      },
+      {
+        "path": "03_visualization/seed_20260739/independent_core_03_tracking.png",
+        "sha256": "8c9e602928e19161c6c4eb1f3611299ffb017c7d5dac0d5be115c8fb9834edeb",
+        "size_bytes": 391291
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_core_00_tracking.png",
+        "sha256": "0932d8a56ad5ae284f00bccd8b3659b78a58b71b66c9d757120cc2bfca68ccbb",
+        "size_bytes": 377982
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_core_01_tracking.png",
+        "sha256": "7b1a15973fd8aea7f8d30e7cbf3466278338b104e2aac5a2db0b1bfd3265469c",
+        "size_bytes": 384204
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_core_02_tracking.png",
+        "sha256": "3f22530369d3399e25f258a020a973196358e2682421522c302919af960b910a",
+        "size_bytes": 381870
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_core_03_tracking.png",
+        "sha256": "70a5658bbb400195c3e2668ac9b186dfe66db512e4ce2ffcfc75c5d0f0e51d5d",
+        "size_bytes": 390191
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_stress_00_tracking.png",
+        "sha256": "78fdcca4a5e5aad21fa8ec83b0b85d1516dbae7847509f7f3dcb62cc7c57416b",
+        "size_bytes": 405034
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_stress_01_tracking.png",
+        "sha256": "986b60e849b6281801969f39003c964f1b667f31532bf20ea076f1604c3f8d02",
+        "size_bytes": 393207
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_stress_02_tracking.png",
+        "sha256": "f1e97ed6ae25914884ecc295c7831699b5115a56ef1ede767f32aa4f7b9ff6c4",
+        "size_bytes": 406457
+      },
+      {
+        "path": "03_visualization/seed_20260740/independent_stress_03_tracking.png",
+        "sha256": "cac7034cf54a22a2ef7241a9fb02ab88f93ff18f41c4f5ce4156e84a11cae9c1",
+        "size_bytes": 394346
+      },
+      {
+        "path": "04_summary/family_summary.csv",
+        "sha256": "17d68d7ea8c396fe179fc4bc71de355ac9483b9182bfd65616b2d953679ce610",
+        "size_bytes": 1306
+      },
+      {
+        "path": "04_summary/gate.json",
+        "sha256": "6a4780aec8f7bb490eac1cc33b26f552525a42c5eb4ebe980c1b34a852785a12",
+        "size_bytes": 972
+      },
+      {
+        "path": "04_summary/result_summary.md",
+        "sha256": "24d219ad0583e42124bbbd59582219608b37532cff90b80877c9469526d1a620",
+        "size_bytes": 1873
+      },
+      {
+        "path": "05_teacher_visualization/families/independent_core_00_teacher_tracking.png",
+        "sha256": "b528a0ba42cafc6a3571ae4ff69d6121c560b999ae958a31b95d61c56fe761dd",
+        "size_bytes": 608655
+      },
+      {
+        "path": "05_teacher_visualization/families/independent_core_01_teacher_tracking.png",
+        "sha256": "3623e4e1914f92d35fceda04e46fa92ec7a8babc4ca94b8927d458317dc23641",
+        "size_bytes": 651310
+      },
+      {
+        "path": "05_teacher_visualization/families/independent_core_02_teacher_tracking.png",
+        "sha256": "7bc13c4ec1924261c99bbdc16c2539ab4fe977178d5c7156a1fafaf030456139",
+        "size_bytes": 635475
+      },
+      {
+        "path": "05_teacher_visualization/families/independent_core_03_teacher_tracking.png",
+        "sha256": "98712033f24c598e337d7f667eebf2b36bedd36216400a704dfe0cf1da587fd7",
+        "size_bytes": 647071
+      },
+      {
+        "path": "05_teacher_visualization/families/independent_stress_00_teacher_tracking.png",
+        "sha256": "723a8d970e4ef7474619d8068ab4e4b0153bcf1219dbda597a169929a93f7262",
+        "size_bytes": 715242
+      },
+      {
+        "path": "05_teacher_visualization/manifest.json",
+        "sha256": "e969168723c88585c6e2f9e866c615eaae15b1c141aaa96d54f2fde0f9108eed",
+        "size_bytes": 8155
+      },
+      {
+        "path": "05_teacher_visualization/teacher_tracking_3d_overview.png",
+        "sha256": "650ea4656728047cc4de766750411446f131edbbf03ac5924799933844fca392",
+        "size_bytes": 916600
+      },
+      {
+        "path": "05_teacher_visualization/teacher_tracking_details.parquet",
+        "sha256": "f0516cb98cd7f05758da641e1a8e1ff9e6c878ee8207558ab07e55d745809f45",
+        "size_bytes": 735802
+      },
+      {
+        "path": "05_teacher_visualization/teacher_tracking_error_margin_overview.png",
+        "sha256": "8dbf4fac7ff7fad23928d8040e49a21093c825da1fb027263b5530e771f59630",
+        "size_bytes": 1093171
+      },
+      {
+        "path": "05_teacher_visualization/teacher_tracking_metrics.csv",
+        "sha256": "0f799aa0d36e1f631627e9c65d0edda493c3d0f91db9b194304d58e3f4ab78ce",
+        "size_bytes": 1424
+      },
+      {
+        "path": "V12_12_INDEPENDENT_GEOMETRY_GATE_PASSED.json",
+        "sha256": "6a4780aec8f7bb490eac1cc33b26f552525a42c5eb4ebe980c1b34a852785a12",
+        "size_bytes": 972
+      },
+      {
+        "path": "V12_12_INDEPENDENT_GOLD_SET_GEOMETRY_HOLDOUT_COMPLETED.json",
+        "sha256": "3ad20a03596102dc91a07503c3bcf7ed2343c4df2a05e278bd5482d4fec96bc7",
+        "size_bytes": 322
+      },
+      {
+        "path": "run_report.json",
+        "sha256": "750218e91eeee75e8e96cfb869fc6447f3b0db0c145eca0fcd68939df6775482",
+        "size_bytes": 469
+      }
+    ],
+    "total_bytes": 43005173,
+    "tree_sha256": "86313dc5666c335ac87deb6f9155021fdc04cac9b2601cb5fcec7686fc63fbaa"
+  }
+}

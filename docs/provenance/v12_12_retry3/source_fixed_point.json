@@ -1,0 +1,582 @@
+{
+  "execution_closure": {
+    "audit_method": "recursive static local-import closure from the five V12 runner entrypoints, including executed package __init__ modules, plus the full formal config chain and family disposition policy",
+    "code_file_count": 38,
+    "formal_config_file_count": 12,
+    "policy_file_count": 1,
+    "total_file_count": 51
+  },
+  "execution_sources": [
+    {
+      "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry.yaml",
+      "role": "formal_config_chain",
+      "sha256": "67ca418779ecaaf873aba7d177ff6f85dbdc8f5b0366684cadb455962e8d740b",
+      "size_bytes": 1161
+    },
+    {
+      "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+      "role": "formal_config_chain",
+      "sha256": "1eca7edeec56ce22c9d4b4ecf7d15c84a9e7db06dbe52cc84488c7b69687db7a",
+      "size_bytes": 288
+    },
+    {
+      "path": "configs/bacra_v12_12_independent_gold_set_holdout.yaml",
+      "role": "formal_config_chain",
+      "sha256": "df29f019632b99c2cc643148fa4a6122f40d77570bf15ecb1a115a64915c1e3a",
+      "size_bytes": 3489
+    },
+    {
+      "path": "configs/bacra_v12_1_capability_bridge.yaml",
+      "role": "formal_config_chain",
+      "sha256": "0d1df6656897bb0e0627fb8d242f96a8911edaa6c326816da3f8eef8cd0dbb4c",
+      "size_bytes": 7202
+    },
+    {
+      "path": "configs/bacra_v12_2_topology_preserving.yaml",
+      "role": "formal_config_chain",
+      "sha256": "5c27b3eb0b6b9b6048999a81732334d3e600439db11613493958b0b6884af6dd",
+      "size_bytes": 2725
+    },
+    {
+      "path": "configs/bacra_v12_3_branch_lift_closure.yaml",
+      "role": "formal_config_chain",
+      "sha256": "46af777e288a7b85199c4c97c166ddf214c218e653d206646baa8a786a6a9f7f",
+      "size_bytes": 3107
+    },
+    {
+      "path": "configs/bacra_v12_4_constructive_section.yaml",
+      "role": "formal_config_chain",
+      "sha256": "e8772bce90166f56d7402e5fad4541f63c90e2cc598d29b4666d3f6a411b5fa1",
+      "size_bytes": 3567
+    },
+    {
+      "path": "configs/bacra_v12_5_composable_lift.yaml",
+      "role": "formal_config_chain",
+      "sha256": "f6485b7d1c7e4ff1f99c0fe656c2efd5656bfdc688df6d56a6e4e929393ab666",
+      "size_bytes": 4772
+    },
+    {
+      "path": "configs/bacra_v12_7_5_nullspace_projection.yaml",
+      "role": "formal_config_chain",
+      "sha256": "447825075cff3655f1506ca024bdeca0ab92b8885a2a4c3638be6aeccb0c4cf1",
+      "size_bytes": 1362
+    },
+    {
+      "path": "configs/bacra_v12_7_canonical_student.yaml",
+      "role": "formal_config_chain",
+      "sha256": "833e5f7ebba62e205980db09c7eb3538fdcfa9b14b1399c111d205eb92828da7",
+      "size_bytes": 1235
+    },
+    {
+      "path": "configs/bacra_v12_8_independent_geometry_loops.yaml",
+      "role": "formal_config_chain",
+      "sha256": "82312749be4b0b563192116af1a9c681c3a13cdc47ad405e0e7c458e1c878b88",
+      "size_bytes": 3975
+    },
+    {
+      "path": "configs/bacra_v12_9_gap_directed_bridge.yaml",
+      "role": "formal_config_chain",
+      "sha256": "714f43dbcc556e174f21f93f95f14bf09e5314e4b18264768a76e75a8a33c61c",
+      "size_bytes": 1606
+    },
+    {
+      "path": "docs/provenance/v12_12_retry3/family_disposition.json",
+      "role": "family_disposition_policy",
+      "sha256": "5ce4bda5db5064458af11fb710ea0ae89e9ee50ebb1b5137c84f8a2aef2dc049",
+      "size_bytes": 2856
+    },
+    {
+      "path": "scripts/analysis/run_bacra_v12.py",
+      "role": "runner_dependency",
+      "sha256": "8bc78857540eab82c95228a08dafff558987aa8129feb830201d54ca1cb2350c",
+      "size_bytes": 96521
+    },
+    {
+      "path": "scripts/analysis/run_bacra_v12_11_gold_set_student.py",
+      "role": "runner_dependency",
+      "sha256": "a6d1912a119f111428a90f463384cbeca3755a2fa268bd51671070f15a770115",
+      "size_bytes": 33212
+    },
+    {
+      "path": "scripts/analysis/run_bacra_v12_12_independent_gold_set_holdout.py",
+      "role": "formal_runner",
+      "sha256": "7238e9ebaf7c53af7771386b55cc092ec995b843ed9f903c7772581b5360fd85",
+      "size_bytes": 77571
+    },
+    {
+      "path": "scripts/analysis/run_bacra_v12_7_canonical_student.py",
+      "role": "runner_dependency",
+      "sha256": "4a0a2b698605ef4a8bda2f6fb6cdeb4be0885815f0991ff7b710a46af60355d1",
+      "size_bytes": 22620
+    },
+    {
+      "path": "scripts/analysis/run_bacra_v12_8_geometry_holdout.py",
+      "role": "runner_dependency",
+      "sha256": "f98221dbe7d3849da088c8f949cc91efc4786b6c924f75a7d4128d10be77d137",
+      "size_bytes": 38095
+    },
+    {
+      "path": "scripts/analysis/run_trajectory_canonical_teacher_v10.py",
+      "role": "runner_dependency",
+      "sha256": "91a2ee164321f9695f0abf47d3877ad097e6d0e5631dfe1ad211088b48aefc98",
+      "size_bytes": 21705
+    },
+    {
+      "path": "src/quasi_exp/__init__.py",
+      "role": "local_import_dependency",
+      "sha256": "b91ce5bd645075f9fdfb20e07b3b729ab3d8446041d09950dd80aa3f3d84bd93",
+      "size_bytes": 34
+    },
+    {
+      "path": "src/quasi_exp/io/__init__.py",
+      "role": "local_import_dependency",
+      "sha256": "857a5441b5c77e51edefbe23db5d272f8f8b54efd0016a481bfeb74c22c5e6b0",
+      "size_bytes": 153
+    },
+    {
+      "path": "src/quasi_exp/io/config.py",
+      "role": "local_import_dependency",
+      "sha256": "4d33287d0d31cba5833aadc3edd9e25849ee8582ee89f32fd935dafd6f5ab2a9",
+      "size_bytes": 407
+    },
+    {
+      "path": "src/quasi_exp/io/robot_inputs.py",
+      "role": "local_import_dependency",
+      "sha256": "1da705d2deaddc6bb624f23b76894e81763d13876707bd3e7a8bb1e98390360f",
+      "size_bytes": 7167
+    },
+    {
+      "path": "src/quasi_exp/model/__init__.py",
+      "role": "local_import_dependency",
+      "sha256": "04fdfe42651f6d45c7df6bd6304277738769c4786d59e694c31fee93d79978d2",
+      "size_bytes": 177
+    },
+    {
+      "path": "src/quasi_exp/model/cable_geometry.py",
+      "role": "local_import_dependency",
+      "sha256": "20bb62e54ae7a1f8b060353d81e51ba0028319a70fabca7ad7a2311509489523",
+      "size_bytes": 1531
+    },
+    {
+      "path": "src/quasi_exp/model/kinematics.py",
+      "role": "local_import_dependency",
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96",
+      "size_bytes": 2430
+    },
+    {
+      "path": "src/quasi_exp/model/kinematics_tf.py",
+      "role": "local_import_dependency",
+      "sha256": "433a7a0c893f9de56d17994738c5cdbb862361b3179aa8443950dbb78e3bdeeb",
+      "size_bytes": 2766
+    },
+    {
+      "path": "src/quasi_exp/model/sampling.py",
+      "role": "local_import_dependency",
+      "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f",
+      "size_bytes": 18277
+    },
+    {
+      "path": "src/quasi_exp/provenance.py",
+      "role": "source_lock_dependency",
+      "sha256": "b9bd6ed7b3645e11f133599e2b005211d7f63d4cee118ee40f790a4cbacc5f2f",
+      "size_bytes": 25983
+    },
+    {
+      "path": "src/quasi_exp/teacher/__init__.py",
+      "role": "local_import_dependency",
+      "sha256": "3a6660b813c00ef9e59dd4cf8bdcb71de7017064889e2c07a57836b5ab9bb2f0",
+      "size_bytes": 724
+    },
+    {
+      "path": "src/quasi_exp/teacher/atlas.py",
+      "role": "local_import_dependency",
+      "sha256": "599dad70abf5d0710490b62b808f5269c04552babc607e22524bbc9ffe6bf636",
+      "size_bytes": 3729
+    },
+    {
+      "path": "src/quasi_exp/teacher/atlas_audit.py",
+      "role": "local_import_dependency",
+      "sha256": "b53ff787f738f85086ea4e3e84c5f877ffe996ef08a40726ce614b7f9e08053f",
+      "size_bytes": 34223
+    },
+    {
+      "path": "src/quasi_exp/teacher/bacra_canonical_student.py",
+      "role": "local_import_dependency",
+      "sha256": "6aeb8e6ad8a126afcebcc103c381642a2ccae029b0eacd6b81fe43a18ce47ebd",
+      "size_bytes": 8925
+    },
+    {
+      "path": "src/quasi_exp/teacher/bacra_dataset.py",
+      "role": "local_import_dependency",
+      "sha256": "a9fca707494c6218ac5de8ad81473051d9e81d153b0eb691426bfed3e6919014",
+      "size_bytes": 12025
+    },
+    {
+      "path": "src/quasi_exp/teacher/bacra_geometry_holdout.py",
+      "role": "geometry_solver",
+      "sha256": "95babb5b9b20af7765b88727cfc15fa1e4187c2bdfd88955b1cdd241c1ac1970",
+      "size_bytes": 69662
+    },
+    {
+      "path": "src/quasi_exp/teacher/bacra_student.py",
+      "role": "local_import_dependency",
+      "sha256": "fa59ec5176f26fa6e8fc327b8f1168d1e7caa93fcc179c669f96a92fb1f184e2",
+      "size_bytes": 9473
+    },
+    {
+      "path": "src/quasi_exp/teacher/canonical.py",
+      "role": "local_import_dependency",
+      "sha256": "76bdd3f12f70e55af81a5c5b0aa29eb503e227643d561b69ed1a42724c8a40b6",
+      "size_bytes": 29241
+    },
+    {
+      "path": "src/quasi_exp/teacher/canonical_atlas.py",
+      "role": "local_import_dependency",
+      "sha256": "a9ad9596fe4b43023961e83333708408a18b77e39157255417cedb8fc4cf69dc",
+      "size_bytes": 48664
+    },
+    {
+      "path": "src/quasi_exp/teacher/capability_map.py",
+      "role": "local_import_dependency",
+      "sha256": "e527d8da6b0b6b993b805d6b07047fcf70f23653c0dff8e5a38470df166f5c3e",
+      "size_bytes": 37054
+    },
+    {
+      "path": "src/quasi_exp/teacher/capability_path_bridge.py",
+      "role": "local_import_dependency",
+      "sha256": "ccf7f3b1f68cf64cd64456ff8b54eebb31b82dc5860f484a319fb2e3ba2323c1",
+      "size_bytes": 19182
+    },
+    {
+      "path": "src/quasi_exp/teacher/dataset.py",
+      "role": "local_import_dependency",
+      "sha256": "a382c8393e5114418e3b1691a7b7c5845f5ed928325d220cc98320725b6188b2",
+      "size_bytes": 8467
+    },
+    {
+      "path": "src/quasi_exp/teacher/dense_chart_sampling.py",
+      "role": "local_import_dependency",
+      "sha256": "f5c570f8d0ce5a78c413b3408d82527d930d3bae3b80c2f9d3d0ad31081f2e5c",
+      "size_bytes": 23024
+    },
+    {
+      "path": "src/quasi_exp/teacher/experiment.py",
+      "role": "local_import_dependency",
+      "sha256": "ff5b4934701aec0de84e7ad0370be12ec2a8a1cefa8fd6edec3cb43bbf3e5290",
+      "size_bytes": 3591
+    },
+    {
+      "path": "src/quasi_exp/teacher/forward.py",
+      "role": "local_import_dependency",
+      "sha256": "4e8a66a283a9708fece7c8ef6be9659c18b4649107f904de93f5a1a99bc9201d",
+      "size_bytes": 14265
+    },
+    {
+      "path": "src/quasi_exp/teacher/gold_set_student.py",
+      "role": "gold_assignment",
+      "sha256": "183aaa1143306399b21496dcb50ba51c8db2e97ba2e22867613372bd7ec65c04",
+      "size_bytes": 12037
+    },
+    {
+      "path": "src/quasi_exp/teacher/large_scale.py",
+      "role": "local_import_dependency",
+      "sha256": "fe4ffd119677540d3160262cc0b881f07f2dd2d8515afb043ee423dbb9a4fc33",
+      "size_bytes": 14565
+    },
+    {
+      "path": "src/quasi_exp/teacher/multi_ik_candidates.py",
+      "role": "local_import_dependency",
+      "sha256": "62dcf1ebac4f621df0ee85e13736e624e90aec3fb4159128dc101499e07db78f",
+      "size_bytes": 23905
+    },
+    {
+      "path": "src/quasi_exp/teacher/region.py",
+      "role": "local_import_dependency",
+      "sha256": "e828694e588bfbbe4bd7b4bbdf742fe27426c8e4b81d83daa55fc009930ba0e6",
+      "size_bytes": 23458
+    },
+    {
+      "path": "src/quasi_exp/teacher/student.py",
+      "role": "local_import_dependency",
+      "sha256": "094fcf451af101ef6ee42d43aed71c12ce1ef1d52f5f74841fb1f7f42fd594cb",
+      "size_bytes": 8090
+    },
+    {
+      "path": "src/quasi_exp/teacher/student_tracking_tf.py",
+      "role": "local_import_dependency",
+      "sha256": "8093caea0ffb8ee5864f0d3fee16e3adb4f99a8b5106d4efac4b6750f388550b",
+      "size_bytes": 10235
+    },
+    {
+      "path": "src/quasi_exp/teacher/topology_task_region.py",
+      "role": "local_import_dependency",
+      "sha256": "095c927fb51a9976da273d17bf1300ba1f71068ff46c0d62abe8cadc74953b70",
+      "size_bytes": 31659
+    }
+  ],
+  "fixed_point": {
+    "branch": "codex/bacra-v12-12-fixed-point",
+    "commit_message": "Freeze V12.12 fixed point and artifact provenance",
+    "parent_git_sha": "aef0308e81466e51666e7277ed1f91b9e234d031",
+    "required_commit_count_ahead_of_parent": 1
+  },
+  "formal_config": {
+    "artifact_frozen_config": {
+      "comparison_rule": "resolved JSON must match after normalizing only checkout-specific config_path and JSON object-key stringification",
+      "logical_path": "runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3/00_protocol/frozen_config.json",
+      "sha256": "3d2be288845c8d86927f65bfdde5eced85376a317303a3c414b9043c01f52f7d",
+      "size_bytes": 22434
+    },
+    "entrypoint": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+    "extends_chain": [
+      {
+        "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry3.yaml",
+        "role": "formal_config_chain",
+        "sha256": "1eca7edeec56ce22c9d4b4ecf7d15c84a9e7db06dbe52cc84488c7b69687db7a",
+        "size_bytes": 288
+      },
+      {
+        "path": "configs/bacra_v12_12_1_multiresolution_teacher_retry.yaml",
+        "role": "formal_config_chain",
+        "sha256": "67ca418779ecaaf873aba7d177ff6f85dbdc8f5b0366684cadb455962e8d740b",
+        "size_bytes": 1161
+      },
+      {
+        "path": "configs/bacra_v12_12_independent_gold_set_holdout.yaml",
+        "role": "formal_config_chain",
+        "sha256": "df29f019632b99c2cc643148fa4a6122f40d77570bf15ecb1a115a64915c1e3a",
+        "size_bytes": 3489
+      },
+      {
+        "path": "configs/bacra_v12_9_gap_directed_bridge.yaml",
+        "role": "formal_config_chain",
+        "sha256": "714f43dbcc556e174f21f93f95f14bf09e5314e4b18264768a76e75a8a33c61c",
+        "size_bytes": 1606
+      },
+      {
+        "path": "configs/bacra_v12_8_independent_geometry_loops.yaml",
+        "role": "formal_config_chain",
+        "sha256": "82312749be4b0b563192116af1a9c681c3a13cdc47ad405e0e7c458e1c878b88",
+        "size_bytes": 3975
+      },
+      {
+        "path": "configs/bacra_v12_7_5_nullspace_projection.yaml",
+        "role": "formal_config_chain",
+        "sha256": "447825075cff3655f1506ca024bdeca0ab92b8885a2a4c3638be6aeccb0c4cf1",
+        "size_bytes": 1362
+      },
+      {
+        "path": "configs/bacra_v12_7_canonical_student.yaml",
+        "role": "formal_config_chain",
+        "sha256": "833e5f7ebba62e205980db09c7eb3538fdcfa9b14b1399c111d205eb92828da7",
+        "size_bytes": 1235
+      },
+      {
+        "path": "configs/bacra_v12_5_composable_lift.yaml",
+        "role": "formal_config_chain",
+        "sha256": "f6485b7d1c7e4ff1f99c0fe656c2efd5656bfdc688df6d56a6e4e929393ab666",
+        "size_bytes": 4772
+      },
+      {
+        "path": "configs/bacra_v12_4_constructive_section.yaml",
+        "role": "formal_config_chain",
+        "sha256": "e8772bce90166f56d7402e5fad4541f63c90e2cc598d29b4666d3f6a411b5fa1",
+        "size_bytes": 3567
+      },
+      {
+        "path": "configs/bacra_v12_3_branch_lift_closure.yaml",
+        "role": "formal_config_chain",
+        "sha256": "46af777e288a7b85199c4c97c166ddf214c218e653d206646baa8a786a6a9f7f",
+        "size_bytes": 3107
+      },
+      {
+        "path": "configs/bacra_v12_2_topology_preserving.yaml",
+        "role": "formal_config_chain",
+        "sha256": "5c27b3eb0b6b9b6048999a81732334d3e600439db11613493958b0b6884af6dd",
+        "size_bytes": 2725
+      },
+      {
+        "path": "configs/bacra_v12_1_capability_bridge.yaml",
+        "role": "formal_config_chain",
+        "sha256": "0d1df6656897bb0e0627fb8d242f96a8911edaa6c326816da3f8eef8cd0dbb4c",
+        "size_bytes": 7202
+      }
+    ],
+    "extends_chain_order": "child_to_base",
+    "preset": "formal"
+  },
+  "historical_artifact_source_manifest": {
+    "limitation": "This original manifest records the protocol-time implementation only; it does not represent teacher-to-summary source continuity and cannot describe the later final-stage runner.",
+    "logical_path": "runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3/00_protocol/source_manifest.json",
+    "recorded_runner_sha256": "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8",
+    "scope": [
+      "protocol"
+    ],
+    "sha256": "620dffc24a78280f98012a92088d0483f90f0ea2997a7682f77d5581fa8ce892",
+    "size_bytes": 3253
+  },
+  "implementation_components": {
+    "family_disposition": {
+      "path": "docs/provenance/v12_12_retry3/family_disposition.json",
+      "role": "family_disposition_policy",
+      "sha256": "5ce4bda5db5064458af11fb710ea0ae89e9ee50ebb1b5137c84f8a2aef2dc049",
+      "size_bytes": 2856
+    },
+    "fixed_point_runner": {
+      "path": "scripts/analysis/run_bacra_v12_12_independent_gold_set_holdout.py",
+      "role": "formal_runner",
+      "sha256": "7238e9ebaf7c53af7771386b55cc092ec995b843ed9f903c7772581b5360fd85",
+      "size_bytes": 77571
+    },
+    "geometry_solver": {
+      "path": "src/quasi_exp/teacher/bacra_geometry_holdout.py",
+      "role": "geometry_solver",
+      "sha256": "95babb5b9b20af7765b88727cfc15fa1e4187c2bdfd88955b1cdd241c1ac1970",
+      "size_bytes": 69662
+    },
+    "gold_assignment": {
+      "path": "src/quasi_exp/teacher/gold_set_student.py",
+      "role": "gold_assignment",
+      "sha256": "183aaa1143306399b21496dcb50ba51c8db2e97ba2e22867613372bd7ec65c04",
+      "size_bytes": 12037
+    }
+  },
+  "limitations": [
+    "The retry3 artifact has mixed runner lineage; no single runner SHA describes all stages.",
+    "The external artifact manifest is a retrospective seal of the current bytes, not proof that the artifact was continuously immutable before sealing.",
+    "Historical runner snapshots are archival evidence and are not on the executable import path.",
+    "Future formal execution must start from a detached clean worktree and pass the fixed-point preflight before writing any stage output."
+  ],
+  "manifest_type": "quasi_exp.source_fixed_point",
+  "runner_lineage": {
+    "mixed_runner_lineage": true,
+    "records": [
+      {
+        "recovery_basis": {
+          "historical_session_id": "019f7fb1-5583-7d12-b300-86d489afc949",
+          "method": "reverse the four later apply_patch operations from the byte-identical final-stage runner",
+          "reverse_hash_chain": [
+            "46e83532e3e965334b1bbbf0f4985be6f7dc8e99c3894578f6928211de8d9b91",
+            "0eecd9b73292eae570f96b376e22514f58387599a87a7d3d4893543d46d0c2f5",
+            "2ffa302c3383726ad567b6376781f1cf8c0aefa9a08e84bfd0d604be12f038a0",
+            "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8"
+          ],
+          "reversed_patch_timestamps_utc": [
+            "2026-07-28T03:59:11.503Z",
+            "2026-07-28T03:57:58.056Z",
+            "2026-07-28T03:57:52.087Z",
+            "2026-07-28T03:57:44.975Z"
+          ],
+          "session_rollout_path_at_recovery": "/home/ubuntu/.codex/sessions/2026/07/20/rollout-2026-07-20T21-22-36-019f7fb1-5583-7d12-b300-86d489afc949.jsonl"
+        },
+        "sha256": "7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8",
+        "size_bytes": 70548,
+        "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_protocol_teacher_7401473aa96939e7fd67ce19a9b4a8ee5bb0bf1b57673cb25afc39ee80f402f8.py",
+        "stages": [
+          "protocol",
+          "teacher"
+        ]
+      },
+      {
+        "recovery_basis": {
+          "method": "byte-identical copy of the final successful runner before fixed-point source-lock edits"
+        },
+        "sha256": "6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130",
+        "size_bytes": 73214,
+        "snapshot_path": "docs/provenance/v12_12_retry3/source_snapshots/run_bacra_v12_12_student_visualize_summary_6b5ad79c648b3db93efbfef7ac0ee1845a01266999ed52bede5a1275332a2130.py",
+        "stages": [
+          "student",
+          "visualize",
+          "summary"
+        ]
+      }
+    ]
+  },
+  "schema_version": 1,
+  "verification_sources": [
+    {
+      "path": "scripts/analysis/verify_artifact_manifest.py",
+      "role": "verification",
+      "sha256": "2a28e1fd735bdbc52935f03d21f3c1c20b45aaf5572893eb02380abc5bdc2a42",
+      "size_bytes": 2629
+    },
+    {
+      "path": "tests/test_bacra_atlas_v12.py",
+      "role": "verification",
+      "sha256": "c86931bd5630a9c2f8ef2e8f0a4814f6572abeaae663d91edff752cfbce4f9ad",
+      "size_bytes": 9158
+    },
+    {
+      "path": "tests/test_bacra_candidates_v12.py",
+      "role": "verification",
+      "sha256": "978838fa9ef946c270d7ee3870c4114eb3201b2f6ade06699705ab546c5407b4",
+      "size_bytes": 4085
+    },
+    {
+      "path": "tests/test_bacra_canonical_student_v12_7.py",
+      "role": "verification",
+      "sha256": "e7c7e5eb341811dd950d80e5c31c4de63632a9293f9a39c099be5518f8472d85",
+      "size_bytes": 6278
+    },
+    {
+      "path": "tests/test_bacra_capability_v12.py",
+      "role": "verification",
+      "sha256": "1963a452cfde61402c6964ec767907e546a585605de2ac460d79c7c15d4b01df",
+      "size_bytes": 5726
+    },
+    {
+      "path": "tests/test_bacra_dense_dataset_v12.py",
+      "role": "verification",
+      "sha256": "5b156c0c4b8ed7bc3fbc30fe3a8acbda976f4a368d8ac8f115c7db0dbd0cde80",
+      "size_bytes": 8411
+    },
+    {
+      "path": "tests/test_bacra_geometry_holdout_v12_8.py",
+      "role": "verification",
+      "sha256": "ba0ce254b363d52a726515513d98760352293b9f70947b71f191f8bab95d9703",
+      "size_bytes": 7283
+    },
+    {
+      "path": "tests/test_bacra_runner_v12.py",
+      "role": "verification",
+      "sha256": "acc02895105247d6a151d1bdf4d3ea515b315b0bbb9f16884e1ac18681156764",
+      "size_bytes": 7340
+    },
+    {
+      "path": "tests/test_canonical_teacher_v10.py",
+      "role": "verification",
+      "sha256": "955e5ad59f1d018c142093073237ba0a47ed0cc3fc745df258750dd75dbdbf21",
+      "size_bytes": 4403
+    },
+    {
+      "path": "tests/test_capability_path_bridge_v12_9.py",
+      "role": "verification",
+      "sha256": "86cfc44cb9b896d2576eaf8f060817779c1084acc7d7192adf688bc6500f9486",
+      "size_bytes": 3935
+    },
+    {
+      "path": "tests/test_gold_set_geometry_holdout_v12_12.py",
+      "role": "verification",
+      "sha256": "54ad360d543697b1ebdd524470c1d625f7de959de487d2d1124ada52523444fe",
+      "size_bytes": 1841
+    },
+    {
+      "path": "tests/test_gold_set_student_v12_11.py",
+      "role": "verification",
+      "sha256": "10571c921faa7a78d9ca95f8f4d921fccce2b617a5415dca2c7007ccacaef7df",
+      "size_bytes": 1428
+    },
+    {
+      "path": "tests/test_topology_task_region_v12_2.py",
+      "role": "verification",
+      "sha256": "ec0d03f8aa128ae613df08d6b5a17ca95ddeb2b21d45b690db2a98ed36e3d0f1",
+      "size_bytes": 4227
+    },
+    {
+      "path": "tests/test_v12_12_provenance.py",
+      "role": "verification",
+      "sha256": "084d25b305f1e79eff50470b7a6f7c66aa338a307431b9ccf2676ee86ed19354",
+      "size_bytes": 14798
+    }
+  ]
+}

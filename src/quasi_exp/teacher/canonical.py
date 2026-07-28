@@ -157,6 +157,7 @@ def link_cyclic_candidates(
     lambda_velocity: float,
     closure_weight: float,
     lambda_posture: float = 0.0,
+    max_transition_deg: float | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     if not candidate_layers or len(candidate_layers) != len(residual_mm):
         raise ValueError("candidate layers and residuals must be non-empty and aligned")
@@ -172,11 +173,22 @@ def link_cyclic_candidates(
     for layer, error in zip(layers, residuals):
         posture = np.mean(np.square(layer) * posture_scale[None, :], axis=1)
         unary.append(np.square(error) + float(lambda_posture) * posture)
-    transitions = [
-        float(lambda_velocity)
-        * np.square(_pairwise_beta_rms_deg(layers[index - 1], layers[index]))
+    transition_gap = [
+        _pairwise_beta_rms_deg(layers[index - 1], layers[index])
         for index in range(1, len(layers))
     ]
+    transitions = [
+        float(lambda_velocity) * np.square(gap)
+        for gap in transition_gap
+    ]
+    if max_transition_deg is not None:
+        limit = float(max_transition_deg)
+        if not math.isfinite(limit) or limit <= 0.0:
+            raise ValueError("max_transition_deg must be finite and positive")
+        transitions = [
+            np.where(gap <= limit, cost, np.inf)
+            for gap, cost in zip(transition_gap, transitions)
+        ]
 
     best_cost = float("inf")
     best_path: list[int] | None = None
@@ -191,6 +203,10 @@ def link_cyclic_candidates(
             parents.append(parent)
         seam = _pairwise_beta_rms_deg(layers[-1], layers[0][start : start + 1])[:, 0]
         total = cost + float(closure_weight) * np.square(seam)
+        if max_transition_deg is not None:
+            total = np.where(
+                seam <= float(max_transition_deg), total, np.inf
+            )
         end = int(np.argmin(total))
         if float(total[end]) >= best_cost:
             continue

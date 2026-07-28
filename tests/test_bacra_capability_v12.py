@@ -11,6 +11,7 @@ from quasi_exp.teacher.capability_map import (
     batch_jacobian_metrics,
     load_beta_bounds_from_config,
     materialize_capability_region,
+    materialize_capability_region_from_samples,
     nested_sobol_beta,
 )
 
@@ -115,3 +116,37 @@ def test_environment_bounds_mismatch_is_rejected(tmp_path: Path) -> None:
     environment = LinearEnvironment(np.tile(np.asarray([[-0.5, 0.5]]), (6, 1)))
     with pytest.raises(ValueError, match="exactly match"):
         materialize_capability_region(environment, np.zeros((2, 3)), _policy(config))
+
+
+def test_augmented_deterministic_pool_is_explicit_and_legacy_default_stays_strict(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    bounds = load_beta_bounds_from_config(config)
+    environment = LinearEnvironment(bounds)
+    policy = _policy(config, count=16)
+    beta = nested_sobol_beta(bounds, power=5, seed=17)
+    xyz = batch_fk(environment, beta, chunk_rows=7)
+    metrics = batch_jacobian_metrics(environment, beta)
+    centerline = np.asarray([[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]])
+
+    with pytest.raises(ValueError, match="complete finite frozen Sobol prefix"):
+        materialize_capability_region_from_samples(
+            environment,
+            centerline,
+            policy,
+            beta_rad=beta,
+            xyz_m=xyz,
+            jacobian_metrics=metrics,
+        )
+
+    manifest = materialize_capability_region_from_samples(
+        environment,
+        centerline,
+        policy,
+        beta_rad=beta,
+        xyz_m=xyz,
+        jacobian_metrics=metrics,
+        require_complete_sobol_prefix=False,
+    )
+    assert manifest.gate.metrics["capability_sample_count"] == len(beta)

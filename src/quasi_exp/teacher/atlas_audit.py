@@ -76,10 +76,16 @@ class AuditMetric:
     missing_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
+        p95_deg = (
+            float(self.p95_deg) if math.isfinite(self.p95_deg) else None
+        )
+        max_deg = (
+            float(self.max_deg) if math.isfinite(self.max_deg) else None
+        )
         return {
             "sample_count": int(self.sample_count),
-            "p95_deg": float(self.p95_deg),
-            "max_deg": float(self.max_deg),
+            "p95_deg": p95_deg,
+            "max_deg": max_deg,
             "missing_count": int(self.missing_count),
             "gate_pass": bool(self.gate_pass),
         }
@@ -103,6 +109,395 @@ class AtlasAuditReport:
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence_limitations", tuple(self.evidence_limitations))
         object.__setattr__(self, "checks", MappingProxyType(dict(self.checks)))
+
+
+@dataclass(frozen=True)
+class AuditExecutionTask:
+    """One independently executable fresh-continuation path."""
+
+    task_id: str
+    chart_id: int
+    kind: str
+    path: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_id", str(self.task_id))
+        object.__setattr__(self, "chart_id", int(self.chart_id))
+        object.__setattr__(self, "kind", str(self.kind))
+        object.__setattr__(self, "path", tuple(int(value) for value in self.path))
+        if not self.task_id or not self.path:
+            raise ValueError("audit execution task needs a non-empty ID and path")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "chart_id": self.chart_id,
+            "kind": self.kind,
+            "path": list(self.path),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "AuditExecutionTask":
+        return cls(
+            task_id=str(payload["task_id"]),
+            chart_id=int(payload["chart_id"]),
+            kind=str(payload["kind"]),
+            path=tuple(payload["path"]),
+        )
+
+
+@dataclass(frozen=True)
+class EndpointAuditPlan:
+    chart_id: int
+    endpoint_node_id: int
+    paths: tuple[tuple[int, ...], ...]
+    forward_task_ids: tuple[str, ...]
+    reverse_task_ids: tuple[str, ...]
+    loop_task_ids: tuple[str, ...]
+    repeat_task_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AtlasAuditPlan:
+    """Deterministic inventory separated from numerical path execution."""
+
+    tasks: tuple[AuditExecutionTask, ...]
+    endpoints: tuple[EndpointAuditPlan, ...]
+    endpoint_count_seen: int
+    endpoint_shortfall: int
+    policy: AtlasAuditPolicy
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "tasks": [task.as_dict() for task in self.tasks],
+            "endpoints": [
+                {
+                    "chart_id": endpoint.chart_id,
+                    "endpoint_node_id": endpoint.endpoint_node_id,
+                    "paths": [list(path) for path in endpoint.paths],
+                    "forward_task_ids": list(endpoint.forward_task_ids),
+                    "reverse_task_ids": list(endpoint.reverse_task_ids),
+                    "loop_task_ids": list(endpoint.loop_task_ids),
+                    "repeat_task_ids": list(endpoint.repeat_task_ids),
+                }
+                for endpoint in self.endpoints
+            ],
+            "endpoint_count_seen": self.endpoint_count_seen,
+            "endpoint_shortfall": self.endpoint_shortfall,
+            "policy": {
+                name: getattr(self.policy, name)
+                for name in (
+                    "endpoint_count",
+                    "paths_per_endpoint",
+                    "loop_count",
+                    "path_p95_deg",
+                    "loop_p95_deg",
+                    "direction_p95_deg",
+                    "overlap_p95_deg",
+                    "repeat_p95_deg",
+                    "common_max_deg",
+                )
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "AtlasAuditPlan":
+        policy = AtlasAuditPolicy(**dict(payload["policy"]))
+        return cls(
+            tasks=tuple(
+                AuditExecutionTask.from_dict(row) for row in payload["tasks"]
+            ),
+            endpoints=tuple(
+                EndpointAuditPlan(
+                    chart_id=int(row["chart_id"]),
+                    endpoint_node_id=int(row["endpoint_node_id"]),
+                    paths=tuple(tuple(path) for path in row["paths"]),
+                    forward_task_ids=tuple(row["forward_task_ids"]),
+                    reverse_task_ids=tuple(row["reverse_task_ids"]),
+                    loop_task_ids=tuple(row["loop_task_ids"]),
+                    repeat_task_ids=tuple(row["repeat_task_ids"]),
+                )
+                for row in payload["endpoints"]
+            ),
+            endpoint_count_seen=int(payload["endpoint_count_seen"]),
+            endpoint_shortfall=int(payload["endpoint_shortfall"]),
+            policy=policy,
+        )
+
+
+def plan_atlas_audit(
+    atlas: CanonicalAtlas,
+    *,
+    policy: AtlasAuditPolicy | None = None,
+) -> AtlasAuditPlan:
+    """Freeze every independent path execution before subprocess sharding."""
+
+    active = policy or AtlasAuditPolicy()
+    tasks: list[AuditExecutionTask] = []
+    endpoints_out: list[EndpointAuditPlan] = []
+    endpoints_seen = 0
+    endpoint_shortfall = 0
+    for chart in atlas.charts:
+        adjacency = _selected_task_adjacency(atlas, chart)
+        endpoints = _audit_endpoints(chart, adjacency, active.endpoint_count)
+        endpoints_seen += len(endpoints)
+        endpoint_shortfall += max(0, active.endpoint_count - len(endpoints))
+        for endpoint_index, endpoint in enumerate(endpoints):
+            paths = _edge_penalized_paths(
+                adjacency,
+                chart.root_key[0],
+                endpoint,
+                active.paths_per_endpoint,
+            )
+            prefix = (
+                f"chart{chart.chart_id:03d}_"
+                f"endpoint{endpoint_index:04d}_node{endpoint:08d}"
+            )
+            forward_ids: list[str] = []
+            reverse_ids: list[str] = []
+            loop_ids: list[str] = []
+            repeat_ids: list[str] = []
+            if len(paths) >= active.paths_per_endpoint:
+                for path_index, path in enumerate(paths):
+                    task_id = f"{prefix}_path{path_index:03d}_forward"
+                    forward_ids.append(task_id)
+                    tasks.append(
+                        AuditExecutionTask(
+                            task_id, chart.chart_id, "forward", path
+                        )
+                    )
+                    reverse_id = f"{prefix}_path{path_index:03d}_reverse"
+                    reverse_ids.append(reverse_id)
+                    tasks.append(
+                        AuditExecutionTask(
+                            reverse_id,
+                            chart.chart_id,
+                            "reverse",
+                            tuple(reversed(path)),
+                        )
+                    )
+                for alternative_index, alternative in enumerate(paths[1:], start=1):
+                    loop_id = f"{prefix}_loop{alternative_index:03d}"
+                    loop_ids.append(loop_id)
+                    loop_path = paths[0] + tuple(reversed(alternative))[1:]
+                    tasks.append(
+                        AuditExecutionTask(
+                            loop_id, chart.chart_id, "loop", loop_path
+                        )
+                    )
+                for repeat_index in range(2):
+                    repeat_id = f"{prefix}_repeat{repeat_index:03d}"
+                    repeat_ids.append(repeat_id)
+                    tasks.append(
+                        AuditExecutionTask(
+                            repeat_id,
+                            chart.chart_id,
+                            "repeat",
+                            paths[0],
+                        )
+                    )
+            endpoints_out.append(
+                EndpointAuditPlan(
+                    chart_id=chart.chart_id,
+                    endpoint_node_id=endpoint,
+                    paths=paths,
+                    forward_task_ids=tuple(forward_ids),
+                    reverse_task_ids=tuple(reverse_ids),
+                    loop_task_ids=tuple(loop_ids),
+                    repeat_task_ids=tuple(repeat_ids),
+                )
+            )
+    task_ids = [task.task_id for task in tasks]
+    if len(set(task_ids)) != len(task_ids):
+        raise RuntimeError("audit plan generated duplicate task IDs")
+    return AtlasAuditPlan(
+        tasks=tuple(tasks),
+        endpoints=tuple(endpoints_out),
+        endpoint_count_seen=endpoints_seen,
+        endpoint_shortfall=endpoint_shortfall,
+        policy=active,
+    )
+
+
+def reduce_planned_atlas_audit(
+    atlas: CanonicalAtlas,
+    plan: AtlasAuditPlan,
+    traces_by_task_id: Mapping[str, PathTrace],
+    *,
+    evidence_limitations: Sequence[str] = (),
+) -> AtlasAuditReport:
+    """Reduce independently executed traces with legacy audit semantics."""
+
+    active = plan.policy
+    path_values: list[float] = []
+    loop_values: list[float] = []
+    direction_values: list[float] = []
+    repeat_values: list[float] = []
+    path_missing = int(plan.endpoint_shortfall)
+    loop_missing = 0
+    direction_missing = 0
+    repeat_missing = 0
+    loops_seen = 0
+    for endpoint in plan.endpoints:
+        if len(endpoint.paths) < active.paths_per_endpoint:
+            path_missing += 1
+            direction_missing += 1
+            loop_missing += 1
+            continue
+        forward = [
+            traces_by_task_id.get(task_id)
+            for task_id in endpoint.forward_task_ids
+        ]
+        if any(
+            trace is None or not _trace_matches(trace, path)
+            for trace, path in zip(forward, endpoint.paths)
+        ):
+            path_missing += 1
+            direction_missing += 1
+            loop_missing += 1
+            continue
+        valid_forward = [trace for trace in forward if trace is not None]
+        for left_index, left in enumerate(valid_forward):
+            for right in valid_forward[left_index + 1 :]:
+                path_values.append(
+                    beta_rms_deg(
+                        left.beta_rad_by_node[-1],
+                        right.beta_rad_by_node[-1],
+                    )
+                )
+        for path, forward_trace, task_id in zip(
+            endpoint.paths,
+            valid_forward,
+            endpoint.reverse_task_ids,
+        ):
+            reverse_path = tuple(reversed(path))
+            reverse_trace = traces_by_task_id.get(task_id)
+            if reverse_trace is None or not _trace_matches(
+                reverse_trace, reverse_path
+            ):
+                direction_missing += 1
+            else:
+                direction_values.extend(
+                    beta_rms_deg(left, right)
+                    for left, right in zip(
+                        forward_trace.beta_rad_by_node,
+                        reverse_trace.beta_rad_by_node[::-1],
+                    )
+                )
+        for task_id in endpoint.loop_task_ids:
+            if loops_seen >= active.loop_count:
+                break
+            task = next(
+                item for item in plan.tasks if item.task_id == task_id
+            )
+            trace = traces_by_task_id.get(task_id)
+            if trace is None or not _trace_matches(trace, task.path):
+                loop_missing += 1
+            else:
+                loop_values.append(
+                    beta_rms_deg(
+                        trace.beta_rad_by_node[0],
+                        trace.beta_rad_by_node[-1],
+                    )
+                )
+                loops_seen += 1
+        repeats = [
+            traces_by_task_id.get(task_id)
+            for task_id in endpoint.repeat_task_ids
+        ]
+        repeat_path = endpoint.paths[0]
+        if len(repeats) < 2 or any(
+            trace is None or not _trace_matches(trace, repeat_path)
+            for trace in repeats[:2]
+        ):
+            repeat_missing += 1
+        else:
+            first, second = repeats[0], repeats[1]
+            assert first is not None and second is not None
+            repeat_values.extend(
+                beta_rms_deg(left, right)
+                for left, right in zip(
+                    first.beta_rad_by_node,
+                    second.beta_rad_by_node,
+                )
+            )
+    if loops_seen < active.loop_count:
+        loop_missing += active.loop_count - loops_seen
+    path_metric = _metric(
+        path_values,
+        active.path_p95_deg,
+        active.common_max_deg,
+        path_missing,
+    )
+    loop_metric = _metric(
+        loop_values,
+        active.loop_p95_deg,
+        active.common_max_deg,
+        loop_missing,
+    )
+    direction_metric = _metric(
+        direction_values,
+        active.direction_p95_deg,
+        active.common_max_deg,
+        direction_missing,
+    )
+    repeat_metric = _metric(
+        repeat_values,
+        active.repeat_p95_deg,
+        active.common_max_deg,
+        repeat_missing,
+    )
+    overlap_metric, multi_chart_overlap_valid = _overlap_metric(atlas, active)
+    stability_pass = (
+        path_metric.gate_pass
+        and loop_metric.gate_pass
+        and direction_metric.gate_pass
+        and repeat_metric.gate_pass
+    )
+    representation = _representation_decision(
+        chart_count=len(atlas.charts),
+        stability_pass=stability_pass,
+        path_metric=path_metric,
+        loop_metric=loop_metric,
+        direction_metric=direction_metric,
+        repeat_metric=repeat_metric,
+        overlap_metric=overlap_metric,
+        multi_chart_overlap_valid=multi_chart_overlap_valid,
+    )
+    gate_pass = bool(
+        stability_pass
+        and (
+            overlap_metric.gate_pass
+            or (len(atlas.charts) > 1 and multi_chart_overlap_valid)
+        )
+        and representation != "reject_insufficient_atlas_evidence"
+    )
+    checks = {
+        "path": path_metric.as_dict(),
+        "loop": loop_metric.as_dict(),
+        "direction": direction_metric.as_dict(),
+        "repeat": repeat_metric.as_dict(),
+        "overlap": overlap_metric.as_dict(),
+        "multi_chart_overlap_valid": {
+            "gate_pass": bool(multi_chart_overlap_valid)
+        },
+        "representation_decision": {"value": representation},
+    }
+    return AtlasAuditReport(
+        path=path_metric,
+        loop=loop_metric,
+        direction=direction_metric,
+        repeat=repeat_metric,
+        overlap=overlap_metric,
+        multi_chart_overlap_valid=multi_chart_overlap_valid,
+        representation_decision=representation,
+        gate_pass=gate_pass,
+        endpoint_count=plan.endpoint_count_seen,
+        loop_count=loops_seen,
+        evidence_limitations=tuple(evidence_limitations),
+        checks=checks,
+    )
 
 
 def replay_product_graph_path(atlas: CanonicalAtlas, chart: CanonicalChart, path: tuple[int, ...]) -> PathTrace:

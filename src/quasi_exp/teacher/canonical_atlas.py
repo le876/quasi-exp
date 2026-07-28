@@ -174,6 +174,8 @@ class ContinuationOutcome:
     corrector_iterations: int = 0
     status: str = "unknown"
     target_cluster_id: int | None = None
+    minimum_margin_deg: float | None = None
+    waypoint_count: int = 1
 
     def __post_init__(self) -> None:
         beta = np.asarray(self.beta_rad, dtype=float).reshape(6)
@@ -190,6 +192,14 @@ class ContinuationOutcome:
             "target_cluster_id",
             None if self.target_cluster_id is None else int(self.target_cluster_id),
         )
+        if self.minimum_margin_deg is not None:
+            margin = float(self.minimum_margin_deg)
+            if not np.isfinite(margin):
+                raise ValueError("continuation minimum margin must be finite")
+            object.__setattr__(self, "minimum_margin_deg", margin)
+        object.__setattr__(self, "waypoint_count", int(self.waypoint_count))
+        if self.waypoint_count < 0:
+            raise ValueError("continuation waypoint_count must be non-negative")
 
 
 ContinuationAdapter = Callable[[AtlasCandidate, AtlasTaskNode], ContinuationOutcome]
@@ -206,6 +216,8 @@ class DirectedContinuationEdge:
     residual_mm: float
     corrector_iterations: int
     status: str
+    minimum_margin_deg: float | None = None
+    waypoint_count: int = 1
 
     def __post_init__(self) -> None:
         beta = np.asarray(self.continuation_beta_rad, dtype=float).reshape(6)
@@ -216,6 +228,14 @@ class DirectedContinuationEdge:
         object.__setattr__(self, "residual_mm", float(self.residual_mm))
         object.__setattr__(self, "corrector_iterations", int(self.corrector_iterations))
         object.__setattr__(self, "status", str(self.status))
+        if self.minimum_margin_deg is not None:
+            margin = float(self.minimum_margin_deg)
+            if not np.isfinite(margin):
+                raise ValueError("directed continuation minimum margin must be finite")
+            object.__setattr__(self, "minimum_margin_deg", margin)
+        object.__setattr__(self, "waypoint_count", int(self.waypoint_count))
+        if self.waypoint_count < 0:
+            raise ValueError("directed continuation waypoint_count must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -513,17 +533,53 @@ def build_product_graph(
                                     residual_mm=outcome.residual_mm,
                                     corrector_iterations=outcome.corrector_iterations,
                                     status=outcome.status,
+                                    minimum_margin_deg=outcome.minimum_margin_deg,
+                                    waypoint_count=outcome.waypoint_count,
                                 )
                             )
                             accepted = True
                 if not accepted:
                     rejected_count += 1
 
+    return assemble_product_graph(
+        nodes,
+        retained,
+        directed,
+        continuation_attempt_count=attempt_count,
+        rejected_continuation_count=rejected_count,
+        policy=active_policy,
+    )
+
+
+def assemble_product_graph(
+    task_nodes: Sequence[AtlasTaskNode] | Any,
+    candidates: Sequence[AtlasCandidate] | Any,
+    directed_edges: Sequence[DirectedContinuationEdge],
+    *,
+    continuation_attempt_count: int,
+    rejected_continuation_count: int,
+    policy: AtlasPolicy | None = None,
+) -> ProductGraph:
+    """Assemble deterministic robust edges from independent directed shards.
+
+    This is the process-safe reduction seam used by V12.2.  Shards perform
+    actual continuation independently; the parent alone owns duplicate
+    resolution, bidirectional pairing and stable ordering.
+    """
+
+    active_policy = policy or AtlasPolicy()
+    nodes = _coerce_task_nodes(task_nodes)
+    retained = tuple(
+        candidate
+        for candidate in _coerce_candidates(candidates)
+        if candidate.is_strict_feasible
+    )
+    candidate_by_key = {candidate.key: candidate for candidate in retained}
     # A duplicate indicates an adapter made the same source/target solve look
     # like multiple edges.  Keep the best numerical match deterministically.
     directed_by_key: dict[tuple[CandidateKey, CandidateKey], DirectedContinuationEdge] = {}
     for edge in sorted(
-        directed,
+        directed_edges,
         key=lambda item: (
             item.source_key,
             item.target_key,
@@ -565,8 +621,8 @@ def build_product_graph(
         candidates=retained,
         directed_edges=directed_rows,
         robust_edges=robust_rows,
-        continuation_attempt_count=attempt_count,
-        rejected_continuation_count=rejected_count,
+        continuation_attempt_count=int(continuation_attempt_count),
+        rejected_continuation_count=int(rejected_continuation_count),
     )
 
 
@@ -625,6 +681,15 @@ def build_canonical_atlas(
 
     active_policy = policy or AtlasPolicy()
     graph = build_product_graph(task_nodes, candidates, continuation, policy=active_policy)
+    return build_canonical_atlas_from_product_graph(graph, policy=active_policy)
+
+
+def build_canonical_atlas_from_product_graph(
+    graph: ProductGraph, *, policy: AtlasPolicy | None = None
+) -> CanonicalAtlas:
+    """Extract deterministic canonical sections from an assembled graph."""
+
+    active_policy = policy or AtlasPolicy()
     root_ids = deterministic_root_nodes(graph.task_nodes, count=active_policy.root_count)
     proposals: list[SectionProposal] = []
     for root_node_id in root_ids:

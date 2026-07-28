@@ -76,3 +76,22 @@ def test_nullspace_seeds_and_solver_diagnostics_are_recorded() -> None:
     bounded = [row for row in rows if row.solver == "bounded_least_squares"]
     assert bounded and all({"cost", "optimality", "nfev"} <= row.diagnostics.keys() for row in bounded if row.solver_success)
     assert all("sigma1_m" in row.diagnostics for row in rows if np.isfinite(row.min_margin_deg))
+
+
+def test_exact_task_node_seed_has_stable_priority() -> None:
+    env = _RedundantAffineEnvironment()
+    exact = np.deg2rad(np.asarray([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]))
+    bank = solve_candidate_bank(
+        env,
+        np.asarray([[math.radians(2.0), 0.0, 0.0]]),
+        CandidatePolicy(
+            candidate_budget_per_node=2,
+            difficult_candidate_budget_per_node=2,
+        ),
+        node_seed_beta_rad={0: exact},
+    )
+    assert [row.source for row in bank.for_node(0)] == [
+        "node_exact_seed",
+        "node_exact_seed",
+    ]
+    assert all(row.quality is CandidateQuality.GOLD for row in bank.for_node(0))

@@ -5,9 +5,13 @@ import math
 import numpy as np
 
 from quasi_exp.teacher.atlas_audit import (
+    AuditMetric,
+    AtlasAuditPlan,
     AtlasAuditPolicy,
     PathTrace,
     audit_atlas,
+    plan_atlas_audit,
+    reduce_planned_atlas_audit,
     replay_product_graph_path,
 )
 from quasi_exp.teacher.canonical_atlas import (
@@ -102,6 +106,24 @@ def test_product_graph_requires_both_directed_continuations_and_uses_frozen_cost
     assert one_way_graph.robust_edges == ()
 
 
+def test_missing_audit_metric_is_strict_json_safe_and_fail_closed() -> None:
+    metric = AuditMetric(
+        sample_count=0,
+        p95_deg=math.inf,
+        max_deg=math.inf,
+        missing_count=3,
+        gate_pass=False,
+    )
+
+    assert metric.as_dict() == {
+        "sample_count": 0,
+        "p95_deg": None,
+        "max_deg": None,
+        "missing_count": 3,
+        "gate_pass": False,
+    }
+
+
 def test_chart_ids_are_deterministic_and_distinct_branches_do_not_merge() -> None:
     nodes = (
         AtlasTaskNode(0, [0.0, 0.0, 0.0], (1,)),
@@ -167,6 +189,59 @@ def test_audit_accepts_path_independent_static_chart_with_independent_repeat() -
     assert report.representation_decision == "static_xyz_to_beta6"
     assert report.path.gate_pass and report.loop.gate_pass
     assert report.direction.gate_pass and report.repeat.gate_pass
+
+
+def test_planned_audit_reduction_matches_legacy_serial_audit() -> None:
+    nodes = _diamond_nodes()
+    candidates = tuple(
+        _candidate(node, f"n{node}_c0", 0.1 * node)
+        for node in range(4)
+    )
+    by_node = {
+        node: [candidate] for node, candidate in enumerate(candidates)
+    }
+    atlas = build_canonical_atlas(
+        nodes,
+        candidates,
+        _exact_continuation(by_node),
+        policy=AtlasPolicy(root_count=1),
+    )
+    policy = AtlasAuditPolicy(
+        endpoint_count=1, paths_per_endpoint=2, loop_count=1
+    )
+
+    def execute(chart, path):
+        return replay_product_graph_path(atlas, chart, path)
+
+    legacy = audit_atlas(
+        atlas,
+        policy=policy,
+        path_executor=execute,
+        repeat_executor=lambda chart, path: (
+            execute(chart, path),
+            execute(chart, path),
+        ),
+    )
+    plan = plan_atlas_audit(atlas, policy=policy)
+    roundtrip = AtlasAuditPlan.from_dict(plan.as_dict())
+    charts = {chart.chart_id: chart for chart in atlas.charts}
+    traces = {
+        task.task_id: execute(charts[task.chart_id], task.path)
+        for task in roundtrip.tasks
+    }
+    parallel = reduce_planned_atlas_audit(
+        atlas,
+        roundtrip,
+        traces,
+        evidence_limitations=("planned_test_execution",),
+    )
+
+    assert parallel.gate_pass == legacy.gate_pass
+    assert parallel.representation_decision == legacy.representation_decision
+    for name in ("path", "loop", "direction", "repeat", "overlap"):
+        assert getattr(parallel, name).as_dict() == getattr(
+            legacy, name
+        ).as_dict()
 
 
 def test_audit_does_not_call_missing_repeat_evidence_stable_and_detects_path_dependence() -> None:

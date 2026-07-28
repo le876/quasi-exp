@@ -76,6 +76,25 @@ def test_cyclic_linker_prefers_one_smooth_branch_over_pointwise_switches() -> No
     assert report["delta_beta_rms_max_deg"] < 1.0
 
 
+def test_cyclic_linker_removes_edges_above_hard_transition_limit() -> None:
+    layers = [
+        np.deg2rad(np.asarray([[0.0] * 6])),
+        np.deg2rad(np.asarray([[3.0] * 6])),
+        np.deg2rad(np.asarray([[0.0] * 6])),
+    ]
+
+    selected, report = link_cyclic_candidates(
+        layers,
+        [np.asarray([0.0])] * 3,
+        lambda_velocity=1.0,
+        closure_weight=5.0,
+        max_transition_deg=2.0,
+    )
+
+    assert selected.shape == (0, 6)
+    assert report == {"success": False, "reason": "no_closed_path"}
+
+
 def test_teacher_policy_fingerprint_binds_solver_semantics() -> None:
     baseline = TeacherPolicy(variant=TeacherVariant.T3, candidate_budget=16)
     same = TeacherPolicy(variant=TeacherVariant.T3, candidate_budget=16)

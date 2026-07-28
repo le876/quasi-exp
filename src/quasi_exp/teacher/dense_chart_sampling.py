@@ -40,6 +40,9 @@ class DenseSamplingPolicy:
     dual_anchor_gap_deg: float = 0.5
     residual_max_mm: float = 3.0
     gold_margin_deg: float = 1.5
+    max_tetrahedron_edge_mm: float | None = None
+    target_support_max_mm: float | None = None
+    canonical_barycentric_retraction: bool = False
     seed: int = 20260735
     candidate_policy: TeacherPolicy = TeacherPolicy()
 
@@ -52,6 +55,12 @@ class DenseSamplingPolicy:
             value = float(getattr(self, name))
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        for name in ("max_tetrahedron_edge_mm", "target_support_max_mm"):
+            value = getattr(self, name)
+            if value is not None and (
+                not math.isfinite(float(value)) or float(value) <= 0.0
+            ):
+                raise ValueError(f"{name} must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -140,6 +149,8 @@ def _empty_rows() -> pd.DataFrame:
         "residual_mm",
         "joint_margin_deg",
         "dual_anchor_gap_deg",
+        "canonical_anchor_gap_deg",
+        "chart_support_distance_mm",
         "anchor_a_idx",
         "anchor_b_idx",
         "tetrahedron_idx",
@@ -149,70 +160,193 @@ def _empty_rows() -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
-def densify_chart(
-    environment: DenseForwardEnvironment,
+def canonical_anchor_rows(
+    chart_frame: pd.DataFrame, *, max_rows: int
+) -> pd.DataFrame:
+    """Materialize certified chart selections as deterministic dense anchors."""
+
+    required = {
+        "chart_id",
+        "node_id",
+        "candidate_id",
+        *XYZ_COLUMNS,
+        *BETA_COLUMNS,
+        "quality",
+        "residual_mm",
+        "min_margin_deg",
+    }
+    missing = sorted(required - set(chart_frame.columns))
+    if missing:
+        raise ValueError(f"canonical chart missing anchor columns: {missing}")
+    limit = min(max(0, int(max_rows)), len(chart_frame))
+    ordered = (
+        chart_frame.sort_values(
+            ["chart_id", "node_id", "candidate_id"], kind="stable"
+        )
+        .iloc[:limit]
+        .copy()
+    )
+    values = ordered[[*XYZ_COLUMNS, *BETA_COLUMNS]].to_numpy(dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError("canonical anchor coordinates and labels must be finite")
+    anchors = pd.DataFrame(
+        {
+            "sample_id": [
+                f"canonical:{chart_id}:{int(node_id)}:{candidate_id}"
+                for chart_id, node_id, candidate_id in ordered[
+                    ["chart_id", "node_id", "candidate_id"]
+                ].itertuples(index=False, name=None)
+            ],
+            "chart_id": ordered["chart_id"].to_numpy(),
+            **{
+                name: ordered[name].to_numpy(dtype=float)
+                for name in (*XYZ_COLUMNS, *BETA_COLUMNS)
+            },
+            "residual_mm": ordered["residual_mm"].to_numpy(dtype=float),
+            "joint_margin_deg": ordered["min_margin_deg"].to_numpy(dtype=float),
+            "dual_anchor_gap_deg": np.zeros(limit, dtype=float),
+            "canonical_anchor_gap_deg": np.zeros(limit, dtype=float),
+            "chart_support_distance_mm": np.zeros(limit, dtype=float),
+            "anchor_a_idx": np.full(limit, -1, dtype=np.int64),
+            "anchor_b_idx": np.full(limit, -1, dtype=np.int64),
+            "tetrahedron_idx": np.full(limit, -1, dtype=np.int64),
+            "corrector_a_iterations": np.zeros(limit, dtype=np.int64),
+            "corrector_b_iterations": np.zeros(limit, dtype=np.int64),
+            "canonical_corrector_iterations": np.zeros(
+                limit, dtype=np.int64
+            ),
+            "accepted": np.ones(limit, dtype=bool),
+            "reason": np.full(limit, "canonical_anchor", dtype=object),
+            "source_node_id": ordered["node_id"].to_numpy(dtype=np.int64),
+            "source_candidate_id": ordered["candidate_id"].astype(str).to_numpy(),
+        }
+    )
+    return anchors
+
+
+def plan_dense_attempts(
     chart_xyz_m: np.ndarray,
     chart_beta_rad: np.ndarray,
     *,
-    chart_id: int | str,
     policy: DenseSamplingPolicy,
-) -> DenseSamplingResult:
-    """Generate strict Gold labels inside the convex hull of a sparse chart.
-
-    Two geometrically independent sparse anchors predict and independently
-    correct every target.  A row is admitted only if both corrections converge,
-    agree, satisfy the hard FK residual and retain the registered Gold margin.
-    No failed attempt is padded into the returned dataset.
-    """
+) -> pd.DataFrame:
+    """Freeze the serial RNG stream before any corrector work is sharded."""
 
     xyz, beta = _as_chart_arrays(chart_xyz_m, chart_beta_rad)
-    try:
-        tessellation = Delaunay(xyz)
-    except Exception as exc:
-        return DenseSamplingResult(
-            rows=_empty_rows(),
-            attempts=pd.DataFrame(
-                [{"accepted": False, "reason": f"delaunay_failed:{type(exc).__name__}"}]
-            ),
-            report={
-                "gate_pass": False,
-                "reason": "chart_has_no_3d_tessellation",
-                "requested_rows": int(policy.row_count),
-                "accepted_rows": 0,
-                "attempt_count": 0,
-                "acceptance_ratio": 0.0,
-            },
-        )
+    tessellation = Delaunay(xyz)
     simplices = np.asarray(tessellation.simplices, dtype=np.int64)
     if len(simplices) == 0:
         raise ValueError("chart tessellation contains no tetrahedra")
     volumes = np.abs(
-        np.linalg.det(
-            xyz[simplices[:, 1:]] - xyz[simplices[:, :1]]
-        )
+        np.linalg.det(xyz[simplices[:, 1:]] - xyz[simplices[:, :1]])
     ) / 6.0
     valid = np.isfinite(volumes) & (volumes > np.finfo(float).eps)
     simplices = simplices[valid]
     volumes = volumes[valid]
+    tetrahedron_max_edge_mm = np.asarray(
+        [
+            max(
+                np.linalg.norm(xyz[simplex[left]] - xyz[simplex[right]])
+                for left in range(4)
+                for right in range(left + 1, 4)
+            )
+            * 1000.0
+            for simplex in simplices
+        ],
+        dtype=float,
+    )
+    if policy.max_tetrahedron_edge_mm is not None:
+        local = tetrahedron_max_edge_mm <= float(
+            policy.max_tetrahedron_edge_mm
+        )
+        simplices = simplices[local]
+        volumes = volumes[local]
+        tetrahedron_max_edge_mm = tetrahedron_max_edge_mm[local]
     if len(simplices) == 0:
-        raise ValueError("chart tessellation contains no non-degenerate tetrahedra")
+        raise ValueError(
+            "chart tessellation contains no admitted local tetrahedra"
+        )
     probabilities = volumes / np.sum(volumes)
     rng = np.random.default_rng(int(policy.seed))
     tree = cKDTree(xyz)
-    bounds = np.asarray(environment.bounds, dtype=float).reshape(6, 2)
-    accepted: list[dict[str, Any]] = []
-    attempts: list[dict[str, Any]] = []
     limit = int(policy.row_count) * int(policy.attempt_multiplier)
-
+    rows: list[dict[str, Any]] = []
     for attempt_idx in range(limit):
-        tetrahedron_idx = int(rng.choice(len(simplices), p=probabilities))
+        tetrahedron_idx = int(
+            rng.choice(len(simplices), p=probabilities)
+        )
         vertex_ids = simplices[tetrahedron_idx]
-        target, _weights = _sample_barycentric(xyz[vertex_ids], rng)
-        nearest = np.asarray(tree.query(target, k=min(len(xyz), 8))[1], dtype=np.int64).reshape(-1)
+        target, barycentric_weights = _sample_barycentric(
+            xyz[vertex_ids], rng
+        )
+        canonical_seed_beta = barycentric_weights @ beta[vertex_ids]
+        nearest = np.asarray(
+            tree.query(target, k=min(len(xyz), 8))[1],
+            dtype=np.int64,
+        ).reshape(-1)
         anchor_a_idx = int(nearest[0])
-        distances = np.linalg.norm(xyz[nearest] - xyz[anchor_a_idx], axis=1)
+        distances = np.linalg.norm(
+            xyz[nearest] - xyz[anchor_a_idx], axis=1
+        )
         anchor_b_idx = int(nearest[int(np.argmax(distances))])
+        rows.append(
+            {
+                "attempt_idx": attempt_idx,
+                "x_m": float(target[0]),
+                "y_m": float(target[1]),
+                "z_m": float(target[2]),
+                "anchor_a_idx": anchor_a_idx,
+                "anchor_b_idx": anchor_b_idx,
+                "tetrahedron_idx": tetrahedron_idx,
+                "tetrahedron_max_edge_mm": float(
+                    tetrahedron_max_edge_mm[tetrahedron_idx]
+                ),
+                **{
+                    f"canonical_seed_beta{index + 1}_rad": float(value)
+                    for index, value in enumerate(canonical_seed_beta)
+                },
+            }
+        )
+    return pd.DataFrame(rows)
 
+
+def solve_dense_attempts(
+    environment: DenseForwardEnvironment,
+    chart_xyz_m: np.ndarray,
+    chart_beta_rad: np.ndarray,
+    attempts: pd.DataFrame,
+    *,
+    chart_id: int | str,
+    policy: DenseSamplingPolicy,
+) -> pd.DataFrame:
+    """Solve an independently executable slice of a frozen attempt plan."""
+
+    xyz, beta = _as_chart_arrays(chart_xyz_m, chart_beta_rad)
+    required = {
+        "attempt_idx",
+        *XYZ_COLUMNS,
+        "anchor_a_idx",
+        "anchor_b_idx",
+        "tetrahedron_idx",
+    }
+    missing = sorted(required - set(attempts.columns))
+    if missing:
+        raise ValueError(f"dense attempt plan missing columns: {missing}")
+    bounds = np.asarray(environment.bounds, dtype=float).reshape(6, 2)
+    tree = cKDTree(xyz)
+    output: list[dict[str, Any]] = []
+    for attempt in attempts.sort_values("attempt_idx", kind="stable").itertuples(
+        index=False
+    ):
+        attempt_idx = int(attempt.attempt_idx)
+        target = np.asarray(
+            [attempt.x_m, attempt.y_m, attempt.z_m], dtype=float
+        )
+        chart_support_distance_mm = float(
+            tree.query(target, k=1)[0] * 1000.0
+        )
+        anchor_a_idx = int(attempt.anchor_a_idx)
+        anchor_b_idx = int(attempt.anchor_b_idx)
         corrected: list[np.ndarray] = []
         residuals: list[float] = []
         successes: list[bool] = []
@@ -238,56 +372,140 @@ def densify_chart(
             corrected[1],
             weights=policy.candidate_policy.beta_weights,
         )
-        chosen_index = int(np.argmin(residuals))
-        chosen = corrected[chosen_index]
-        achieved = np.asarray(environment.fk(chosen.reshape(1, 6)), dtype=float)[0]
-        verified_residual_mm = float(np.linalg.norm(achieved - target) * 1000.0)
+        canonical_gap_deg = 0.0
+        canonical_success = True
+        canonical_iterations = 0
+        if policy.canonical_barycentric_retraction:
+            canonical_seed = np.asarray(
+                [
+                    getattr(
+                        attempt,
+                        f"canonical_seed_beta{index + 1}_rad",
+                    )
+                    for index in range(6)
+                ],
+                dtype=float,
+            )
+            (
+                chosen,
+                _canonical_residual_mm,
+                canonical_iterations,
+                canonical_success,
+            ) = _correct_target(
+                environment,
+                target,
+                canonical_seed,
+                policy.candidate_policy,
+            )
+            canonical_gap_deg = max(
+                weighted_beta_gap_deg(
+                    chosen,
+                    value,
+                    weights=policy.candidate_policy.beta_weights,
+                )
+                for value in corrected
+            )
+        else:
+            chosen_index = int(np.argmin(residuals))
+            chosen = corrected[chosen_index]
+        achieved = np.asarray(
+            environment.fk(chosen.reshape(1, 6)), dtype=float
+        )[0]
+        verified_residual_mm = float(
+            np.linalg.norm(achieved - target) * 1000.0
+        )
         margin_deg = _margin_deg(chosen, bounds)
 
         reason = "accepted"
-        if not all(successes):
+        if not canonical_success:
+            reason = "canonical_corrector_failed"
+        elif (
+            policy.target_support_max_mm is not None
+            and chart_support_distance_mm
+            > float(policy.target_support_max_mm)
+        ):
+            reason = "outside_chart_support"
+        elif not all(successes):
             reason = "corrector_failed"
         elif gap_deg > float(policy.dual_anchor_gap_deg):
             reason = "dual_anchor_disagreement"
+        elif canonical_gap_deg > float(policy.dual_anchor_gap_deg):
+            reason = "canonical_anchor_disagreement"
         elif verified_residual_mm > float(policy.residual_max_mm):
             reason = "fk_residual"
         elif margin_deg < float(policy.gold_margin_deg):
             reason = "gold_margin"
         elif np.any(chosen < bounds[:, 0]) or np.any(chosen > bounds[:, 1]):
             reason = "bounds"
-        is_accepted = reason == "accepted"
         row: dict[str, Any] = {
+            "attempt_idx": attempt_idx,
             "sample_id": f"{chart_id}:{attempt_idx:08d}",
             "chart_id": chart_id,
             "x_m": float(target[0]),
             "y_m": float(target[1]),
             "z_m": float(target[2]),
-            **{name: float(chosen[index]) for index, name in enumerate(BETA_COLUMNS)},
+            **{
+                name: float(chosen[index])
+                for index, name in enumerate(BETA_COLUMNS)
+            },
             "residual_mm": verified_residual_mm,
             "joint_margin_deg": margin_deg,
             "dual_anchor_gap_deg": gap_deg,
+            "canonical_anchor_gap_deg": canonical_gap_deg,
+            "chart_support_distance_mm": chart_support_distance_mm,
             "anchor_a_idx": anchor_a_idx,
             "anchor_b_idx": anchor_b_idx,
-            "tetrahedron_idx": tetrahedron_idx,
+            "tetrahedron_idx": int(attempt.tetrahedron_idx),
             "corrector_a_iterations": iterations[0],
             "corrector_b_iterations": iterations[1],
-            "accepted": bool(is_accepted),
+            "canonical_corrector_iterations": int(
+                canonical_iterations
+            ),
+            "accepted": reason == "accepted",
             "reason": reason,
         }
-        attempts.append(row)
-        if is_accepted:
-            accepted.append(row)
-            if len(accepted) >= int(policy.row_count):
-                break
+        output.append(row)
+    return pd.DataFrame(output)
 
-    attempt_frame = pd.DataFrame(attempts)
-    row_frame = pd.DataFrame(accepted)
+
+def reduce_dense_attempts(
+    attempts: pd.DataFrame,
+    *,
+    policy: DenseSamplingPolicy,
+) -> DenseSamplingResult:
+    """Apply the legacy stable first-N stopping rule to solved attempts."""
+
+    if attempts.empty:
+        attempt_frame = attempts.copy()
+    else:
+        attempt_frame = attempts.sort_values(
+            "attempt_idx", kind="stable"
+        ).reset_index(drop=True)
+        accepted_positions = np.flatnonzero(
+            attempt_frame["accepted"].to_numpy(dtype=bool)
+        )
+        if len(accepted_positions) >= int(policy.row_count):
+            stop = int(accepted_positions[int(policy.row_count) - 1]) + 1
+            attempt_frame = attempt_frame.iloc[:stop].copy()
+    if len(attempt_frame):
+        row_frame = attempt_frame[attempt_frame["accepted"]].copy()
+        row_frame = row_frame.iloc[: int(policy.row_count)].reset_index(
+            drop=True
+        )
+    else:
+        row_frame = _empty_rows()
     if row_frame.empty:
         row_frame = _empty_rows()
     attempt_count = len(attempt_frame)
-    acceptance_ratio = float(len(row_frame) / attempt_count) if attempt_count else 0.0
+    acceptance_ratio = (
+        float(len(row_frame) / attempt_count) if attempt_count else 0.0
+    )
     reason_counts = (
-        attempt_frame["reason"].value_counts().sort_index().astype(int).to_dict()
+        attempt_frame["reason"]
+        .value_counts()
+        .sort_index()
+        .astype(int)
+        .to_dict()
         if attempt_count
         else {}
     )
@@ -304,7 +522,9 @@ def densify_chart(
             else float("inf")
         ),
         "residual_max_mm": (
-            float(row_frame["residual_mm"].max()) if len(row_frame) else float("inf")
+            float(row_frame["residual_mm"].max())
+            if len(row_frame)
+            else float("inf")
         ),
         "joint_margin_min_deg": (
             float(row_frame["joint_margin_deg"].min())
@@ -316,8 +536,76 @@ def densify_chart(
             if len(row_frame)
             else float("inf")
         ),
+        "canonical_anchor_gap_p95_deg": (
+            float(np.percentile(row_frame["canonical_anchor_gap_deg"], 95))
+            if len(row_frame)
+            else float("inf")
+        ),
+        "chart_support_distance_p95_mm": (
+            float(np.percentile(row_frame["chart_support_distance_mm"], 95))
+            if len(row_frame)
+            else float("inf")
+        ),
+        "chart_support_distance_max_mm": (
+            float(row_frame["chart_support_distance_mm"].max())
+            if len(row_frame)
+            else float("inf")
+        ),
     }
-    return DenseSamplingResult(rows=row_frame, attempts=attempt_frame, report=report)
+    persisted_attempts = attempt_frame.drop(
+        columns=["attempt_idx"], errors="ignore"
+    )
+    persisted_rows = row_frame.drop(
+        columns=["attempt_idx"], errors="ignore"
+    )
+    return DenseSamplingResult(
+        rows=persisted_rows, attempts=persisted_attempts, report=report
+    )
+
+
+def densify_chart(
+    environment: DenseForwardEnvironment,
+    chart_xyz_m: np.ndarray,
+    chart_beta_rad: np.ndarray,
+    *,
+    chart_id: int | str,
+    policy: DenseSamplingPolicy,
+) -> DenseSamplingResult:
+    """Generate strict Gold labels inside the convex hull of a sparse chart.
+
+    Two geometrically independent sparse anchors predict and independently
+    correct every target.  A row is admitted only if both corrections converge,
+    agree, satisfy the hard FK residual and retain the registered Gold margin.
+    No failed attempt is padded into the returned dataset.
+    """
+
+    xyz, beta = _as_chart_arrays(chart_xyz_m, chart_beta_rad)
+    try:
+        plan = plan_dense_attempts(xyz, beta, policy=policy)
+    except Exception as exc:
+        return DenseSamplingResult(
+            rows=_empty_rows(),
+            attempts=pd.DataFrame(
+                [{"accepted": False, "reason": f"delaunay_failed:{type(exc).__name__}"}]
+            ),
+            report={
+                "gate_pass": False,
+                "reason": "chart_has_no_3d_tessellation",
+                "requested_rows": int(policy.row_count),
+                "accepted_rows": 0,
+                "attempt_count": 0,
+                "acceptance_ratio": 0.0,
+            },
+        )
+    solved = solve_dense_attempts(
+        environment,
+        xyz,
+        beta,
+        plan,
+        chart_id=chart_id,
+        policy=policy,
+    )
+    return reduce_dense_attempts(solved, policy=policy)
 
 
 def chart_fill_distance_metrics(

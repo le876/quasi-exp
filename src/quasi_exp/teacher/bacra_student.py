@@ -143,6 +143,8 @@ def train_one_seed(
     max_epochs: int,
     patience: int,
     output_dir: str | Path,
+    beta_loss_scale_deg: float | Sequence[float] | None = None,
+    beta5_head_units: Sequence[int] = (),
 ) -> Mapping[str, Any]:
     """Train one deterministic bounded TensorFlow Student.
 
@@ -169,6 +171,9 @@ def train_one_seed(
             geometry=geometry,
             output_mode="tanh",
             hidden_units=tuple(int(value) for value in hidden_units),
+            beta5_head_units=tuple(
+                int(value) for value in beta5_head_units
+            ),
         )
         charts: tuple[str, ...] | None = None
     else:
@@ -182,6 +187,7 @@ def train_one_seed(
         geometry=geometry,
         lambda_fk=float(lambda_fk),
         learning_rate=float(learning_rate),
+        beta_loss_scale_deg=beta_loss_scale_deg,
     )
     callback = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss",
@@ -209,6 +215,7 @@ def train_one_seed(
     beta_gap_deg = np.rad2deg(
         np.sqrt(np.mean(np.square(prediction - truth), axis=1))
     )
+    beta_abs_gap_deg = np.abs(np.rad2deg(prediction - truth))
     from quasi_exp.model.kinematics_tf import forward_xyz_from_beta_tf
 
     predicted_xyz = np.asarray(
@@ -225,12 +232,27 @@ def train_one_seed(
     report = {
         "seed": int(seed),
         "strategy": strategy.value,
+        "lambda_fk": float(lambda_fk),
+        "beta_loss_scale_deg": (
+            None
+            if beta_loss_scale_deg is None
+            else np.broadcast_to(
+                np.asarray(beta_loss_scale_deg, dtype=float), (6,)
+            ).tolist()
+        ),
+        "beta5_head_units": list(map(int, beta5_head_units)),
         "chart_ids": list(charts or ()),
         "epoch_count": int(len(history.history["loss"])),
         "best_validation_loss": float(np.min(history.history["val_loss"])),
         "validation_beta_rms_p50_deg": float(np.percentile(beta_gap_deg, 50)),
         "validation_beta_rms_p95_deg": float(np.percentile(beta_gap_deg, 95)),
         "validation_beta_rms_max_deg": float(np.max(beta_gap_deg)),
+        "validation_beta_abs_p95_by_joint_deg": np.percentile(
+            beta_abs_gap_deg, 95, axis=0
+        ).tolist(),
+        "validation_beta_abs_max_by_joint_deg": np.max(
+            beta_abs_gap_deg, axis=0
+        ).tolist(),
         "validation_fk_p50_mm": float(np.percentile(fk_error_mm, 50)),
         "validation_fk_p95_mm": float(np.percentile(fk_error_mm, 95)),
         "validation_fk_max_mm": float(np.max(fk_error_mm)),

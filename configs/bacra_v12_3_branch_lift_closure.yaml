@@ -1,0 +1,72 @@
+extends: bacra_v12_2_topology_preserving.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.3-branch-lift-closure
+schema_version: 1
+claim_scope: simulation_canonical_atlas_and_student_diagnostics
+deployment_claim_gate_pass: false
+uncertainty_budget_calibrated: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_3_branch_lift_closure
+
+v12_2_source:
+  root: runs/branch_aware_canonical_region_atlas_v12_2_topology_preserving
+  frozen_config: 00_protocol/frozen_config.json
+  protocol_gate: 00_protocol/gate.json
+  capability_gate: 01_capability/gate.json
+  task_nodes: 01_capability/task_nodes.parquet
+  task_edges: 01_capability/task_edges.parquet
+  task_edge_waypoints: 01_capability/task_edge_waypoints.parquet
+  candidate_bank: 02_candidates/candidate_bank.parquet
+  candidate_gate: 02_candidates/gate.json
+  product_inventory: 03_atlas/product_graph_candidate_inventory.parquet
+  atlas_pickle: 03_atlas/atlas.pkl
+  directed_edges: 03_atlas/directed_edges.parquet
+  robust_edges: 03_atlas/robust_edges.parquet
+  topology_lift_diagnostics: 03_atlas/topology_lift_diagnostics.json
+  atlas_gate: 03_atlas/gate.json
+  expected_sha256:
+    frozen_config: 92222fca7343d017ea450308724ec9575650a123903e58cc0033523ca98f403f
+    protocol_gate: 0e17805f73f5858b51efabcd5270727f5d3fde84937d1edcf85d287ff18578de
+    capability_gate: 25915d654ae231747e0b5da1cc9db2794d6d1d65370b4fe4a9dd8f61224043c4
+    task_nodes: 23e52f209bf599356e4c08acb76357eb44e9983bb96f521e1ab378a6dfb9963c
+    task_edges: cb0807a64fea0aa6ea5a8c8a68d4c0b3d81470cbeef41c0b7f2f04eb7d016d00
+    task_edge_waypoints: acbbdbd082964ce54bc6c68d070a799ad68b6b7bde59a2c07ddd9626bb1de40b
+    candidate_bank: bd82470e03fa5e774f341880a2bcc7ae777cde724905df7bb2323dd477c9ebfb
+    candidate_gate: 300cbc9576fc3099672817dcefcf9a49c5d6d88cc43548107469a3ff445318d4
+    product_inventory: b40d996a41fa25cd5b4fcbc8a8575d921f99cccf6ca6c94d57149602d0a19035
+    atlas_pickle: ea779337791d1da4231cf2dd69bb1f3a5e08ebf906d2101ab4a1e863c6584f6d
+    directed_edges: 30124d134c2f6d0dea8c8c56f0e0f15007892dcf36487863b061f269b6a3fdf8
+    robust_edges: 15f86a51f36270d92b138876d0be31afc9d8b26274771600161a04125cb3a5a0
+    topology_lift_diagnostics: 168282241f0b95c75d491b1df86f2e86d15b889a2189fbe28fb62545893841ba
+    atlas_gate: 0a755402a0b403a26fc529f426be46e441951161e923273acd7f3ca50c05df13
+
+branch_lift_closure:
+  match_threshold_deg: 0.5
+  cluster_threshold_deg: 0.5
+  gold_margin_deg: 1.5
+  residual_max_mm: 3.0
+  propagation_rounds: 5
+  confirmation_rounds: 1
+  minimum_chart_coverage: 0.80
+  solver_time_limit_s: 1800
+  solver_mip_rel_gap: 0.0
+  require_solver_certificate: true
+
+parallel:
+  closure_workers: 12
+  section_workers: 12
+  default_workers: 12
+  product_workers: 12
+  audit_workers: 12
+  dense_workers: 12
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_3_branch_lift_closure_smoke
+  branch_lift_closure:
+    propagation_rounds: 1
+    confirmation_rounds: 1
+    minimum_chart_coverage: 0.0
+    solver_time_limit_s: 30
+    require_solver_certificate: false
+  parallel:
+    closure_workers: 2
+    section_workers: 2

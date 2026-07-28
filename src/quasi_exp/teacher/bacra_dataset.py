@@ -159,7 +159,11 @@ def assign_spatial_splits(
     seal_token = hashlib.sha256(
         json.dumps(seal_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    sealed_mask = output["split_base_role"].eq("sealed_test") & ~output["split_buffer"]
+    # Sealing is owned by the macro block, not by the row's buffer role.
+    # A row on the sealed side of a split boundary must remain sealed even
+    # though it is excluded from evaluation as ``buffer``.  Otherwise its beta
+    # label leaks into the public artifact merely because it is near a face.
+    sealed_mask = output["split_base_role"].eq("sealed_test")
     sealed = output.loc[sealed_mask].copy()
     public = output.loc[~sealed_mask].copy()
     return SealedSplit(

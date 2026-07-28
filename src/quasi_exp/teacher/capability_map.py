@@ -699,13 +699,16 @@ def materialize_capability_region_from_samples(
     xyz_m: np.ndarray,
     jacobian_metrics: Mapping[str, np.ndarray],
     output_dir: str | Path | None = None,
+    require_complete_sobol_prefix: bool = True,
 ) -> CapabilityRegionManifest:
     """Finalize a capability region from deterministic precomputed shards.
 
-    This is the parallel execution seam.  A runner may partition the frozen
-    Sobol prefix into independent subprocesses, but all voxel, ROI, graph and
-    Gate semantics remain owned here.  Concatenating shards in Sobol row order
-    produces the same manifest as :func:`materialize_capability_region`.
+    This is the parallel execution seam.  V12 callers retain the default
+    fail-closed requirement that the pool is exactly the frozen Sobol prefix.
+    A registered follow-up protocol may set
+    ``require_complete_sobol_prefix=False`` for a deterministic augmented pool
+    (for example Sobol plus preregistered local enrichment); voxel, ROI, graph
+    and Gate semantics are otherwise identical and remain owned here.
     """
 
     config_path = Path(policy.robot_config_path)
@@ -718,7 +721,17 @@ def materialize_capability_region_from_samples(
         raise ValueError("primary_centerline must be finite with shape (N, 3), N >= 2")
     beta = np.asarray(beta_rad, dtype=float)
     xyz = np.asarray(xyz_m, dtype=float)
-    if beta.shape != (2 ** int(policy.sobol_power), 6) or not np.isfinite(beta).all():
+    if (
+        beta.ndim != 2
+        or beta.shape[1] != 6
+        or len(beta) < 1
+        or not np.isfinite(beta).all()
+    ):
+        raise ValueError("beta_rad must be a non-empty finite sample pool with shape (N, 6)")
+    if require_complete_sobol_prefix and beta.shape != (
+        2 ** int(policy.sobol_power),
+        6,
+    ):
         raise ValueError("beta_rad must be the complete finite frozen Sobol prefix")
     if xyz.shape != (len(beta), 3):
         raise ValueError("xyz_m must align with beta_rad")

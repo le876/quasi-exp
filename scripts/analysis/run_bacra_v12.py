@@ -76,6 +76,10 @@ from quasi_exp.teacher.canonical_atlas import (
     build_canonical_atlas,
     make_predictor_corrector_continuation,
 )
+from quasi_exp.teacher.topology_task_region import (
+    make_strict_gold_witnessed_continuation,
+    waypoint_map_from_frame,
+)
 from quasi_exp.teacher.dense_chart_sampling import (
     DenseSamplingPolicy,
     chart_fill_distance_metrics,
@@ -133,10 +137,33 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
     return output
 
 
-def load_protocol_config(path: str | Path, preset: str) -> dict[str, Any]:
-    payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+def _load_config_with_extends(
+    path: Path, *, chain: tuple[Path, ...] = ()
+) -> dict[str, Any]:
+    """Load an arbitrarily deep config inheritance chain deterministically."""
+
+    config_path = path.resolve()
+    if config_path in chain:
+        cycle = " -> ".join(str(item) for item in (*chain, config_path))
+        raise ValueError(f"BACRA config extends cycle: {cycle}")
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
         raise ValueError("BACRA config must contain a mapping")
+    if "extends" not in payload:
+        return copy.deepcopy(dict(payload))
+    parent_path = Path(str(payload["extends"]))
+    if not parent_path.is_absolute():
+        parent_path = config_path.parent / parent_path
+    parent = _load_config_with_extends(
+        parent_path, chain=(*chain, config_path)
+    )
+    override = {key: value for key, value in payload.items() if key != "extends"}
+    return _deep_merge(parent, override)
+
+
+def load_protocol_config(path: str | Path, preset: str) -> dict[str, Any]:
+    config_path = Path(path).resolve()
+    payload = _load_config_with_extends(config_path)
     mode = str(preset).lower()
     if mode not in {"smoke", "pilot", "formal"}:
         raise ValueError("preset must be smoke, pilot or formal")
@@ -166,7 +193,7 @@ def load_protocol_config(path: str | Path, preset: str) -> dict[str, Any]:
             merged["candidates"]["formal_difficult_seed_budget"]
         )
     merged["preset"] = mode
-    merged["config_path"] = str(Path(path).resolve())
+    merged["config_path"] = str(config_path)
     return merged
 
 
@@ -208,6 +235,8 @@ def _atlas_payload(atlas: CanonicalAtlas) -> dict[str, Any]:
             "residual_mm": edge.residual_mm,
             "corrector_iterations": edge.corrector_iterations,
             "status": edge.status,
+            "minimum_margin_deg": edge.minimum_margin_deg,
+            "waypoint_count": edge.waypoint_count,
         }
         for edge in atlas.product_graph.directed_edges
     ]
@@ -342,12 +371,38 @@ def _gate(
     **evidence: Any,
 ) -> dict[str, Any]:
     normalized = {str(key): bool(value) for key, value in checks.items()}
+    output_root = path.parent.parent
+    protocol_id = "branch-aware-canonical-region-atlas-v12"
+    frozen_config = output_root / STAGE_DIRS["protocol"] / "frozen_config.json"
+    if frozen_config.is_file():
+        protocol_id = str(
+            json.loads(frozen_config.read_text(encoding="utf-8")).get(
+                "protocol_id", protocol_id
+            )
+        )
+    capability_lineage: dict[str, Any] = {}
+    capability_gate = output_root / STAGE_DIRS["capability"] / "gate.json"
+    if capability_gate.is_file() and capability_gate.resolve() != path.resolve():
+        source_gate = json.loads(capability_gate.read_text(encoding="utf-8"))
+        capability_lineage = {
+            "source_capability_gate_sha256": sha256_file(capability_gate),
+            "source_capability_bridge_pc_conflict": bool(
+                source_gate.get("capability_bridge_pc_conflict", False)
+            ),
+            "source_predictor_corrector_bridge_pass": source_gate.get(
+                "predictor_corrector_bridge_pass"
+            ),
+            "source_capability_cause_classification": source_gate.get(
+                "cause_classification"
+            ),
+        }
     payload = {
         "schema_version": 1,
-        "protocol_id": "branch-aware-canonical-region-atlas-v12",
+        "protocol_id": protocol_id,
         "gate_semantics": semantics,
         "claim_scope": "simulation_canonical_atlas_and_student_diagnostics",
         "deployment_claim_gate_pass": False,
+        **capability_lineage,
         **evidence,
         "checks": normalized,
         "gate_pass": bool(all(normalized.values())),
@@ -475,8 +530,9 @@ def _run_subprocess_tasks(
     env = os.environ.copy()
     env.update(WORKER_ENV)
     pending = list(commands)
-    running: list[tuple[str, subprocess.Popen[str], Path, float]] = []
+    running: list[tuple[str, subprocess.Popen[str], Path, float, float]] = []
     completed: list[dict[str, Any]] = []
+    peak_concurrent_rss_mib = 0.0
     started = time.time()
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     while pending or running:
@@ -493,13 +549,37 @@ def _run_subprocess_tasks(
                 text=True,
             )
             handle.close()
-            running.append((task_id, process, log_path, time.time()))
+            running.append((task_id, process, log_path, time.time(), 0.0))
         time.sleep(0.1)
-        survivors: list[tuple[str, subprocess.Popen[str], Path, float]] = []
-        for task_id, process, log_path, task_started in running:
+        survivors: list[
+            tuple[str, subprocess.Popen[str], Path, float, float]
+        ] = []
+        concurrent_rss_mib = 0.0
+        for task_id, process, log_path, task_started, task_peak_rss_mib in running:
+            rss_mib = 0.0
+            try:
+                status_text = Path(f"/proc/{process.pid}/status").read_text(
+                    encoding="utf-8"
+                )
+                for line in status_text.splitlines():
+                    if line.startswith("VmRSS:"):
+                        rss_mib = float(line.split()[1]) / 1024.0
+                        break
+            except (FileNotFoundError, PermissionError, ValueError):
+                pass
+            task_peak_rss_mib = max(task_peak_rss_mib, rss_mib)
+            concurrent_rss_mib += rss_mib
             return_code = process.poll()
             if return_code is None:
-                survivors.append((task_id, process, log_path, task_started))
+                survivors.append(
+                    (
+                        task_id,
+                        process,
+                        log_path,
+                        task_started,
+                        task_peak_rss_mib,
+                    )
+                )
                 continue
             completed.append(
                 {
@@ -507,13 +587,23 @@ def _run_subprocess_tasks(
                     "return_code": int(return_code),
                     "wall_time_s": float(time.time() - task_started),
                     "log_path": str(log_path),
+                    "peak_rss_mib": float(task_peak_rss_mib),
                 }
             )
             if return_code != 0:
-                for _other_id, other, _other_log, _other_started in survivors:
+                for (
+                    _other_id,
+                    other,
+                    _other_log,
+                    _other_started,
+                    _other_peak,
+                ) in survivors:
                     other.terminate()
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
                 raise RuntimeError(f"subprocess task {task_id} failed:\n{tail}")
+        peak_concurrent_rss_mib = max(
+            peak_concurrent_rss_mib, concurrent_rss_mib
+        )
         running = survivors
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     wall = float(time.time() - started)
@@ -527,6 +617,7 @@ def _run_subprocess_tasks(
         "wall_time_s": wall,
         "aggregate_child_cpu_time_s": child_cpu,
         "aggregate_cpu_utilization": child_cpu / wall if wall > 0.0 else 0.0,
+        "peak_concurrent_rss_mib": float(peak_concurrent_rss_mib),
         "worker_thread_environment": WORKER_ENV,
         "tasks": sorted(completed, key=lambda row: row["task_id"]),
     }
@@ -746,6 +837,10 @@ def candidate_worker(args: argparse.Namespace) -> int:
             for key, value in neighbour.items()
         },
         difficult_node_ids=difficult,
+        node_seed_beta_rad={
+            local: selected.iloc[local][list(BETA_COLUMNS)].to_numpy(dtype=float)
+            for local in range(len(selected))
+        },
     )
     frame = _candidate_record_rows(bank, node_offset=start)
     _atomic_parquet(frame, Path(args.output))
@@ -771,7 +866,10 @@ def stage_candidates(
     prerequisite = json.loads((capability_stage / "gate.json").read_text(encoding="utf-8"))
     stage = output_root / STAGE_DIRS["candidates"]
     stage.mkdir(parents=True, exist_ok=True)
-    if not bool(prerequisite["gate_pass"]):
+    candidate_admission = prerequisite.get(
+        "candidate_admission_gate_pass", prerequisite.get("gate_pass", False)
+    )
+    if not bool(candidate_admission):
         return _gate(
             stage / "gate.json",
             {"capability_gate_pass": False},
@@ -780,7 +878,12 @@ def stage_candidates(
         )
     task_path = capability_stage / "task_nodes.parquet"
     edge_path = capability_stage / "task_edges.parquet"
-    capability_path = capability_stage / "capability_map.parquet"
+    strict_seed_path = capability_stage / "strict_gold_seed_pool.parquet"
+    capability_path = (
+        strict_seed_path
+        if strict_seed_path.is_file()
+        else capability_stage / "capability_map.parquet"
+    )
     task_count = len(pd.read_parquet(task_path, columns=["task_node_id"]))
     workers = int(config["parallel"]["default_workers"])
     ranges = _slice_ranges(task_count, workers)
@@ -985,6 +1088,39 @@ def _atlas_policy(config: Mapping[str, Any]) -> AtlasPolicy:
     )
 
 
+def _continuation_for_output(
+    config: Mapping[str, Any],
+    output_root: Path,
+    environment: Any,
+) -> Callable[..., Any]:
+    capability_stage = output_root / STAGE_DIRS["capability"]
+    waypoint_path = capability_stage / "task_edge_waypoints.parquet"
+    edge_path = capability_stage / "task_edges.parquet"
+    if waypoint_path.is_file() and edge_path.is_file():
+        waypoints = waypoint_map_from_frame(
+            pd.read_parquet(edge_path),
+            pd.read_parquet(waypoint_path),
+        )
+        return make_strict_gold_witnessed_continuation(
+            environment,
+            waypoints,
+            damping=float(config["candidates"]["damping"]),
+            beta_weights=tuple(map(float, config["candidates"]["beta_weights"])),
+            max_corrector_iterations=int(
+                config["candidates"]["max_corrector_iterations"]
+            ),
+            residual_max_mm=float(config["candidates"]["residual_max_mm"]),
+            gold_margin_deg=float(config["candidates"]["gold_margin_deg"]),
+        )
+    return make_predictor_corrector_continuation(
+        environment,
+        damping=float(config["candidates"]["damping"]),
+        beta_weights=tuple(map(float, config["candidates"]["beta_weights"])),
+        max_corrector_iterations=int(config["candidates"]["max_corrector_iterations"]),
+        residual_tolerance_mm=float(config["candidates"]["residual_max_mm"]),
+    )
+
+
 def _persist_atlas(atlas: CanonicalAtlas, stage: Path) -> None:
     directed_rows = [
         {
@@ -996,6 +1132,8 @@ def _persist_atlas(atlas: CanonicalAtlas, stage: Path) -> None:
             "residual_mm": edge.residual_mm,
             "corrector_iterations": edge.corrector_iterations,
             "status": edge.status,
+            "minimum_margin_deg": edge.minimum_margin_deg,
+            "waypoint_count": edge.waypoint_count,
         }
         for edge in atlas.product_graph.directed_edges
     ]
@@ -1097,13 +1235,7 @@ def build_atlas_in_memory(
         environment.bounds,
         cluster_deg=float(config["candidates"]["cluster_threshold_deg"]),
     )
-    continuation = make_predictor_corrector_continuation(
-        environment,
-        damping=float(config["candidates"]["damping"]),
-        beta_weights=tuple(map(float, config["candidates"]["beta_weights"])),
-        max_corrector_iterations=int(config["candidates"]["max_corrector_iterations"]),
-        residual_tolerance_mm=float(config["candidates"]["residual_max_mm"]),
-    )
+    continuation = _continuation_for_output(config, output_root, environment)
     return build_canonical_atlas(
         task_nodes, candidates, continuation, policy=_atlas_policy(config)
     )
@@ -1183,8 +1315,9 @@ def _fresh_path_executors(
         for node_id in path[1:]:
             outcome = continuation(previous, nodes[node_id])
             if not outcome.success or not outcome.actual_bounds:
+                failed_prefix = path[: len(values) + 1]
                 return PathTrace(
-                    path,
+                    failed_prefix,
                     np.vstack(values + [outcome.beta_rad]),
                     False,
                     outcome.status,
@@ -1252,13 +1385,7 @@ def stage_audit(
     environment = load_environment(
         project_root, _source_path(project_root, str(config["robot_config"]))
     )
-    continuation = make_predictor_corrector_continuation(
-        environment,
-        damping=float(config["candidates"]["damping"]),
-        beta_weights=tuple(map(float, config["candidates"]["beta_weights"])),
-        max_corrector_iterations=int(config["candidates"]["max_corrector_iterations"]),
-        residual_tolerance_mm=float(config["candidates"]["residual_max_mm"]),
-    )
+    continuation = _continuation_for_output(config, output_root, environment)
     path_executor, repeat_executor = _fresh_path_executors(atlas, continuation)
     report = audit_atlas(
         atlas,
@@ -1468,6 +1595,34 @@ def _standardize_v11_surface(frame: pd.DataFrame, source_id: str) -> pd.DataFram
     return output
 
 
+def _dataset_roi_radius_mm(
+    config: Mapping[str, Any], capability_gate: Mapping[str, Any]
+) -> tuple[float, str]:
+    """Resolve the frozen task-region radius without depending on Gate shape.
+
+    V12/V12.1 materialized this value in the capability Gate.  V12.2 and later
+    bootstrap an already frozen topology task region, so their adapter Gates do
+    not own the value; the protocol's ``topology_task_region`` block does.
+    """
+
+    gate_value = capability_gate.get("selected_roi_radius_mm")
+    if gate_value is not None:
+        value = float(gate_value)
+        source = "capability_gate.selected_roi_radius_mm"
+    else:
+        topology = config.get("topology_task_region")
+        if not isinstance(topology, Mapping) or topology.get("roi_mm") is None:
+            raise KeyError(
+                "dataset ROI radius is absent from both capability Gate "
+                "and topology_task_region.roi_mm"
+            )
+        value = float(topology["roi_mm"])
+        source = "frozen_config.topology_task_region.roi_mm"
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"dataset ROI radius must be finite and positive: {value}")
+    return value, source
+
+
 def _ablation_frames(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
@@ -1481,10 +1636,11 @@ def _ablation_frames(
 
     sources, _hashes = _preflight_sources(config, project_root)
     centerline = _load_centerline(sources["primary_centerline"])
-    radius_mm = float(
-        json.loads((capability_stage / "gate.json").read_text(encoding="utf-8"))[
-            "selected_roi_radius_mm"
-        ]
+    capability_gate = json.loads(
+        (capability_stage / "gate.json").read_text(encoding="utf-8")
+    )
+    radius_mm, radius_source = _dataset_roi_radius_mm(
+        config, capability_gate
     )
     distance_to_centerline = cKDTree(centerline).query(
         capability[list(XYZ_COLUMNS)].to_numpy(dtype=float), k=1
@@ -1542,6 +1698,8 @@ def _ablation_frames(
     evidence = {
         "available_row_counts": {name: int(len(value)) for name, value in methods.items()},
         "equal_ablation_row_count": int(common_count),
+        "dataset_roi_radius_mm": float(radius_mm),
+        "dataset_roi_radius_source": radius_source,
         "tube_sources": [str(path) for path in tube_paths],
         "tube_source_sha256": {str(path): sha256_file(path) for path in tube_paths},
     }
@@ -1605,6 +1763,48 @@ def stage_dataset(
                 "role_counts": role_counts,
             }
         )
+    full_d3_report: dict[str, Any] | None = None
+    if bool(config["student"].get("use_full_d3_dataset", False)):
+        full_d3 = pd.read_parquet(
+            output_root
+            / STAGE_DIRS["dense"]
+            / "dense_dataset.parquet"
+        )
+        full_result = assign_spatial_splits(full_d3, policy)
+        full_dir = stage / "D3_full"
+        full_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_parquet(
+            full_result.public_rows,
+            full_dir / "public_dataset.parquet",
+        )
+        _atomic_parquet(
+            full_result._sealed_rows,
+            full_dir / "sealed_dataset.parquet",
+        )
+        full_manifest = full_result.manifest.copy()
+        full_manifest["data_method"] = "D3_full"
+        _atomic_parquet(
+            full_manifest,
+            full_dir / "spatial_split_manifest.parquet",
+        )
+        seal_tokens["D3_full"] = full_result.seal_token
+        full_role_counts = (
+            full_result.public_rows["split_role"]
+            .value_counts()
+            .sort_index()
+            .to_dict()
+        )
+        full_d3_report = {
+            "source_row_count": int(len(full_d3)),
+            "public_row_count": int(len(full_result.public_rows)),
+            "sealed_row_count": int(len(full_result._sealed_rows)),
+            "role_counts": full_role_counts,
+            "sealed_not_in_public": bool(
+                not full_result.public_rows["split_base_role"]
+                .eq("sealed_test")
+                .any()
+            ),
+        }
     d3_public = split_rows[sorted(methods).index("D3")]
     conflicts, conflict_report = detect_cross_chart_conflicts(
         d3_public,
@@ -1649,6 +1849,21 @@ def stage_dataset(
             not frame["split_base_role"].eq("sealed_test").any()
             for frame in split_rows
         ),
+        "full_d3_student_dataset_valid": bool(
+            full_d3_report is None
+            or (
+                full_d3_report["source_row_count"]
+                == full_d3_report["public_row_count"]
+                + full_d3_report["sealed_row_count"]
+                and full_d3_report["role_counts"].get("train", 0) > 0
+                and full_d3_report["role_counts"].get(
+                    "validation", 0
+                )
+                > 0
+                and full_d3_report["sealed_row_count"] > 0
+                and full_d3_report["sealed_not_in_public"]
+            )
+        ),
     }
     return _gate(
         stage / "gate.json",
@@ -1657,6 +1872,7 @@ def stage_dataset(
         method_reports=method_reports,
         conflict_report=conflict_report,
         nested_sizes=nested_sizes,
+        full_d3_student_report=full_d3_report,
         **ablation_evidence,
     )
 
@@ -1692,6 +1908,17 @@ def student_worker(args: argparse.Namespace) -> int:
     )
     frame = pd.read_parquet(args.dataset)
     strategy = StudentStrategy(args.strategy)
+    beta_loss_scale_deg: float | tuple[float, ...] | None = None
+    if args.beta_loss_scale_deg is not None:
+        values = tuple(map(float, args.beta_loss_scale_deg))
+        if len(values) == 1:
+            beta_loss_scale_deg = values[0]
+        elif len(values) == 6:
+            beta_loss_scale_deg = values
+        else:
+            raise ValueError(
+                "--beta-loss-scale-deg requires one value or six joint values"
+            )
     report = train_one_seed(
         frame,
         strategy=strategy,
@@ -1699,6 +1926,10 @@ def student_worker(args: argparse.Namespace) -> int:
         seed=int(args.seed),
         hidden_units=tuple(map(int, config["student"]["hidden_units"])),
         lambda_fk=float(args.lambda_fk),
+        beta_loss_scale_deg=beta_loss_scale_deg,
+        beta5_head_units=tuple(
+            map(int, config["student"].get("beta5_head_units", ()))
+        ),
         learning_rate=float(config["student"]["learning_rate"]),
         batch_size=int(config["student"]["batch_size"]),
         max_epochs=int(config["student"]["max_epochs"]),
@@ -1757,10 +1988,20 @@ def stage_student(
     lambda_fk = float(config["student"]["lambda_fk"][-1])
     commands: list[tuple[str, Sequence[str], Path]] = []
     for method in methods:
+        dataset_method = (
+            "D3_full"
+            if method == "D3"
+            and bool(
+                config["student"].get(
+                    "use_full_d3_dataset", False
+                )
+            )
+            else method
+        )
         dataset = (
             output_root
             / STAGE_DIRS["dataset"]
-            / method
+            / dataset_method
             / "public_dataset.parquet"
         )
         for seed in execution.seed_order:
@@ -1835,6 +2076,15 @@ def stage_student(
         device_plan=execution.__dict__,
         parallel_evidence=parallel,
         median_validation_fk_p95_mm=median_by_method,
+        d3_training_dataset=(
+            "D3_full"
+            if bool(
+                config["student"].get(
+                    "use_full_d3_dataset", False
+                )
+            )
+            else "D3"
+        ),
         d3_seed_pass_count=pass_count,
         required_seed_passes=required,
     )
@@ -2147,6 +2397,7 @@ def build_parser() -> argparse.ArgumentParser:
     student.add_argument("--strategy", required=True)
     student.add_argument("--seed", required=True, type=int)
     student.add_argument("--lambda-fk", required=True, type=float)
+    student.add_argument("--beta-loss-scale-deg", type=float, nargs="+")
     student.add_argument("--output", required=True)
 
     parser.add_argument(

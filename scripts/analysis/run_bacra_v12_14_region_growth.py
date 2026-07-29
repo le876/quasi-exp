@@ -1248,10 +1248,14 @@ def _worker_train(args: argparse.Namespace) -> int:
     validation = dataset.loc[dataset["split"].eq("validation")].copy()
     geometry = canonical_runner._geometry(config, project_root)
     initial_model = (
-        _source_path(
-            project_root, config["v12_14"]["source_v12_11_root"]
+        Path(args.initial_model).resolve()
+        if args.initial_model
+        else (
+            _source_path(
+                project_root, config["v12_14"]["source_v12_11_root"]
+            )
+            / f"01_training/seed_{seed}/model.keras"
         )
-        / f"01_training/seed_{seed}/model.keras"
     )
     model = tf.keras.models.load_model(initial_model, compile=False)
     training = config["v12_14"]["training"]
@@ -1309,6 +1313,7 @@ def _training_commands(
     stage: Path,
     python: Path,
     dataset_paths: Mapping[str, Path] | None = None,
+    initial_model_paths: Mapping[int, Path] | None = None,
 ) -> list[tuple[str, list[str], Path]]:
     commands = []
     for dataset_version in dataset_versions:
@@ -1346,6 +1351,13 @@ def _training_commands(
                 dataset_position = commands[-1][1].index("--dataset") + 1
                 commands[-1][1][dataset_position] = str(
                     dataset_paths[dataset_version]
+                )
+            if initial_model_paths is not None:
+                commands[-1][1].extend(
+                    [
+                        "--initial-model",
+                        str(initial_model_paths[int(seed)]),
+                    ]
                 )
     return commands
 
@@ -1515,17 +1527,69 @@ def _label_targets(
     )
 
 
+class _ResidualCompositePredictor:
+    def __init__(self, base: Any, region: Any, alpha: float) -> None:
+        self.base = base
+        self.region = region
+        self.alpha = float(alpha)
+
+    def predict(
+        self, target: np.ndarray, *, batch_size: int, verbose: int
+    ) -> np.ndarray:
+        base = np.asarray(
+            self.base.predict(target, batch_size=batch_size, verbose=verbose),
+            dtype=float,
+        )
+        region = np.asarray(
+            self.region.predict(target, batch_size=batch_size, verbose=verbose),
+            dtype=float,
+        )
+        return base + self.alpha * (region - base)
+
+
 def _load_models(model_roots: Mapping[str, str]) -> dict[int, Any]:
     import tensorflow as tf
 
     if not tf.config.list_physical_devices("GPU"):
         raise RuntimeError("V12.14 evaluation requires a visible GPU")
-    return {
-        int(seed): tf.keras.models.load_model(
-            Path(root) / "model.keras", compile=False
-        )
-        for seed, root in model_roots.items()
-    }
+    models = {}
+    for seed, root_value in model_roots.items():
+        root = Path(root_value)
+        composite_path = root / "composite_model.json"
+        if composite_path.is_file():
+            composite = json.loads(composite_path.read_text())
+            if composite.get("model_mode") != "output_residual_composite":
+                raise ValueError(
+                    f"unsupported composite model mode: {composite.get('model_mode')}"
+                )
+            models[int(seed)] = _ResidualCompositePredictor(
+                tf.keras.models.load_model(
+                    composite["base_model"], compile=False
+                ),
+                tf.keras.models.load_model(
+                    composite["region_model"], compile=False
+                ),
+                float(composite["alpha"]),
+            )
+        else:
+            models[int(seed)] = tf.keras.models.load_model(
+                root / "model.keras", compile=False
+            )
+    return models
+
+
+def _family_seed_gate(
+    metrics: pd.DataFrame,
+    *,
+    family_column: str,
+    pass_column: str,
+    required_seed_passes: int,
+) -> pd.Series:
+    return (
+        metrics.groupby(family_column, sort=True)[pass_column]
+        .sum()
+        .ge(int(required_seed_passes))
+    )
 
 
 def _evaluate_model_set(
@@ -2098,7 +2162,12 @@ def stage_final_evaluation(
         dense,
         attempt_count=required * 2,
         voxel_size_mm=float(values["region"]["voxel_size_mm"]),
-        seed=int(values["seeds"]["final_random"]),
+        seed=int(
+            lock.get(
+                "final_random_seed",
+                values["seeds"]["final_random"],
+            )
+        ),
     )
     final_reference, final_rejected, random_manifest = _label_targets(
         final_targets,
@@ -2147,7 +2216,12 @@ def stage_final_evaluation(
         phase_count=int(values["trajectories"]["phase_count"]),
         per_type=int(values["trajectories"]["per_type"]),
         support_max_mm=float(values["region"]["parent_distance_max_mm"]) / 2.0,
-        seed=int(values["seeds"]["trajectory"]),
+        seed=int(
+            lock.get(
+                "trajectory_seed",
+                values["seeds"]["trajectory"],
+            )
+        ),
     )
     catalog.to_csv(path_stage / "trajectory_catalog.csv", index=False)
     teacher, path_rejected, path_manifest = _label_targets(
@@ -2178,10 +2252,11 @@ def stage_final_evaluation(
         & path_metrics["fk_max_mm"].le(float(training["fk_max_mm"]))
         & path_metrics["actual_bounds"].astype(bool)
     )
-    path_pass = (
-        path_metrics.groupby("family_id", sort=True)["seed_gate_pass"]
-        .sum()
-        .ge(int(training["required_seed_passes"]))
+    path_pass = _family_seed_gate(
+        path_metrics,
+        family_column="family_id",
+        pass_column="seed_gate_pass",
+        required_seed_passes=int(training["required_seed_passes"]),
     )
     path_metrics.to_csv(path_stage / "trajectory_metrics.csv", index=False)
     _atomic_parquet(path_details, path_stage / "student_tracking.parquet")
@@ -2221,6 +2296,12 @@ def stage_final_evaluation(
         & final8_metrics["fk_max_relative"].le(
             float(values["trajectories"]["final_ellipse_max_relative"])
         )
+    )
+    final8_pass = _family_seed_gate(
+        final8_metrics,
+        family_column="family_id",
+        pass_column="radius_gate_pass",
+        required_seed_passes=int(training["required_seed_passes"]),
     )
     final8_metrics.to_csv(path_stage / "final8_retention_metrics.csv", index=False)
     _atomic_parquet(final8_details, path_stage / "final8_student_tracking.parquet")
@@ -2262,6 +2343,8 @@ def stage_final_evaluation(
                     final8_metrics["radius_gate_pass"].sum()
                 ),
                 "final8_family_seed_count": int(len(final8_metrics)),
+                "final8_retained_family_count": int(final8_pass.sum()),
+                "final8_family_count": int(len(final8_pass)),
             }
         ]
     )
@@ -2296,9 +2379,7 @@ def stage_final_evaluation(
             == 5 * int(values["trajectories"]["per_type"]),
             "unseen_path_gate": int(path_pass.sum())
             >= int(values["trajectories"]["required_pass_count"]),
-            "current_final8_retained": bool(
-                final8_metrics["radius_gate_pass"].all()
-            ),
+            "current_final8_retained": bool(final8_pass.all()),
             "model_was_locked_before_final_generation": bool(
                 lock[
                     "model_locked_before_final_random_and_trajectory_generation"
@@ -2330,6 +2411,8 @@ def stage_final_evaluation(
             final8_metrics["radius_gate_pass"].sum()
         ),
         final8_family_seed_count=int(len(final8_metrics)),
+        final8_family_passes=int(final8_pass.sum()),
+        final8_family_count=int(len(final8_pass)),
     )
 
 
@@ -2424,6 +2507,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset")
     parser.add_argument("--dataset-version")
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--initial-model")
     return parser
 
 

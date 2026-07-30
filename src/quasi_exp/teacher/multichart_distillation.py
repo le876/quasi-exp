@@ -79,6 +79,77 @@ def build_chart_conditioned_model(source_model: Any) -> Any:
     return model
 
 
+def build_chart_gated_residual_model(source_model: Any) -> Any:
+    """Keep chart A exact while learning a chart-B latent residual."""
+
+    import tensorflow as tf
+
+    xyz = tf.keras.Input(shape=(3,), name="target_xyz_m")
+    chart = tf.keras.Input(shape=(1,), name="chart_feature")
+    source_normalization = source_model.get_layer("xyz_normalization")
+    normalization = tf.keras.layers.Normalization(
+        axis=-1, name="xyz_normalization", trainable=False
+    )
+    normalized = normalization(xyz)
+
+    source_layers = [
+        source_model.get_layer("dense_0"),
+        source_model.get_layer("dense_1"),
+        source_model.get_layer("dense_2"),
+        source_model.get_layer("beta_latent"),
+    ]
+    base = normalized
+    frozen_layers = []
+    for source in source_layers:
+        layer = tf.keras.layers.Dense(
+            int(source.units),
+            activation=source.activation,
+            use_bias=bool(source.use_bias),
+            name=f"frozen_{source.name}",
+            trainable=False,
+        )
+        base = layer(base)
+        frozen_layers.append(layer)
+
+    residual = tf.keras.layers.Dense(
+        128, activation="gelu", name="chart_b_residual_0"
+    )(normalized)
+    residual = tf.keras.layers.Dense(
+        128, activation="gelu", name="chart_b_residual_1"
+    )(residual)
+    residual = tf.keras.layers.Dense(
+        64, activation="gelu", name="chart_b_residual_2"
+    )(residual)
+    residual = tf.keras.layers.Dense(
+        6,
+        activation="linear",
+        kernel_initializer="zeros",
+        bias_initializer="zeros",
+        name="chart_b_residual_latent",
+    )(residual)
+    gated = tf.keras.layers.Multiply(name="chart_b_hard_gate")(
+        [residual, chart]
+    )
+    latent = tf.keras.layers.Add(name="gated_beta_latent")([base, gated])
+    unit = tf.keras.layers.Activation("tanh", name="beta_unit")(latent)
+    source_scale = source_model.get_layer("beta_rad")
+    output = tf.keras.layers.Rescaling(
+        scale=np.asarray(source_scale.scale, dtype=np.float32),
+        offset=np.asarray(source_scale.offset, dtype=np.float32),
+        name="beta_rad",
+    )(unit)
+    model = tf.keras.Model(
+        inputs=[xyz, chart],
+        outputs=output,
+        name="known_chart_gated_residual_student",
+    )
+    normalization.set_weights(source_normalization.get_weights())
+    normalization.finalize_state()
+    for source, target in zip(source_layers, frozen_layers, strict=True):
+        target.set_weights(source.get_weights())
+    return model
+
+
 def predict_chart_conditioned(
     model: Any,
     xyz_m: np.ndarray,

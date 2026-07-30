@@ -33,6 +33,7 @@ from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 from quasi_exp.teacher.gold_set_student import save_uncompiled_model
 from quasi_exp.teacher.multichart_distillation import (
     build_chart_conditioned_model,
+    build_chart_gated_residual_model,
     predict_chart_conditioned,
     train_chart_conditioned_student,
 )
@@ -61,6 +62,29 @@ def _source_path(project_root: Path, value: str | Path) -> Path:
 
 def _values(config: Mapping[str, Any]) -> Mapping[str, Any]:
     return config["v12_16b"]
+
+
+def _activate_protocol(config: Mapping[str, Any]) -> None:
+    global PROTOCOL_ID, CLAIM_SCOPE
+    PROTOCOL_ID = str(config["protocol_id"])
+    CLAIM_SCOPE = str(config["claim_scope"])
+
+
+def _model_mode(config: Mapping[str, Any]) -> str:
+    architecture = str(
+        _values(config)["training"].get(
+            "model_architecture", "shared_trunk"
+        )
+    )
+    modes = {
+        "shared_trunk": "known_chart_single_bounded_mlp",
+        "chart_gated_residual": (
+            "known_chart_gated_residual_single_bounded_mlp"
+        ),
+    }
+    if architecture not in modes:
+        raise ValueError(f"unknown model architecture: {architecture}")
+    return modes[architecture]
 
 
 def _output_root(
@@ -380,7 +404,15 @@ def _worker_train(args: argparse.Namespace) -> int:
     validation = dataset.loc[
         dataset["v12_15_split"].eq("validation")
     ].copy()
-    model = build_chart_conditioned_model(source_model)
+    architecture = str(
+        training.get("model_architecture", "shared_trunk")
+    )
+    if architecture == "shared_trunk":
+        model = build_chart_conditioned_model(source_model)
+    elif architecture == "chart_gated_residual":
+        model = build_chart_gated_residual_model(source_model)
+    else:
+        raise ValueError(f"unknown model architecture: {architecture}")
     probe_xyz = validation.loc[
         validation["chart_id"].eq("chart_A"), XYZ_COLUMNS
     ].to_numpy(dtype=np.float32)[:2048]
@@ -410,14 +442,20 @@ def _worker_train(args: argparse.Namespace) -> int:
         margin_weight=float(training["margin_weight"]),
         row_loss_weight=float(training["row_loss_weight"]),
     )
+    final_chart = predict_chart_conditioned(model, probe_xyz, 0.0)
     report.update(
         {
+            "model_mode": _model_mode(config),
+            "model_architecture": architecture,
             "source_model": str(source_path),
             "source_model_sha256": sha256_file(source_path),
             "source_model_lock_sha256": sha256_file(source_lock_path),
             "device": devices[0].name,
             "initial_chart_a_equivalence_max_abs_deg": (
                 initialization_max_abs_deg
+            ),
+            "final_chart_a_equivalence_max_abs_deg": float(
+                np.max(np.abs(np.rad2deg(initial_source - final_chart)))
             ),
             "margin_tail_training_rows": int(np.count_nonzero(margin_tail)),
         }
@@ -497,11 +535,16 @@ def stage_train(
             "gpu_visible": True,
             "three_seed_tasks_complete": len(reports) == 3,
             "all_models_are_known_chart_single_mlp": all(
-                row["model_mode"] == "known_chart_single_bounded_mlp"
+                row["model_mode"] == _model_mode(config)
                 for row in reports
             ),
             "chart_a_initialization_is_exact": all(
                 row["initial_chart_a_equivalence_max_abs_deg"] <= 1.0e-5
+                for row in reports
+            ),
+            "chart_a_retention_is_exact_when_hard_gated": all(
+                str(row["model_architecture"]) != "chart_gated_residual"
+                or row["final_chart_a_equivalence_max_abs_deg"] <= 1.0e-5
                 for row in reports
             ),
             "chart_b_sealed_labels_still_unopened": True,
@@ -696,7 +739,7 @@ def stage_select_and_lock(
     required = int(_values(config)["selection"]["required_seed_passes"])
     smoke = config["preset"] == "smoke"
     selection = {
-        "model_mode": "known_chart_single_bounded_mlp",
+        "model_mode": _model_mode(config),
         "known_chart_id_required": True,
         "automatic_chart_classifier": False,
         "selection_uses_chart_b_sealed_blocks": False,
@@ -731,7 +774,7 @@ def stage_select_and_lock(
     lock = {
         "schema_version": 1,
         "protocol_id": PROTOCOL_ID,
-        "model_mode": "known_chart_single_bounded_mlp",
+        "model_mode": _model_mode(config),
         "known_chart_id_required": True,
         "automatic_chart_classifier": False,
         "model_roots": locked_roots,
@@ -947,7 +990,7 @@ def stage_final(
     if smoke:
         checks = {
             "lock_is_known_chart_single_model": lock["model_mode"]
-            == "known_chart_single_bounded_mlp",
+            == _model_mode(config),
             "chart_b_registry_matches_lock": sha256_file(
                 sources["v12_16a_registry"]
             )
@@ -970,7 +1013,7 @@ def stage_final(
     else:
         checks = {
             "lock_is_known_chart_single_model": lock["model_mode"]
-            == "known_chart_single_bounded_mlp",
+            == _model_mode(config),
             "chart_b_registry_matches_lock": sha256_file(
                 sources["v12_16a_registry"]
             )
@@ -1033,6 +1076,7 @@ STAGES = ("protocol", "dataset", "train", "select_lock", "final")
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     config = v12.load_protocol_config(args.config, args.preset)
+    _activate_protocol(config)
     project_root = Path(args.project_root).resolve()
     output_root = _output_root(config, project_root, args.output_root)
     python = Path(args.python).resolve()
@@ -1097,6 +1141,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    config = v12.load_protocol_config(args.config, args.preset)
+    _activate_protocol(config)
     if args.worker == "train":
         return _worker_train(args)
     summary = run(args)

@@ -13,6 +13,7 @@ import run_bacra_v12 as v12
 import run_bacra_v12_16b_chart_conditioned_student as runner
 from quasi_exp.teacher.multichart_distillation import (
     build_chart_conditioned_model,
+    build_chart_gated_residual_model,
     predict_chart_conditioned,
 )
 
@@ -55,6 +56,31 @@ def test_known_chart_model_exactly_preserves_chart_a_initialization() -> None:
     actual = predict_chart_conditioned(model, xyz, 0.0)
     np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1.0e-7)
     assert len(model.inputs) == 2
+
+
+def test_chart_gated_residual_keeps_chart_a_exact_after_adapter_change() -> None:
+    import tensorflow as tf
+
+    source = tf.keras.models.load_model(SOURCE_MODEL, compile=False)
+    model = build_chart_gated_residual_model(source)
+    xyz = np.asarray(
+        [[0.38, 0.02, 0.31], [0.42, -0.01, 0.28]], dtype=np.float32
+    )
+    expected = source.predict(xyz, verbose=0)
+    residual = model.get_layer("chart_b_residual_latent")
+    kernel, bias = residual.get_weights()
+    residual.set_weights(
+        [np.full_like(kernel, 0.01), np.full_like(bias, 0.02)]
+    )
+    chart_a = predict_chart_conditioned(model, xyz, 0.0)
+    chart_b = predict_chart_conditioned(model, xyz, 1.0)
+    np.testing.assert_allclose(chart_a, expected, rtol=0.0, atol=1.0e-7)
+    assert not np.allclose(chart_b, expected)
+    assert all(
+        not layer.trainable
+        for layer in model.layers
+        if layer.name.startswith("frozen_")
+    )
 
 
 def test_point_gate_uses_registered_thresholds() -> None:

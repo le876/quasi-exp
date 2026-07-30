@@ -11,6 +11,8 @@ output_root: runs/bacra_v12_16_chart_b_region
 # than only one 720-phase centerline.
 v12_14:
   chart_scope: chart_B
+  canonical_source_priority:
+    chart_B: 0
   expected_canonical_seed_rows: 720
   source_d3: runs/bacra_v12_13_exploratory_expansion/05_chart_b_experts_retry1/stress02_chart_dataset.parquet
   source_final_teacher: runs/bacra_v12_13_exploratory_expansion/05_chart_b_experts_retry1/stress02_chart_dataset.parquet

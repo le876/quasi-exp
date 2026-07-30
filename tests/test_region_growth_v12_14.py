@@ -58,6 +58,18 @@ def test_seed_cleanup_prefers_bridge_and_drops_zero_offset_tube() -> None:
     assert duplicate.iloc[0]["beta_rms_to_selected_deg"] > 1.0
 
 
+def test_seed_cleanup_accepts_registered_chart_identity() -> None:
+    frame = pd.DataFrame(
+        [_d3_row("chart_b_cycle", "chart_B", 0.01)]
+    )
+    clean, duplicate = canonicalize_seed_set(
+        frame, source_priority={"chart_B": 0}
+    )
+    assert len(clean) == 1
+    assert clean.iloc[0]["dataset_source"] == "chart_B"
+    assert duplicate.empty
+
+
 def test_voxel_pack_round_trip_in_signed_domain() -> None:
     values = np.asarray([[-100, 20, 0], [0, 0, 0], [202, -37, 91]])
     np.testing.assert_array_equal(unpack_voxels(pack_voxels(values)), values)

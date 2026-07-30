@@ -266,7 +266,25 @@ def stage_seed_cleanup(
     stage.mkdir(parents=True, exist_ok=True)
     source = _source_files(config, project_root)["source_d3"]
     d3 = pd.read_parquet(source)
-    clean, duplicates = canonicalize_seed_set(d3)
+    canonical_priority = policy.get("canonical_source_priority")
+    if "dataset_source" not in d3 and canonical_priority is not None:
+        if "chart_id" not in d3:
+            raise ValueError(
+                "chart-scoped seed data requires chart_id or dataset_source"
+            )
+        d3 = d3.copy()
+        d3["dataset_source"] = d3["chart_id"].astype(str)
+    clean, duplicates = canonicalize_seed_set(
+        d3,
+        source_priority=(
+            None
+            if canonical_priority is None
+            else {
+                str(key): int(value)
+                for key, value in dict(canonical_priority).items()
+            }
+        ),
+    )
     kappa = _d3_conditioning(clean)
     clean["kappa"] = kappa
     policy = config["v12_14"]

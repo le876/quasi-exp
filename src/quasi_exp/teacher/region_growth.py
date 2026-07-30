@@ -131,7 +131,11 @@ def voxel_indices(xyz_m: np.ndarray, voxel_size_mm: float) -> np.ndarray:
     )
 
 
-def canonicalize_seed_set(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def canonicalize_seed_set(
+    frame: pd.DataFrame,
+    *,
+    source_priority: Mapping[str, int] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Remove exact task/phase duplicates without averaging inverse labels.
 
     Core and bridge labels precede tube labels.  Exact ``u=0,v=0`` tube copies
@@ -151,9 +155,12 @@ def canonicalize_seed_set(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
         raise ValueError(f"D3 is missing canonicalization columns: {missing}")
     work = frame.copy()
     zero_tube = work["family_id"].astype(str).str.endswith("_u+0_v+0")
-    priority = work["dataset_source"].map(
+    registered_priority = (
         {"D0_v12_11": 0, "D2_bridge": 1, "D3_tube": 2}
+        if source_priority is None
+        else {str(key): int(value) for key, value in source_priority.items()}
     )
+    priority = work["dataset_source"].map(registered_priority)
     if priority.isna().any():
         raise ValueError("D3 contains an unregistered dataset_source")
     work["_source_priority"] = priority.astype(np.int8)

@@ -138,3 +138,20 @@ def test_v12_15_config_freezes_single_chart_and_sealed_holdout() -> None:
         "S0_balanced",
         "S1_teacher_anchored",
     }
+
+
+def test_final8_reference_joins_registered_semiaxis_catalog() -> None:
+    import run_bacra_v12 as v12
+    from scripts.analysis.run_bacra_v12_15_single_student import (
+        _final8_reference,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    project = Path("/mnt/ML_projects/quasi_exp")
+    config = v12.load_protocol_config(
+        root / "configs/bacra_v12_15_single_student.yaml", "formal"
+    )
+    reference = _final8_reference(config, project)
+    assert len(reference) == 8 * 720
+    assert reference["family_id"].nunique() == 8
+    assert np.isfinite(reference["major_semiaxis_m"]).all()

@@ -89,6 +89,9 @@ def _source_files(
         "final8_teacher": _source_path(
             project_root, str(_values(config)["source_final8_teacher"])
         ),
+        "final8_catalog": _source_path(
+            project_root, str(_values(config)["source_final8_catalog"])
+        ),
     }
 
 
@@ -567,6 +570,22 @@ def _model_roots(
     }
 
 
+def _final8_reference(
+    config: Mapping[str, Any], project_root: Path
+) -> pd.DataFrame:
+    sources = _source_files(config, project_root)
+    teacher = pd.read_parquet(sources["final8_teacher"])
+    catalog = pd.read_parquet(sources["final8_catalog"])[
+        ["family_id", "major_semiaxis_m"]
+    ]
+    return teacher.merge(
+        catalog,
+        on="family_id",
+        how="left",
+        validate="many_to_one",
+    )
+
+
 def _apply_point_gate(
     metrics: pd.DataFrame, config: Mapping[str, Any]
 ) -> pd.DataFrame:
@@ -635,9 +654,7 @@ def stage_select_and_lock(
     validation = dataset.loc[
         dataset["v12_15_split"].eq("validation")
     ].reset_index(drop=True)
-    final8 = pd.read_parquet(
-        _source_files(config, project_root)["final8_teacher"]
-    )
+    final8 = _final8_reference(config, project_root)
     environment = v14._environment(config, project_root)
     seeds = [int(value) for value in _values(config)["seeds"]["training"]]
     candidate_rows = []
@@ -1033,9 +1050,7 @@ def stage_final(
         path_reference, path_details, catalog, path_stage / "plots"
     )
 
-    final8 = pd.read_parquet(
-        _source_files(config, project_root)["final8_teacher"]
-    )
+    final8 = _final8_reference(config, project_root)
     final8_metrics, _ = v14._evaluate_model_set(
         final8,
         model_roots=lock["model_roots"],

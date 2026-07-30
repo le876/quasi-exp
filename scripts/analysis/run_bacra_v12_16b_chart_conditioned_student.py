@@ -292,7 +292,9 @@ def stage_dataset(
         "chart_b_sealed_registry_sha256": sha256_file(
             sources["v12_16a_registry"]
         ),
-        "chart_b_sealed_block_count": int(registry["sealed_block_count"]),
+        "chart_b_sealed_block_count": int(
+            len(registry["sealed_block_keys"])
+        ),
         "chart_b_sealed_labels_opened": False,
     }
     atomic_write_json(stage / "dataset_manifest.json", manifest)

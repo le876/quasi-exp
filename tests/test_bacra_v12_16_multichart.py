@@ -55,3 +55,68 @@ def test_smoke_keeps_spatial_seal_policy_and_uses_four_workers() -> None:
     )
     assert smoke["v12_16"]["parallel"]["cpu_workers"] == 4
     assert smoke["v12_14"]["dense"]["formal_accepted_count"] == 40
+
+
+def test_chart_b_seed_cleanup_accepts_chart_id_schema(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import json
+
+    import numpy as np
+    import pandas as pd
+
+    from scripts.analysis import run_bacra_v12_14_region_growth as v14
+    from quasi_exp.teacher.dense_chart_sampling import BETA_COLUMNS
+
+    source = tmp_path / "chart_b.parquet"
+    frame = pd.DataFrame(
+        {
+            "family_id": ["chart_b_cycle"] * 4,
+            "group_id": ["chart_b"] * 4,
+            "phase_idx": np.arange(4),
+            "x_m": 1.0 + np.arange(4) * 0.001,
+            "y_m": 0.2,
+            "z_m": 0.1,
+            "chart_id": "chart_B",
+            **{
+                name: np.arange(4) * 0.001
+                for name in BETA_COLUMNS
+            },
+            **{
+                f"jacobian_{row}_{column}": (
+                    1.0 if row == column else 0.1
+                )
+                for row in range(3)
+                for column in range(6)
+            },
+        }
+    )
+    frame.to_parquet(source, index=False)
+    output = tmp_path / "run"
+    (output / "00_protocol").mkdir(parents=True)
+    (output / "00_protocol/gate.json").write_text(
+        json.dumps({"gate_pass": True})
+    )
+    monkeypatch.setattr(
+        v14,
+        "_source_files",
+        lambda config, project_root: {"source_d3": source},
+    )
+    config = {
+        "v12_14": {
+            "chart_scope": "chart_B",
+            "canonical_source_priority": {"chart_B": 0},
+            "expected_canonical_seed_rows": 4,
+            "region": {
+                "seed_count": 2,
+                "conditioning_p95_multiplier": 1.5,
+            },
+            "seeds": {"seed_fps": 7},
+        }
+    }
+    report = v14.stage_seed_cleanup(config, tmp_path, output)
+    assert report["gate_pass"]
+    clean = pd.read_parquet(
+        output / "01_seed_cleanup/canonical_seed_dataset.parquet"
+    )
+    assert clean["dataset_source"].eq("chart_B").all()

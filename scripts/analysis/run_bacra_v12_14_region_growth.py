@@ -266,6 +266,7 @@ def stage_seed_cleanup(
     stage.mkdir(parents=True, exist_ok=True)
     source = _source_files(config, project_root)["source_d3"]
     d3 = pd.read_parquet(source)
+    policy = config["v12_14"]
     canonical_priority = policy.get("canonical_source_priority")
     if "dataset_source" not in d3 and canonical_priority is not None:
         if "chart_id" not in d3:
@@ -287,7 +288,6 @@ def stage_seed_cleanup(
     )
     kappa = _d3_conditioning(clean)
     clean["kappa"] = kappa
-    policy = config["v12_14"]
     count = int(policy["region"]["seed_count"])
     indices = farthest_point_seed_indices(
         clean.loc[:, XYZ_COLUMNS].to_numpy(dtype=float),

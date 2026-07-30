@@ -1,0 +1,79 @@
+extends: bacra_v12_16_multichart.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.16b-known-chart-single-student
+schema_version: 1
+claim_scope: simulation_known_chart_multichart_spatial_generalization
+deployment_claim_gate_pass: false
+output_root: runs/bacra_v12_16b_known_chart_single_student
+
+v12_16b:
+  source_v12_16a_root: runs/bacra_v12_16_chart_b_region_formal_20260731
+  source_v12_15_root: runs/bacra_v12_15_single_student_formal_margin_tail_retry1_20260730
+  source_final8_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
+  source_final8_catalog: runs/bacra_v12_13_exploratory_expansion/06_final/new_family_catalog.parquet
+  expected_source_sha256:
+    v12_16a_region_gate: b761a84c31ad58554eab79920e5c575616e5922448ed1994233f2266311cc829
+    v12_16a_spatial_gate: b2048c7f3d6a7fa8ca720eeb8b6638d041125e0b5a0847317672769d0e1a8371
+    v12_16a_registry: 838852b3413b2e2defe0044850ffb80735235cd02dd1b4632e53c06466cd69d3
+    v12_16a_train_validation: 03dc3f6a2ab1a634b5b4bee988864378f4b41e95ff7b967cef4413de55d56e3a
+    v12_16a_R2_dataset: 7121f68beb50dc521990ede0be213bfecb0659554600011f115930cc64e29eed
+    v12_15_gate: bcb6715136c601474dfbefb4bd0ec733abe07cec586e514d131543a08f13d668
+    v12_15_model_lock: 633bf07e51eeaa754ba8c46bcec79464417c9ec74858ea39d430c8dc14146da2
+    v12_15_training_dataset: fc13cb17e45739602b5fb14a447fa85b95d149baea7927a41264d7fd1041a9c0
+    v12_15_sealed_random: ae8d49074df20489c80fc388cb1dc86cdbc77d698ee820dcec2f9fccf13f91db
+    v12_15_sealed_paths: e9f7fd3fda62d37dfbc05484ebbef481d17a6a3b4b5cb0a0808f0160882d8c69
+    final8_teacher: 383c1f3e09844188bbeac1e2b875e1678751cdb0654f9a1b5ee141fa6e925b29
+    final8_catalog: 0c40e67f61fe0fa7bc59f8976ac393e520e5fb5fe804df59c9badd75a8becb7a
+
+  seeds:
+    training: [20260738, 20260739, 20260740]
+    chart_b_trajectory: 20260810
+
+  training:
+    batch_size: 256
+    learning_rate: 0.00005
+    max_optimizer_steps: 10000
+    validation_interval_steps: 100
+    patience_intervals: 24
+    chart_sampling_weights:
+      chart_A: 0.65
+      chart_B: 0.35
+    margin_tail_threshold_deg: 2.2
+    margin_tail_sample_weight_multiplier: 4.0
+    teacher_beta_weight: 0.10
+    distill_beta_weight: 2.00
+    fk_weight: 0.75
+    margin_weight: 4.00
+    row_loss_weight: 0.50
+
+  selection:
+    required_seed_passes: 2
+    fk_p95_mm: 5.0
+    fk_max_mm: 10.0
+    minimum_joint_margin_deg: 1.5
+    final_ellipse_p95_relative: 0.01
+    final_ellipse_max_relative: 0.02
+
+  trajectories:
+    phase_count: 360
+    per_type: 4
+    required_pass_count: 16
+    support_max_mm: 3.5
+
+  parallel:
+    cpu_workers: 12
+    gpu_training_workers: 1
+
+smoke:
+  output_root: runs/bacra_v12_16b_known_chart_single_student_smoke
+  v12_16b:
+    training:
+      max_optimizer_steps: 4
+      validation_interval_steps: 2
+      patience_intervals: 2
+    trajectories:
+      phase_count: 36
+      per_type: 1
+      required_pass_count: 2
+    parallel:
+      cpu_workers: 4

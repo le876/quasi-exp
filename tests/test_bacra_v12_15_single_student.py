@@ -155,3 +155,22 @@ def test_final8_reference_joins_registered_semiaxis_catalog() -> None:
     assert len(reference) == 8 * 720
     assert reference["family_id"].nunique() == 8
     assert np.isfinite(reference["major_semiaxis_m"]).all()
+
+
+def test_smoke_config_keeps_formal_thresholds_but_uses_short_training() -> None:
+    import run_bacra_v12 as v12
+
+    root = Path(__file__).resolve().parents[1]
+    formal = v12.load_protocol_config(
+        root / "configs/bacra_v12_15_single_student.yaml", "formal"
+    )
+    smoke = v12.load_protocol_config(
+        root / "configs/bacra_v12_15_single_student.yaml", "smoke"
+    )
+    assert smoke["v12_15"]["selection"] == formal["v12_15"]["selection"]
+    assert (
+        smoke["v12_15"]["distillation"]["variants"]["S0_balanced"][
+            "max_optimizer_steps"
+        ]
+        == 4
+    )

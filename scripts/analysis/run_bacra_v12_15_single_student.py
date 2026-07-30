@@ -729,6 +729,7 @@ def stage_select_and_lock(
         "schema_version": 1,
         "selected_variant": str(selected["variant"]),
         "selected_eligible": bool(selected["eligible"]),
+        "smoke_numeric_gate_bypassed": config["preset"] == "smoke",
         "selection_uses_sealed_holdout": False,
         "selection_sets": [
             "nonsealed_validation_macro_blocks",
@@ -737,13 +738,18 @@ def stage_select_and_lock(
         "ranking": candidate.to_dict(orient="records"),
     }
     atomic_write_json(stage / "selection.json", selection)
+    smoke = config["preset"] == "smoke"
     gate = _gate(
         stage / "gate.json",
         {
-            "at_least_one_jointly_eligible_variant": bool(
-                candidate["eligible"].any()
+            "registered_variants_evaluated": len(candidate)
+            == len(_values(config)["distillation"]["variants"]),
+            "formal_joint_eligibility_or_smoke_schema_only": bool(
+                smoke or candidate["eligible"].any()
             ),
-            "selected_variant_is_eligible": bool(selected["eligible"]),
+            "formal_selected_eligible_or_smoke_schema_only": bool(
+                smoke or selected["eligible"]
+            ),
             "selection_excludes_sealed_holdout": True,
             "sealed_holdout_still_unopened": not (
                 output_root
@@ -1067,25 +1073,51 @@ def stage_final(
     summary_stage = output_root / "08_summary"
     summary_stage.mkdir(parents=True, exist_ok=True)
     expected_paths = 5 * int(values["trajectories"]["per_type"])
-    checks = {
-        "locked_artifacts_are_single_models": lock["model_mode"]
-        == "single_bounded_mlp",
-        "sealed_registry_matches_locked_hash": sha256_file(registry_path)
-        == lock["sealed_registry_sha256"],
-        "sealed_random_teacher_rows_complete": len(reference) == required,
-        "sealed_random_seed_gate": int(random_metrics["seed_gate_pass"].sum())
-        >= int(values["selection"]["required_seed_passes"]),
-        "sealed_paths_teacher_complete": len(complete_ids) == expected_paths,
-        "sealed_path_gate": int(path_family_pass.sum())
-        >= int(values["trajectories"]["required_pass_count"]),
-        "current_final8_retained": bool(final8_family_pass.all()),
-        "all_path_points_registered_sealed": bool(
-            catalog["all_points_in_registered_sealed_blocks"].all()
-        ),
-        "model_was_locked_before_holdout_open": bool(
-            lock["model_locked_before_sealed_holdout_open"]
-        ),
-    }
+    if config["preset"] == "smoke":
+        checks = {
+            "locked_artifacts_are_single_models": lock["model_mode"]
+            == "single_bounded_mlp",
+            "sealed_registry_matches_locked_hash": sha256_file(registry_path)
+            == lock["sealed_registry_sha256"],
+            "sealed_random_teacher_rows_complete": len(reference) == required,
+            "three_smoke_models_evaluated": len(random_metrics) == 3,
+            "all_smoke_paths_teacher_complete": len(complete_ids)
+            == expected_paths,
+            "all_smoke_paths_evaluated": path_metrics[
+                "family_id"
+            ].nunique()
+            == expected_paths,
+            "current_final8_evaluation_complete": len(final8_metrics) == 24,
+            "all_path_points_registered_sealed": bool(
+                catalog["all_points_in_registered_sealed_blocks"].all()
+            ),
+            "model_was_locked_before_holdout_open": bool(
+                lock["model_locked_before_sealed_holdout_open"]
+            ),
+        }
+    else:
+        checks = {
+            "locked_artifacts_are_single_models": lock["model_mode"]
+            == "single_bounded_mlp",
+            "sealed_registry_matches_locked_hash": sha256_file(registry_path)
+            == lock["sealed_registry_sha256"],
+            "sealed_random_teacher_rows_complete": len(reference) == required,
+            "sealed_random_seed_gate": int(
+                random_metrics["seed_gate_pass"].sum()
+            )
+            >= int(values["selection"]["required_seed_passes"]),
+            "sealed_paths_teacher_complete": len(complete_ids)
+            == expected_paths,
+            "sealed_path_gate": int(path_family_pass.sum())
+            >= int(values["trajectories"]["required_pass_count"]),
+            "current_final8_retained": bool(final8_family_pass.all()),
+            "all_path_points_registered_sealed": bool(
+                catalog["all_points_in_registered_sealed_blocks"].all()
+            ),
+            "model_was_locked_before_holdout_open": bool(
+                lock["model_locked_before_sealed_holdout_open"]
+            ),
+        }
     recommendation = (
         "# V12.15 final recommendation\n\n"
         f"- sealed spatial-block random seed pass: "

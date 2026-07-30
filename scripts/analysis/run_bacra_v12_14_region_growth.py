@@ -242,8 +242,8 @@ def stage_protocol(
             name: sha256_file(path) for name, path in implementation.items()
         },
         git_sha=git_sha,
-        chart_scope="chart_A_only",
-        capability_pool_beta_role="support_only_never_chart_A_label",
+        chart_scope=str(config["v12_14"].get("chart_scope", "chart_A_only")),
+        capability_pool_beta_role="support_only_never_canonical_label",
     )
 
 
@@ -280,7 +280,8 @@ def stage_seed_cleanup(
     seeds.insert(
         0, "node_id", [f"seed:{index:04d}" for index in range(len(seeds))]
     )
-    seeds["node_origin"] = "clean_D3_farthest_point_seed"
+    chart_scope = str(policy.get("chart_scope", "chart_A_only"))
+    seeds["node_origin"] = f"{chart_scope}_farthest_point_seed"
     duplicate_curve = (
         duplicates.groupby(
             ["duplicate_reason", "family_id", "selected_family_id"],
@@ -335,7 +336,7 @@ def stage_seed_cleanup(
                 clean.loc[:, [*XYZ_COLUMNS, *BETA_COLUMNS]].to_numpy()
             ).all(),
         },
-        semantics="chart_A_seed_canonicalization",
+        semantics=f"{chart_scope}_seed_canonicalization",
         **report,
     )
 
@@ -530,7 +531,7 @@ def _seed_anchor_frame(output_root: Path, voxel_size_mm: float) -> pd.DataFrame:
     seeds["voxel_key"] = pack_voxels(voxels)
     seeds["quality_class"] = seeds.get("quality_class", "Gold")
     seeds["candidate_gap_max_deg"] = 0.0
-    seeds["node_origin"] = "clean_D3_canonical_anchor"
+    seeds["node_origin"] = "canonical_chart_anchor"
     return seeds
 
 
@@ -560,7 +561,9 @@ def stage_sparse_growth(
     region_seeds["candidate_gap_max_deg"] = 0.0
     region_seeds["candidate_gap_p95_deg"] = 0.0
     region_seeds["quality_class"] = region_seeds["quality_class"].astype(str)
-    region_seeds["node_origin"] = "clean_D3_farthest_point_seed"
+    region_seeds["node_origin"] = (
+        f"{values.get('chart_scope', 'chart_A_only')}_farthest_point_seed"
+    )
     region = pd.read_parquet(
         output_root / "02_capability_region/selected_region_voxels.parquet"
     )

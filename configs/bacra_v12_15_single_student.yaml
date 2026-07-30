@@ -34,28 +34,30 @@ v12_15:
   distillation:
     batch_size: 256
     validation_interval_steps: 100
-    patience_intervals: 20
+    patience_intervals: 24
+    margin_tail_threshold_deg: 2.2
+    margin_tail_sample_weight_multiplier: 4.0
     sampling_weights:
       old: 0.30
       interior: 0.50
       boundary: 0.20
     variants:
-      S0_balanced:
-        learning_rate: 0.00010
-        max_optimizer_steps: 6500
-        teacher_beta_weight: 0.35
-        distill_beta_weight: 1.00
-        fk_weight: 0.50
-        margin_weight: 0.50
-        row_loss_weight: 1.00
-      S1_teacher_anchored:
+      S0_margin_tail:
         learning_rate: 0.00005
         max_optimizer_steps: 9000
-        teacher_beta_weight: 0.60
-        distill_beta_weight: 1.00
+        teacher_beta_weight: 0.10
+        distill_beta_weight: 2.00
         fk_weight: 0.75
-        margin_weight: 0.50
-        row_loss_weight: 1.00
+        margin_weight: 4.00
+        row_loss_weight: 0.50
+      S1_margin_tail_strong:
+        learning_rate: 0.00003
+        max_optimizer_steps: 12000
+        teacher_beta_weight: 0.10
+        distill_beta_weight: 2.50
+        fk_weight: 0.75
+        margin_weight: 8.00
+        row_loss_weight: 0.50
 
   selection:
     required_seed_passes: 2
@@ -84,9 +86,9 @@ smoke:
       validation_interval_steps: 2
       patience_intervals: 2
       variants:
-        S0_balanced:
+        S0_margin_tail:
           max_optimizer_steps: 4
-        S1_teacher_anchored:
+        S1_margin_tail_strong:
           max_optimizer_steps: 4
     trajectories:
       phase_count: 36

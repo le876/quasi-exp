@@ -135,8 +135,8 @@ def test_v12_15_config_freezes_single_chart_and_sealed_holdout() -> None:
     )
     assert config["v12_15"]["parallel"]["gpu_training_workers"] == 1
     assert set(config["v12_15"]["distillation"]["variants"]) == {
-        "S0_balanced",
-        "S1_teacher_anchored",
+        "S0_margin_tail",
+        "S1_margin_tail_strong",
     }
 
 
@@ -169,8 +169,14 @@ def test_smoke_config_keeps_formal_thresholds_but_uses_short_training() -> None:
     )
     assert smoke["v12_15"]["selection"] == formal["v12_15"]["selection"]
     assert (
-        smoke["v12_15"]["distillation"]["variants"]["S0_balanced"][
+        smoke["v12_15"]["distillation"]["variants"]["S0_margin_tail"][
             "max_optimizer_steps"
         ]
         == 4
+    )
+    assert (
+        formal["v12_15"]["distillation"][
+            "margin_tail_sample_weight_multiplier"
+        ]
+        == 4.0
     )

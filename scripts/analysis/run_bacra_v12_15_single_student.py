@@ -391,6 +391,21 @@ def _worker_distill(args: argparse.Namespace) -> int:
     )
     for index, column in enumerate(DISTILL_BETA_COLUMNS):
         dataset[column] = composite_target[:, index]
+    environment = v14._environment(config, project_root)
+    composite_margin = v14.point_margin_deg(
+        composite_target, environment.bounds
+    )
+    training = values["distillation"]
+    margin_tail = (
+        dataset["v12_15_split"].eq("train").to_numpy()
+        & (
+            composite_margin
+            < float(training["margin_tail_threshold_deg"])
+        )
+    )
+    dataset.loc[margin_tail, "sample_weight"] *= float(
+        training["margin_tail_sample_weight_multiplier"]
+    )
     train = dataset.loc[dataset["v12_15_split"].eq("train")].copy()
     validation = dataset.loc[
         dataset["v12_15_split"].eq("validation")
@@ -398,7 +413,6 @@ def _worker_distill(args: argparse.Namespace) -> int:
     source = source_lock["model_sources"][str(seed)]
     initial_model = Path(source["base_model"]).resolve()
     model = tf.keras.models.load_model(initial_model, compile=False)
-    training = values["distillation"]
     model, history, report = train_retention_distilled_student(
         model,
         train,
@@ -436,8 +450,15 @@ def _worker_distill(args: argparse.Namespace) -> int:
             "source_region_sha256": source["region_model_sha256"],
             "source_model_lock_sha256": sha256_file(source_lock_path),
             "device": devices[0].name,
+            "margin_tail_threshold_deg": float(
+                training["margin_tail_threshold_deg"]
+            ),
+            "margin_tail_sample_weight_multiplier": float(
+                training["margin_tail_sample_weight_multiplier"]
+            ),
+            "margin_tail_training_rows": int(np.count_nonzero(margin_tail)),
             "validation_metrics": v14._prediction_metrics(
-                v14._environment(config, project_root),
+                environment,
                 prediction,
                 validation.loc[:, XYZ_COLUMNS].to_numpy(dtype=float),
             ),

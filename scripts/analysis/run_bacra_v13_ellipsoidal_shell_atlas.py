@@ -1004,6 +1004,80 @@ def _parent_prediction_metrics(
     return gap_p95, gap_max, in_bounds_count
 
 
+def _volume_stratified_accepted_indices(
+    *,
+    accepted: np.ndarray,
+    radial_interval_id: np.ndarray,
+    face_id: np.ndarray,
+    accepted_cell_mask: np.ndarray,
+    cell_volumes: np.ndarray,
+    requested_count: int,
+) -> np.ndarray:
+    """Select accepted rows with deterministic physical-volume cell quotas."""
+    accepted_mask = np.asarray(accepted, dtype=bool).reshape(-1)
+    radial = np.asarray(radial_interval_id, dtype=np.int64).reshape(-1)
+    faces = np.asarray(face_id, dtype=np.int64).reshape(-1)
+    if len(radial) != len(accepted_mask) or len(faces) != len(accepted_mask):
+        raise ValueError("accepted and cell identifiers must align")
+    mask = np.asarray(accepted_cell_mask, dtype=bool)
+    volumes = np.asarray(cell_volumes, dtype=float)
+    if mask.shape != volumes.shape:
+        raise ValueError("accepted cell mask and volume table must align")
+    accepted_rows = np.flatnonzero(accepted_mask)
+    if len(accepted_rows) <= int(requested_count):
+        return accepted_rows
+    cell_rows = np.argwhere(mask)
+    weights = volumes[mask]
+    expected = int(requested_count) * weights / weights.sum()
+    quota = np.floor(expected).astype(np.int64)
+    remainder = int(requested_count) - int(quota.sum())
+    fractional = expected - quota
+    order = np.lexsort((np.arange(len(quota)), -fractional))
+    quota[order[:remainder]] += 1
+    face_count = mask.shape[1]
+    cell_codes = radial * face_count + faces
+    accepted_codes = cell_codes[accepted_rows]
+    stable_order = np.argsort(accepted_codes, kind="stable")
+    sorted_rows = accepted_rows[stable_order]
+    sorted_codes = accepted_codes[stable_order]
+    unique, starts, counts = np.unique(
+        sorted_codes, return_index=True, return_counts=True
+    )
+    row_groups = {
+        int(code): sorted_rows[int(start) : int(start + count)]
+        for code, start, count in zip(unique, starts, counts)
+    }
+    capacity = np.asarray(
+        [
+            len(row_groups.get(int(r * face_count + f), ()))
+            for r, f in cell_rows
+        ],
+        dtype=np.int64,
+    )
+    quota = np.minimum(quota, capacity)
+    deficit = int(requested_count) - int(quota.sum())
+    while deficit > 0:
+        eligible = np.flatnonzero(quota < capacity)
+        if not len(eligible):
+            break
+        priority = sorted(
+            eligible,
+            key=lambda index: (
+                float(quota[index] / max(expected[index], 1.0e-12)),
+                int(index),
+            ),
+        )
+        take = priority[:deficit]
+        quota[np.asarray(take, dtype=int)] += 1
+        deficit -= len(take)
+    selected: list[np.ndarray] = []
+    for (radial_index, selected_face), count in zip(cell_rows, quota):
+        if count:
+            code = int(radial_index * face_count + selected_face)
+            selected.append(row_groups[code][: int(count)])
+    return np.concatenate(selected) if selected else np.asarray([], dtype=np.int64)
+
+
 def stage_dense_dataset(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     _require_gate(output_root, "radial_labels")
     stage = output_root / STAGE_DIR["dense_dataset"]
@@ -1076,7 +1150,15 @@ def stage_dense_dataset(config: Mapping[str, Any], project_root: Path, output_ro
         & (successful_parent_count >= 3)
         & (parent_gap_max <= float(dense_values["parent_gap_max_deg"]) + 1.0e-12)
     )
-    accepted_indices = np.flatnonzero(accepted)[:requested]
+    volumes = radial_cell_volumes(mesh, levels)
+    accepted_indices = _volume_stratified_accepted_indices(
+        accepted=accepted,
+        radial_interval_id=samples["radial_interval_id"],
+        face_id=samples["face_id"],
+        accepted_cell_mask=cell_mask,
+        cell_volumes=volumes,
+        requested_count=requested,
+    )
     surface_unit = np.empty((attempt_count, 3), dtype=float)
     normal = np.empty((attempt_count, 3), dtype=float)
     for sample_id in range(attempt_count):
@@ -1136,7 +1218,6 @@ def stage_dense_dataset(config: Mapping[str, Any], project_root: Path, output_ro
     dataset = frame.iloc[accepted_indices].copy().reset_index(drop=True)
     dataset.insert(0, "sample_id", np.arange(len(dataset), dtype=np.int64))
     _atomic_parquet(dataset, stage / "A3_shell_dataset.parquet")
-    volumes = radial_cell_volumes(mesh, levels)
     accepted_counts = dataset.groupby(["radial_interval_id", "face_id"], sort=True).size()
     density = []
     for radial_index, face_id in np.argwhere(cell_mask):
@@ -1237,10 +1318,204 @@ def stage_summary(config: Mapping[str, Any], project_root: Path, output_root: Pa
     )
 
 
+def run_dense_quota_replay(
+    config: Mapping[str, Any],
+    project_root: Path,
+    source_root: Path,
+    output_root: Path,
+) -> dict[str, Any]:
+    """Replay only the deterministic accepted-row quota from frozen attempts."""
+    if output_root.exists():
+        raise FileExistsError(f"dense replay output already exists: {output_root}")
+    output_root.mkdir(parents=True)
+    protocol = output_root / STAGE_DIR["protocol"]
+    protocol.mkdir()
+    source_gates = {
+        name: json.loads(
+            (source_root / STAGE_DIR[name] / "gate.json").read_text(encoding="utf-8")
+        )
+        for name in ("protocol", "shell_search", "surface_atlas", "radial_labels", "dense_dataset")
+    }
+    dense_checks = dict(source_gates["dense_dataset"]["checks"])
+    expected_failure = {
+        name for name, value in dense_checks.items() if not bool(value)
+    } == {"physical_volume_density_cv"}
+    source_files = {
+        "ellipsoid": source_root / STAGE_DIR["shell_search"] / "ellipsoid.json",
+        "mesh_vertices": source_root / STAGE_DIR["shell_search"] / "mesh_vertices.parquet",
+        "mesh_faces": source_root / STAGE_DIR["shell_search"] / "mesh_faces.parquet",
+        "radial_labels": source_root / STAGE_DIR["radial_labels"] / "radial_labels.parquet",
+        "dense_attempts": source_root / STAGE_DIR["dense_dataset"] / "dense_attempts.parquet",
+    }
+    git_sha = subprocess.run(
+        ["git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    git_status = subprocess.run(
+        ["git", "-C", str(SOURCE_ROOT), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    manifest = {
+        "replay_git_sha": git_sha,
+        "source_run_root": str(source_root),
+        "source_git_sha": source_gates["protocol"].get("git_sha"),
+        "source_artifacts": {
+            name: {"path": str(path), "sha256": sha256_file(path)}
+            for name, path in source_files.items()
+        },
+        "replay_implementation": {
+            "path": str(Path(__file__).resolve()),
+            "sha256": sha256_file(Path(__file__).resolve()),
+        },
+    }
+    atomic_write_json(protocol / "source_manifest.json", manifest)
+    protocol_gate = _gate(
+        protocol / "gate.json",
+        {
+            "source_files_exist": all(path.is_file() for path in source_files.values()),
+            "source_upstream_shell_gates_pass": all(
+                bool(source_gates[name]["gate_pass"])
+                for name in ("protocol", "shell_search", "surface_atlas", "radial_labels")
+            ),
+            "source_dense_failure_is_quota_cv_only": expected_failure,
+            "replay_worktree_clean": git_status == "",
+            "formal_preset": config["preset"] == "formal",
+        },
+        semantics="frozen_formal_attempts_dense_quota_replay",
+        **manifest,
+    )
+    if not protocol_gate["gate_pass"]:
+        report = {
+            "protocol_id": PROTOCOL_ID,
+            "preset": config["preset"],
+            "output_root": str(output_root),
+            "requested_stage": "dense_quota_replay",
+            "executed_stages": ["protocol"],
+            "stopped_after": "protocol",
+        }
+        atomic_write_json(output_root / "run_report.json", report)
+        return report
+    mesh = _load_mesh(source_root)
+    levels = np.asarray(config["mesh"]["radial_levels_mm"], dtype=float) / 1000.0
+    labels = pd.read_parquet(source_files["radial_labels"])
+    chart_sets, _beta_by_key = _radial_chart_arrays(mesh, levels, labels)
+    cell_mask, _primary = covered_cells(mesh, levels, chart_sets)
+    volumes = radial_cell_volumes(mesh, levels)
+    attempts = pd.read_parquet(source_files["dense_attempts"])
+    requested = int(config["dense"]["row_count"])
+    selected = _volume_stratified_accepted_indices(
+        accepted=attempts["accepted"].to_numpy(dtype=bool),
+        radial_interval_id=attempts["radial_interval_id"].to_numpy(),
+        face_id=attempts["face_id"].to_numpy(),
+        accepted_cell_mask=cell_mask,
+        cell_volumes=volumes,
+        requested_count=requested,
+    )
+    dataset = attempts.iloc[selected].copy().reset_index(drop=True)
+    dataset.insert(0, "sample_id", np.arange(len(dataset), dtype=np.int64))
+    dense_stage = output_root / STAGE_DIR["dense_dataset"]
+    dense_stage.mkdir(parents=True)
+    dataset_path = dense_stage / "A3_shell_dataset.parquet"
+    _atomic_parquet(dataset, dataset_path)
+    counts = dataset.groupby(["radial_interval_id", "face_id"], sort=True).size()
+    density = np.asarray(
+        [
+            int(counts.get((int(radial), int(face)), 0))
+            / volumes[int(radial), int(face)]
+            for radial, face in np.argwhere(cell_mask)
+        ]
+    )
+    density_cv = float(np.std(density) / np.mean(density))
+    probes = sample_shell_cells(
+        mesh,
+        levels,
+        cell_mask,
+        10000,
+        seed=int(config["dense"]["seed"]) + 1,
+        stratified=True,
+    )["xyz_m"]
+    distance, _ = cKDTree(dataset.loc[:, XYZ_COLUMNS].to_numpy()).query(probes, k=1)
+    fill_p95_mm = float(np.percentile(distance, 95) * 1000.0)
+    fill_max_mm = float(np.max(distance) * 1000.0)
+    dense_values = config["dense"]
+    gap = dataset["candidate_gap_max_deg"].to_numpy(dtype=float)
+    dense_gate = _gate(
+        dense_stage / "gate.json",
+        {
+            "requested_rows_written_without_padding": len(dataset) == requested,
+            "physical_volume_density_cv": density_cv <= float(dense_values["density_cv_max"]) + 1.0e-12,
+            "fill_distance_p95": fill_p95_mm <= float(dense_values["fill_distance_p95_mm"]) + 1.0e-12,
+            "fill_distance_max": fill_max_mm <= float(dense_values["fill_distance_max_mm"]) + 1.0e-12,
+            "parent_consistency_p95": float(np.percentile(gap, 95)) <= float(dense_values["parent_gap_p95_deg"]) + 1.0e-12,
+            "parent_consistency_max": float(np.max(gap)) <= float(dense_values["parent_gap_max_deg"]) + 1.0e-12,
+            "fk_residual_max": float(dataset["residual_mm"].max()) <= float(dense_values["residual_max_mm"]) + 1.0e-12,
+            "all_beta_in_bounds": bool(dataset["actual_bounds"].all()),
+            "known_chart_only": bool(dataset["chart_id"].astype(str).str.len().gt(0).all()),
+        },
+        semantics="frozen_attempts_volume_stratified_quota_replay",
+        source_attempts_sha256=manifest["source_artifacts"]["dense_attempts"]["sha256"],
+        requested_rows=requested,
+        written_rows=len(dataset),
+        density_cv=density_cv,
+        fill_distance_p95_mm=fill_p95_mm,
+        fill_distance_max_mm=fill_max_mm,
+        parent_gap_p95_deg=float(np.percentile(gap, 95)),
+        parent_gap_max_deg=float(np.max(gap)),
+        residual_p95_mm=float(np.percentile(dataset["residual_mm"], 95)),
+        residual_max_mm=float(dataset["residual_mm"].max()),
+        split_rows=dataset["split"].value_counts().sort_index().to_dict(),
+        chart_rows=dataset["chart_id"].value_counts().sort_index().to_dict(),
+    )
+    summary_stage = output_root / STAGE_DIR["summary"]
+    summary_stage.mkdir()
+    summary_gate = _gate(
+        summary_stage / "gate.json",
+        {
+            "source_primary_shell_gates_pass": bool(protocol_gate["gate_pass"]),
+            "dense_quota_replay_pass": bool(dense_gate["gate_pass"]),
+            "dataset_rows_match": len(dataset) == requested,
+            "student_not_used_to_upgrade_shell": True,
+            "automatic_chart_classifier_disabled": config["student"]["automatic_chart_classifier"] is False,
+        },
+        semantics="formal_primary_shell_dataset_dense_quota_replay",
+        source_run_root=str(source_root),
+        source_git_sha=manifest["source_git_sha"],
+        replay_git_sha=git_sha,
+        dataset_path=str(dataset_path),
+        dataset_sha256=sha256_file(dataset_path),
+        dataset_rows=len(dataset),
+        student_training_status="not_started_by_primary_shell_pipeline",
+    )
+    stopped = None if summary_gate["gate_pass"] else "summary"
+    report = {
+        "protocol_id": PROTOCOL_ID,
+        "preset": config["preset"],
+        "output_root": str(output_root),
+        "requested_stage": "dense_quota_replay",
+        "executed_stages": ["protocol", "dense_dataset", "summary"],
+        "stopped_after": stopped,
+    }
+    atomic_write_json(output_root / "run_report.json", report)
+    return report
+
+
 def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     config = load_config(args.config, args.preset)
     project_root = Path(args.project_root).resolve()
     output_root = _output_root(config, project_root, args.output)
+    if args.replay_dense_from:
+        if not args.output:
+            raise ValueError("--replay-dense-from requires an explicit --output")
+        return run_dense_quota_replay(
+            config,
+            project_root,
+            Path(args.replay_dense_from).resolve(),
+            output_root,
+        )
     output_root.mkdir(parents=True, exist_ok=True)
     functions: Mapping[str, Callable[[], dict[str, Any]]] = {
         "protocol": lambda: stage_protocol(config, project_root, output_root),
@@ -1291,6 +1566,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-root", default=str(project_root_from(SOURCE_ROOT))
     )
     parser.add_argument("--output")
+    parser.add_argument("--replay-dense-from")
     parser.add_argument(
         "--stage", choices=("all", *(name for name, _ in STAGES)), default="all"
     )

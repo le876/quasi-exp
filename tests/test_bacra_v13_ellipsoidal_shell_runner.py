@@ -11,6 +11,7 @@ from quasi_exp.teacher.ellipsoidal_shell import (
 )
 from scripts.analysis.run_bacra_v13_ellipsoidal_shell_atlas import (
     _parent_prediction_metrics,
+    _volume_stratified_accepted_indices,
     main,
     load_config,
 )
@@ -88,3 +89,26 @@ def test_main_returns_nonzero_when_a_scientific_gate_stops_pipeline(monkeypatch)
         lambda _args: {"stopped_after": "surface_atlas"},
     )
     assert main() == 2
+
+
+def test_dense_selection_preserves_physical_volume_quota_after_oversampling() -> None:
+    # Two radial bins x three faces, with deliberately shuffled accepted rows.
+    volumes = np.asarray(((1.0, 2.0, 3.0), (1.5, 2.5, 4.0)))
+    radial = np.repeat(np.arange(2), 60)
+    face = np.tile(np.repeat(np.arange(3), 20), 2)
+    permutation = np.random.default_rng(7).permutation(len(radial))
+    radial, face = radial[permutation], face[permutation]
+    selected = _volume_stratified_accepted_indices(
+        accepted=np.ones(len(radial), dtype=bool),
+        radial_interval_id=radial,
+        face_id=face,
+        accepted_cell_mask=np.ones_like(volumes, dtype=bool),
+        cell_volumes=volumes,
+        requested_count=70,
+    )
+    assert len(selected) == 70
+    counts = np.zeros_like(volumes)
+    for radial_id, face_id in zip(radial[selected], face[selected]):
+        counts[radial_id, face_id] += 1
+    density = counts / volumes
+    assert float(np.std(density) / np.mean(density)) < 0.10

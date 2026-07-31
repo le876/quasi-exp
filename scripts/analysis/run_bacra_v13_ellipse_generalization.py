@@ -196,9 +196,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     candidates = _section_candidates(spec, int(ellipse_config["candidate_count"]))
     catalog = _select_catalog(candidates, int(ellipse_config["cycle_count"]))
     catalog["role"] = np.where(
-        catalog["cycle_id"] < int(ellipse_config["development_cycles"]),
-        "development",
+        catalog["cycle_id"] < int(ellipse_config["sealed_cycles"]),
         "sealed",
+        "development",
     )
     catalog_stage = output_root / "01_catalog"
     catalog_stage.mkdir()
@@ -259,6 +259,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     _atomic_parquet(points, result_stage / "point_metrics.parquet")
     _atomic_parquet(cycles, result_stage / "cycle_metrics.parquet")
     sealed_cycles = cycles.loc[cycles["role"] == "sealed"].copy()
+    sealed_catalog = catalog.loc[catalog["role"] == "sealed"].copy()
     sealed_points = points.loc[
         points["cycle_id"].isin(catalog.loc[catalog["role"] == "sealed", "cycle_id"])
     ].copy()
@@ -268,7 +269,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         column: sealed_cycles.groupby(column, sort=True)["cycle_pass"].mean().to_dict()
         for column in bin_columns
     }
-    semimajor_ratio = float(catalog["semimajor_m"].max() / catalog["semimajor_m"].min())
+    semimajor_ratio = float(
+        sealed_catalog["semimajor_m"].max() / sealed_catalog["semimajor_m"].min()
+    )
     summary = output_root / "03_summary"
     summary.mkdir()
     gate = _gate(
@@ -279,9 +282,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "registered_development_cycle_count": int((catalog["role"] == "development").sum()) == int(ellipse_config["development_cycles"]),
             "registered_sealed_cycle_count": int((catalog["role"] == "sealed").sum()) == int(ellipse_config["sealed_cycles"]),
             "semimajor_range_threefold": semimajor_ratio >= 3.0,
-            "axis_ratio_domain": bool(catalog["axis_ratio"].between(0.30, 1.0).all()),
-            "orientation_coverage": catalog["orientation_bin"].nunique() >= 8,
-            "offset_coverage": catalog["offset_bin"].nunique() >= 3,
+            "sealed_axis_ratio_domain": bool(sealed_catalog["axis_ratio"].between(0.30, 1.0).all()),
+            "sealed_orientation_coverage": sealed_catalog["orientation_bin"].nunique() >= 8,
+            "sealed_offset_coverage": sealed_catalog["offset_bin"].nunique() >= 3,
             "overall_cycle_pass": float(worst_cycle.mean()) >= float(ellipse_config["overall_cycle_pass_min"]),
             "each_nonempty_bin_pass": all(
                 float(value) >= float(ellipse_config["nonempty_bin_pass_min"])
@@ -295,13 +298,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         semantics="locked_student_analytical_plane_section_ellipse_generalization",
         cycle_count=len(catalog),
         point_count=len(points),
-        semimajor_min_m=float(catalog["semimajor_m"].min()),
-        semimajor_max_m=float(catalog["semimajor_m"].max()),
+        semimajor_min_m=float(sealed_catalog["semimajor_m"].min()),
+        semimajor_max_m=float(sealed_catalog["semimajor_m"].max()),
         semimajor_range_ratio=semimajor_ratio,
-        axis_ratio_min=float(catalog["axis_ratio"].min()),
-        axis_ratio_max=float(catalog["axis_ratio"].max()),
-        orientation_bin_count=int(catalog["orientation_bin"].nunique()),
-        offset_bin_count=int(catalog["offset_bin"].nunique()),
+        axis_ratio_min=float(sealed_catalog["axis_ratio"].min()),
+        axis_ratio_max=float(sealed_catalog["axis_ratio"].max()),
+        orientation_bin_count=int(sealed_catalog["orientation_bin"].nunique()),
+        offset_bin_count=int(sealed_catalog["offset_bin"].nunique()),
         cycle_pass_ratio=float(worst_cycle.mean()),
         sealed_cycle_count=int(len(worst_cycle)),
         sealed_point_count=int(len(sealed_points)),

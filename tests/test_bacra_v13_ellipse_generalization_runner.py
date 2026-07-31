@@ -34,6 +34,8 @@ def test_ellipse_runner_is_locked_evaluation_only() -> None:
     assert ".fit(" not in text
     assert "plane_section" in text
     assert "relative_error_p95_max" in text
+    assert 'catalog["cycle_id"] < int(ellipse_config["sealed_cycles"])' in text
+    assert 'sealed_catalog["orientation_bin"].nunique()' in text
     assert 'return 0 if bool(report.get("gate_pass")) else 2' in text
 
 

@@ -322,7 +322,9 @@ def _candidate_specs(
     remaining = max(0, int(count) - len(specs))
     if remaining:
         engine = qmc.Sobol(d=10, scramble=True, seed=int(seed))
-        samples = engine.random(remaining)
+        samples = engine.random_base2(m=int(math.ceil(math.log2(remaining))))[
+            :remaining
+        ]
         for row in samples:
             local_center = lower + row[:3] * (upper - lower)
             candidate_center = center + local_center @ pca.T
@@ -683,7 +685,11 @@ def stage_surface_atlas(config: Mapping[str, Any], project_root: Path, output_ro
         [any(all(int(vertex) in chart_nodes for vertex in face) for chart_nodes in chart_sets) for face in mesh.faces]
     )
     union_area = float(np.sum(mesh.face_areas_m2[union_faces]) / mesh.surface_area_m2)
-    mergeable_overlap = [value for value in atlas.overlap_reports if value.resolution != "separate"]
+    mergeable_overlap = [
+        value
+        for value in atlas.overlap_reports
+        if not value.resolution.startswith("separate")
+    ]
     gates = config["gates"]
     return _gate(
         stage / "gate.json",

@@ -97,6 +97,7 @@ presets:
     search:
       candidate_count: 128
       finalist_count: 8
+      semiaxis_bounds_mm: [50.0, 150.0]
     mesh:
       subdivisions: 1
       radial_levels_mm: [-10.0, 0.0, 10.0]

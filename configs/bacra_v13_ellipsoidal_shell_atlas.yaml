@@ -80,6 +80,15 @@ student:
   hidden_units: [128, 128, 64]
   seeds: [20260738, 20260739, 20260740]
   automatic_chart_classifier: false
+  lambda_fk: 1.0
+  learning_rate: 0.001
+  batch_size: 1024
+  max_epochs: 200
+  patience: 20
+  validation_fk_p95_max_mm: 5.0
+  validation_fk_max_mm: 10.0
+  sealed_fk_p95_max_mm: 5.0
+  sealed_fk_max_mm: 10.0
 
 ellipse:
   size_bins: 5

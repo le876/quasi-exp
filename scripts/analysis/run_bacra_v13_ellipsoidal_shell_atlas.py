@@ -688,7 +688,12 @@ def stage_surface_atlas(config: Mapping[str, Any], project_root: Path, output_ro
     mergeable_overlap = [
         value
         for value in atlas.overlap_reports
-        if not value.resolution.startswith("separate")
+        if value.resolution.startswith("mergeable")
+    ]
+    ambiguous_overlap = [
+        value
+        for value in atlas.overlap_reports
+        if value.resolution == "ambiguous_keep_separate"
     ]
     gates = config["gates"]
     return _gate(
@@ -709,6 +714,7 @@ def stage_surface_atlas(config: Mapping[str, Any], project_root: Path, output_ro
         robust_edge_count=len(atlas.product_graph.robust_edges),
         directed_edge_count=len(atlas.product_graph.directed_edges),
         rejected_continuation_count=atlas.product_graph.rejected_continuation_count,
+        ambiguous_known_chart_overlap_count=len(ambiguous_overlap),
     )
 
 
@@ -1294,7 +1300,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     report = run_pipeline(build_parser().parse_args())
     print(json.dumps(report, sort_keys=True, indent=2))
-    return 0
+    return 2 if report["stopped_after"] is not None else 0
 
 
 if __name__ == "__main__":

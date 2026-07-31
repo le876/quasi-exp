@@ -11,6 +11,7 @@ from quasi_exp.teacher.ellipsoidal_shell import (
 )
 from scripts.analysis.run_bacra_v13_ellipsoidal_shell_atlas import (
     _parent_prediction_metrics,
+    main,
     load_config,
 )
 
@@ -75,3 +76,15 @@ def test_runner_declares_shell_gate_before_any_student_claim() -> None:
     assert "student_not_used_to_upgrade_shell" in runner
     assert 'student_training_status="not_started_by_primary_shell_pipeline"' in runner
     assert "automatic_chart_classifier_disabled" in runner
+
+
+def test_main_returns_nonzero_when_a_scientific_gate_stops_pipeline(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "scripts.analysis.run_bacra_v13_ellipsoidal_shell_atlas.build_parser",
+        lambda: type("Parser", (), {"parse_args": lambda self: object()})(),
+    )
+    monkeypatch.setattr(
+        "scripts.analysis.run_bacra_v13_ellipsoidal_shell_atlas.run_pipeline",
+        lambda _args: {"stopped_after": "surface_atlas"},
+    )
+    assert main() == 2

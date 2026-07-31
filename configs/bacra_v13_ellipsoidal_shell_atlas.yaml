@@ -99,6 +99,11 @@ ellipse:
   phase_count: 720
   development_cycles: 40
   sealed_cycles: 80
+  candidate_count: 4096
+  relative_error_p95_max: 0.01
+  relative_error_max: 0.02
+  overall_cycle_pass_min: 0.80
+  nonempty_bin_pass_min: 0.60
 
 presets:
   smoke:

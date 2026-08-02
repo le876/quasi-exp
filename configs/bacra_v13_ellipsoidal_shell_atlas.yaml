@@ -105,6 +105,22 @@ ellipse:
   overall_cycle_pass_min: 0.80
   nonempty_bin_pass_min: 0.60
 
+trajectory_3d:
+  path_count: 16
+  phase_count: 720
+  shape_count: 4
+  inclination_bin_count: 4
+  axis_ratio_bin_count: 4
+  shell_half_thickness_mm: 20.0
+  radial_amplitudes_mm: [4.0, 8.0, 12.0, 16.0]
+  relative_error_p95_max: 0.01
+  relative_error_max: 0.02
+  absolute_error_p95_max_mm: 5.0
+  absolute_error_max_mm: 10.0
+  overall_path_pass_min: 0.80
+  nonempty_bin_pass_min: 0.60
+  nonplanarity_min: 0.02
+
 presets:
   smoke:
     output_root: runs/bacra_v13_ellipsoidal_shell_atlas_smoke

@@ -145,6 +145,35 @@ def test_dynamic_insertion_accepts_reverse_verified_endpoint_absent_from_static_
     assert accepted[0].propagated_next_wave is True
 
 
+def test_dynamic_insertion_matches_an_existing_target_candidate() -> None:
+    """Exercise the real E3 path where propagation lands on a static candidate."""
+
+    nodes = (
+        AtlasTaskNode(0, np.zeros(3), (1,)),
+        AtlasTaskNode(1, np.asarray([0.01, 0.0, 0.0]), (0,)),
+    )
+    source = _candidate(0, np.zeros(6), "source")
+    target_beta = np.asarray([0.01, 0.0, 0.0, 0.0, 0.0, 0.0])
+    target = _candidate(1, target_beta, "existing")
+
+    def continuation(candidate, target_node):
+        beta = candidate.beta_rad.copy()
+        beta[:3] = target_node.xyz_m
+        return ContinuationOutcome(beta, 0.0, True, True, status="affine")
+
+    graph, records, exhausted = build_dynamic_product_graph(
+        nodes,
+        (source, target),
+        continuation,
+        repair_policy=CrossCellRepairPolicy(maximum_waves=1),
+    )
+
+    assert exhausted is False
+    assert len(graph.candidates) == 2
+    assert len(graph.robust_edges) == 1
+    assert any(row.status == "bidirectional_robust" for row in records)
+
+
 def _edge(source: AtlasCandidate, target: AtlasCandidate) -> DirectedContinuationEdge:
     return DirectedContinuationEdge(
         source.key,

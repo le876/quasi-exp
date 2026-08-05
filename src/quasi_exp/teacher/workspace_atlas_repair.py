@@ -576,9 +576,9 @@ def build_dynamic_product_graph(
                 matched = tuple(
                     sorted(
                         (
-                            (beta_rms_deg(forward.beta_rad, target), target)
+                            (beta_rms_deg(forward.beta_rad, target.beta_rad), target)
                             for target in target_candidates
-                            if beta_rms_deg(forward.beta_rad, target)
+                            if beta_rms_deg(forward.beta_rad, target.beta_rad)
                             <= active.propagated_cluster_deg + 1.0e-12
                         ),
                         key=lambda item: (item[0], item[1].candidate_id),

@@ -91,6 +91,7 @@ class CellProbeEvidence:
     labelable: bool
     inverse_status: InverseStatus
     physical_status: PhysicalStatus
+    counts_toward_primary_measure: bool = True
     selected_candidate_id: str | None = None
     chart_id: str | None = None
     candidate_family_count: int = 0
@@ -117,6 +118,11 @@ class CellProbeEvidence:
         object.__setattr__(self, "physical_point_id", physical_id)
         object.__setattr__(self, "xyz_m", xyz.copy())
         object.__setattr__(self, "is_measure_probe", bool(self.is_measure_probe))
+        object.__setattr__(
+            self,
+            "counts_toward_primary_measure",
+            bool(self.counts_toward_primary_measure),
+        )
         object.__setattr__(self, "labelable", bool(self.labelable))
         object.__setattr__(self, "inverse_status", inverse_status)
         object.__setattr__(self, "physical_status", physical_status)
@@ -410,7 +416,13 @@ class WorkspaceAtlasBuilder:
                     raise ValueError("task probe IDs must be globally unique")
                 probe_by_id[probe.probe_id] = probe
             representative = probe_by_id[item.representative_probe_id]
-            measure = tuple(probe for probe in item.probes if probe.is_measure_probe)
+            measure = tuple(
+                probe
+                for probe in item.probes
+                if probe.is_measure_probe and probe.counts_toward_primary_measure
+            )
+            if not measure:
+                raise ValueError("task cell requires a primary-measure probe witness")
             accepted = sum(probe.labelable for probe in measure)
             fraction = float(accepted / len(measure))
             chart_ids = {probe.chart_id for probe in measure if probe.labelable}

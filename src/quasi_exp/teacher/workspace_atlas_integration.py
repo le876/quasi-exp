@@ -66,6 +66,7 @@ from .workspace_atlas import (
     WorkspaceAtlasPolicy,
     WorkspaceAtlasResult,
 )
+from .workspace_atlas_repair import piecewise_primary_partition
 from .workspace_reach import CellKey
 
 
@@ -90,6 +91,7 @@ class WorkspaceAtlasIntegrationPolicy:
     workspace_policy: WorkspaceAtlasPolicy = field(default_factory=WorkspaceAtlasPolicy)
     candidate_cluster_deg: float = 0.5
     default_cell_level_mm: int = 10
+    piecewise_primary_partition: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(float(self.candidate_cluster_deg)) or self.candidate_cluster_deg <= 0.0:
@@ -97,6 +99,9 @@ class WorkspaceAtlasIntegrationPolicy:
         if int(self.default_cell_level_mm) <= 0:
             raise ValueError("default_cell_level_mm must be positive")
         object.__setattr__(self, "default_cell_level_mm", int(self.default_cell_level_mm))
+        object.__setattr__(
+            self, "piecewise_primary_partition", bool(self.piecewise_primary_partition)
+        )
 
 
 @dataclass(frozen=True)
@@ -339,6 +344,9 @@ def build_workspace_atlas_integration(
         audit_by_chart,
         overlap_assessments,
         section_id_by_chart,
+        piecewise=active.piecewise_primary_partition,
+        icm_max_sweeps=active.atlas_policy.icm_max_sweeps,
+        stitchable_edge_max_deg=active.workspace_policy.stitchable_p95_deg,
     )
     cells, probe_rows = _cell_evidence(
         contexts,
@@ -346,6 +354,8 @@ def build_workspace_atlas_integration(
         candidate_by_key,
         section_id_by_chart,
         probe_id_by_chart_node,
+        partition_by_node=partition_by_node,
+        primary_measure_partitioned=active.piecewise_primary_partition,
     )
     workspace_input = WorkspaceAtlasInput(
         cells=cells,
@@ -1312,8 +1322,53 @@ def _primary_partition(
     audits: Mapping[int, FreshChartAudit],
     overlaps: Sequence[OverlapAssessment],
     section_id_by_chart: Mapping[int, str],
+    *,
+    piecewise: bool = False,
+    icm_max_sweeps: int = 50,
+    stitchable_edge_max_deg: float = 0.5,
 ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...], Mapping[int, Mapping[str, Any]]]:
-    """Assign whole spatial components, never individual FK-preferred nodes."""
+    """Assign the legacy whole-component or V14.1 piecewise partition."""
+
+    if piecewise:
+        valid_chart_ids = tuple(
+            chart.chart_id
+            for chart in atlas.charts
+            if audits[chart.chart_id].section_valid
+        )
+        kind_by_pair = {
+            _ordered_section_pair(item.left_section_id, item.right_section_id): item.kind.value
+            for item in overlaps
+        }
+        repaired = piecewise_primary_partition(
+            nodes,
+            atlas,
+            valid_chart_ids=valid_chart_ids,
+            section_id_by_chart=section_id_by_chart,
+            overlap_kind_by_pair=kind_by_pair,
+            icm_max_sweeps=icm_max_sweeps,
+            stitchable_edge_max_deg=stitchable_edge_max_deg,
+        )
+        by_node = {
+            node.node_id: MappingProxyType(
+                {
+                    "kind": (
+                        "piecewise_abstention"
+                        if repaired.assignment_by_node[node.node_id] is None
+                        else "piecewise_primary_section"
+                    ),
+                    "assigned_section_id": repaired.assignment_by_node[node.node_id],
+                    "candidate_section_ids": repaired.candidate_sections_by_node[node.node_id],
+                    "abstained": node.node_id in repaired.abstained_node_ids,
+                    "icm_sweeps": repaired.icm_sweeps,
+                }
+            )
+            for node in nodes
+        }
+        return (
+            repaired.primary_section_ids,
+            repaired.required_transitions,
+            MappingProxyType(by_node),
+        )
 
     component_by_node = _task_components(nodes)
     nodes_by_component: dict[int, set[int]] = defaultdict(set)
@@ -1436,6 +1491,9 @@ def _cell_evidence(
     candidates: Mapping[tuple[int, str], AtlasCandidate],
     section_id_by_chart: Mapping[int, str],
     probe_id_by_chart_node: Mapping[tuple[int, int], str],
+    *,
+    partition_by_node: Mapping[int, Mapping[str, Any]] | None = None,
+    primary_measure_partitioned: bool = False,
 ) -> tuple[tuple[TaskCellEvidence, ...], tuple[Mapping[str, Any], ...]]:
     selected_charts_by_node: dict[int, list[CanonicalChart]] = defaultdict(list)
     for chart in atlas.charts:
@@ -1448,6 +1506,7 @@ def _cell_evidence(
     probes_by_cell: dict[CellKey, list[CellProbeEvidence]] = defaultdict(list)
     probe_rows: list[Mapping[str, Any]] = []
     probe_ids_by_node: dict[int, list[str]] = defaultdict(list)
+    primary_probe_id_by_node: dict[int, str] = {}
     for context in contexts:
         node_id = context.node.node_id
         charts = tuple(sorted(selected_charts_by_node.get(node_id, ()), key=lambda item: item.chart_id))
@@ -1474,11 +1533,20 @@ def _cell_evidence(
             )
             probes_by_cell[context.cell].append(probe)
             probe_ids_by_node[node_id].append(probe_id)
+            primary_probe_id_by_node[node_id] = probe_id
             probe_rows.append(_probe_row(probe, node_id, None))
             continue
+        partition_state = None if partition_by_node is None else partition_by_node.get(node_id)
+        assigned_section_id = (
+            None if partition_state is None else partition_state.get("assigned_section_id")
+        )
         for chart in charts:
             candidate = candidates[chart.selection_by_node[node_id]]
             labelable = context.physical_status is not PhysicalStatus.PHYSICALLY_INVALID
+            section_id = section_id_by_chart[chart.chart_id]
+            counts_toward_primary = bool(
+                not primary_measure_partitioned or assigned_section_id == section_id
+            )
             probe = CellProbeEvidence(
                 probe_id=probe_id_by_chart_node[(chart.chart_id, node_id)],
                 physical_point_id=context.physical_point_id,
@@ -1488,14 +1556,39 @@ def _cell_evidence(
                 labelable=labelable,
                 inverse_status=inverse_status,
                 physical_status=context.physical_status,
+                counts_toward_primary_measure=counts_toward_primary,
                 selected_candidate_id=candidate.candidate_id if labelable else None,
-                chart_id=section_id_by_chart[chart.chart_id] if labelable else None,
+                chart_id=section_id if labelable else None,
                 candidate_family_count=candidate_count_by_node[node_id],
                 risk_flags=context.risk_flags,
             )
             probes_by_cell[context.cell].append(probe)
             probe_ids_by_node[node_id].append(probe.probe_id)
+            if counts_toward_primary:
+                primary_probe_id_by_node[node_id] = probe.probe_id
             probe_rows.append(_probe_row(probe, node_id, chart.chart_id))
+        if primary_measure_partitioned and node_id not in primary_probe_id_by_node:
+            # Alternative branch labels remain available to chart experts, but
+            # an abstained physical XYZ contributes exactly one unlabelled
+            # witness to primary coverage.
+            probe_id = f"{context.task_id}:primary_abstain"
+            probe = CellProbeEvidence(
+                probe_id=probe_id,
+                physical_point_id=context.physical_point_id,
+                cell=context.cell,
+                xyz_m=context.node.xyz_m,
+                is_measure_probe=context.is_measure_probe,
+                labelable=False,
+                inverse_status=inverse_status,
+                physical_status=context.physical_status,
+                counts_toward_primary_measure=True,
+                candidate_family_count=candidate_count_by_node[node_id],
+                risk_flags=context.risk_flags,
+            )
+            probes_by_cell[context.cell].append(probe)
+            probe_ids_by_node[node_id].append(probe_id)
+            primary_probe_id_by_node[node_id] = probe_id
+            probe_rows.append(_probe_row(probe, node_id, None))
 
     contexts_by_cell: dict[CellKey, list[_TaskContext]] = defaultdict(list)
     for context in contexts:
@@ -1506,7 +1599,10 @@ def _cell_evidence(
         measure_complete = bool(
             cell_contexts and all(context.cell_measure_complete for context in cell_contexts)
         )
-        has_measure = any(probe.is_measure_probe for probe in probes)
+        has_measure = any(
+            probe.is_measure_probe and probe.counts_toward_primary_measure
+            for probe in probes
+        )
         if not measure_complete or not has_measure:
             # This is not an invented positive sample.  It is an explicit,
             # unlabelled coverage witness which prevents a representative-only
@@ -1543,13 +1639,15 @@ def _cell_evidence(
             if representatives
             else min(cell_contexts, key=lambda item: item.node.node_id)
         )
-        representative_probe_ids = probe_ids_by_node[representative_context.node.node_id]
-        if not representative_probe_ids:
+        representative_probe_id = primary_probe_id_by_node.get(
+            representative_context.node.node_id
+        )
+        if representative_probe_id is None:
             raise RuntimeError("representative task node did not produce a task probe")
         cells.append(
             TaskCellEvidence(
                 cell=cell,
-                representative_probe_id=min(representative_probe_ids),
+                representative_probe_id=representative_probe_id,
                 probes=tuple(sorted(probes, key=lambda item: item.probe_id)),
             )
         )
@@ -1575,6 +1673,7 @@ def _probe_row(
         "y_m": float(probe.xyz_m[1]),
         "z_m": float(probe.xyz_m[2]),
         "is_measure_probe": bool(probe.is_measure_probe),
+        "counts_toward_primary_measure": bool(probe.counts_toward_primary_measure),
         "labelable": bool(probe.labelable),
         "inverse_status": probe.inverse_status.value,
         "physical_status": probe.physical_status.value,

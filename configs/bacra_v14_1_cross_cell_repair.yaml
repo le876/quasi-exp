@@ -1,0 +1,140 @@
+protocol_id: bacra-v14.1-cross-cell-canonical-atlas-repair
+schema_version: 1
+claim_scope: exploratory_cross_cell_repair_then_conditional_workspace_generalization
+deployment_claim: false
+output_root: runs/bacra_v14_1_cross_cell_repair_retry2
+robot_config: configs/robot_rods_only_standard_100k.yaml
+
+sources:
+  original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+  reviewed_plan: docs/17-pro提问-V14三项Gate审计与Formal准入实验方案.md
+  expected_sha256:
+    reviewed_plan: ccd715ffa401650018f7425fcffea2a133b0f979c6b5bb3643254a2730ea8b92
+    original_artifact_manifest: 8fb15a7d04a2907ac3e29376311331a3b111aa64bc134a5b855c5d3e2d14004a
+    original_source_manifest: b5eb42b0fa972479e75d065209b30b1cd3a94baf14452c51863a0db0fe226737
+    parent_task_nodes: 08d7debfdce0faf09e4493db65ee36eb0df970cdf660f8a2f3e0fab379ec7f0c
+    parent_task_edges: 45ec203a67193020c83e0fc3377fed1307930bd19c4695155d11ebdb6ae15067
+    atlas_task_nodes: 57daf510af12ca04874e3aea3664ccde2c71ce5eadeb68ab2ced5c0239ca8496
+    atlas_task_edges: b5af7d5423cdc5c6cae658ba7946d6104d847370b0b810c2dd9a388fa27ed7ab
+    atlas_candidates: ccd24d18616074db2f484f75181e80709322b382bbfbd174cadd66ad9e150a7d
+    candidate_clusters: 11b8be73e075a845b9f47ef0c199093a3bf98716997a856872e13a9271698627
+    product_edges: d27ccb7ee411d2f713f7f8415c2e4159a906191682dd5e5f68137244808dd473
+    domain_cells: 1601e2ed0ae3aaf3944fa7ad9657a031d50623096fba49d3e07014f1b3543eb9
+    frontier_inverse_probes: 4cdd9138be5519dd8a9193a1c53448dd79d2396270b33d16edf830563181df93
+    tip_pool: 69e850573d5498a0f5712f84b571d69fef5fc4f803588956af70891b9c0344bb
+    replica_a_slab: 18b43f368d86cb2f5c29326a29ecd9b88c87c47f03b612d5cc5df32a1c0b2f63
+    replica_b_slab: cc9d1b66b2310470a573f9d207f9a60948da41d64aaf8da8ffbb8c8046d82fa2
+
+patches:
+  count: 12
+  cells_per_patch: 64
+  development_count: 8
+  shared_face_probe_count: 4
+  seed: 20260861
+
+repair:
+  ablations: [E0_legacy, E1_shared_face, E2_segmented, E3_dynamic_insertion, E4_frontier_enrichment]
+  cartesian_step_max_mm: 5.0
+  propagated_cluster_deg: 0.5
+  reverse_return_max_deg: 0.5
+  continuation_residual_max_mm: 3.0
+  maximum_waves: 3
+  maximum_propagated_candidates_per_node: 12
+  maximum_candidates_per_lineage_per_node: 2
+  enrichment_fraction_max: 0.10
+  enrichment_node_max: 1024
+  severe_enrichment_fraction_max: 0.25
+  ordinary_starts: 16
+  severe_starts: 32
+  solvers: [weighted_dls, bounded_least_squares, slsqp]
+  ordinary_nullspace_starts: 2
+  severe_nullspace_starts: 4
+
+atlas:
+  root_count: 32
+  top_section_count: 16
+  icm_max_sweeps: 50
+  edge_match_deg: 0.5
+  split_gap_deg: 1.0
+  merge_overlap_p95_deg: 0.5
+  merge_overlap_max_deg: 1.0
+  cycle_p95_deg: 0.5
+  cycle_max_deg: 1.0
+  audit_endpoint_count: 32
+  audit_paths_per_endpoint: 3
+  audit_loop_count: 2048
+
+patch_gate:
+  minimum_cross_cell_connection_rate: 0.05
+  minimum_E0_improvement: 20.0
+  minimum_largest_component_ratio: 0.30
+  development_patch_pass_count: 6
+  confirmation_patch_pass_count: 3
+
+selection_stability:
+  budgets: [4, 8, 16, 32]
+  audit_cell_count: 500
+  candidate_cluster_deg: 0.5
+  same_fiber_neighbor_count: 8
+  initial_gap_max_deg: 5.0
+  nullspace_step_deg: 0.5
+  maximum_steps: 32
+  residual_max_mm: 1.0
+  beta_p95_max_deg: 0.5
+  beta_max_deg: 1.0
+  component_switch_ratio_max: 0.05
+  outgoing_neighbor_change_ratio_max: 0.05
+
+reach_extension:
+  original_gate_thresholds_unchanged: true
+  rounds:
+    - {round: 4, power: 19, seed_a: 20260847, seed_b: 20260848}
+    - {round: 5, power: 19, seed_a: 20260853, seed_b: 20260854}
+  frontier_cells_per_round: 128
+  frontier_starts: 8
+  measure_gap_diagnostic_max: 0.03
+
+repaired_pilot_gate:
+  minimum_cross_cell_connection_rate: 0.05
+  minimum_labelable_measure_ratio: 0.30
+  minimum_largest_primary_region_measure_ratio: 0.20
+  maximum_unresolved_abstain_ratio: 0.70
+  require_all_x_tertiles_nonzero: true
+
+exploratory_dataset:
+  minimum_rows: 20000
+  target_rows: 50000
+  hard_max_rows: 50000
+  row_padding: false
+  macroblock_mm: 40
+  active_rounds: 1
+  all_supervised_rows_count_toward_budget: true
+
+student:
+  hidden_units: [128, 128, 64]
+  router_hidden_units: [128, 64]
+  seeds: [20260871, 20260872, 20260873]
+  learning_rate: 0.001
+  max_steps: 200
+  validation_interval: 20
+  patience_intervals: 5
+  validation_fk_p95_max_mm: 5.0
+  validation_fk_max_mm: 10.0
+  validation_minimum_accepted_fraction: 0.80
+  active_rows: 5000
+
+formal_gate:
+  require_original_reach_gate: true
+  minimum_labelable_measure_ratio: 0.60
+  minimum_x_bin_coverage: 0.60
+  maximum_unresolved_ratio: 0.20
+  maximum_abstention_ratio: 0.20
+  maximum_single_cell_chart_measure_ratio: 0.20
+  minimum_largest_region_x_bins: 3
+  maximum_n_min: 200000
+  exact_rows: 200000
+  row_padding: false
+  deployment_claim: false
+
+parallel:
+  patch_workers: 4

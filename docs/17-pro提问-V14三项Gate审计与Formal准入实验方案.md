@@ -97,7 +97,7 @@ V14 当前实际执行到科学 Pilot：
 上次材料是 Q16。`q16_previous_protocol.md` 同时包含当时用户问题和历史 GPT-5 Pro 方案；后半部分属于历史建议，不是 V14 已执行事实。本 Q17 只把实际代码和 artifacts 作为当前证据。
 
 | 类型 | 已发生的变化 | 实际证据 | 证据等级 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 实现/配置 | 新增 V14 workspace Reach、registry、candidate bank、atlas、representation、dataset 和 Student modules，共 28 个提交文件、13,985 行新增 | `v14_context.md`、`v14_config.yaml`、`v14_runner.py`、`v14_source_manifest.json` | implementation fixed point |
 | 实验 | Smoke 后实际完成 5k-cell Pilot；10 个 operational stages 完成，96 个 artifacts 封存 | `v14_pilot_log.txt`、`v14_operational_gate.json`、`v14_artifact_manifest.json` | exploratory scientific Pilot with sealed provenance |
 | 结论修正 | 预算算术可行不等于可生成数据；三项科学 Gate 未通过使 representation、dataset、Student、Formal fail closed | `v14_pilot_gate.json`、`v14_budget_report.json`、`v14_dataset_report.json`、`v14_student_report.json` | current Pilot result |
@@ -108,7 +108,7 @@ V14 当前实际执行到科学 Pilot：
 ### 4.1 代码与工作树 fixed point
 
 | 项目 | 值 |
-|---|---|
+| --- | --- |
 | 项目根 | `/mnt/ML_projects/quasi_exp` |
 | V14 分支 | `codex/bacra-v14-omega200-workspace-atlas` |
 | V14 HEAD | `cd892503227a27627345504eec79553d6401ef0b` |
@@ -127,7 +127,7 @@ V14 当前实际执行到科学 Pilot：
 ### 4.2 方法与参数
 
 | 模块 | 实际 Pilot 参数 | 来源 |
-|---|---|---|
+| --- | --- | --- |
 | Target domain | `x=[1.015498,1.215498] m`，grid levels `[20,10,5] mm` | `v14_frozen_config.json: domain` |
 | Reach A/B | powers `17,18,18`，A seeds `20260841/843/845`，B seeds `20260842/844/846` | `v14_frozen_config.json: reach.rounds` |
 | Reach Gate | weighted Jaccard `>=0.95`，new volume `<=0.01`，boundary change `<=0.02`，frontier new volume `<=0.01`，连续轮数 `2` | `v14_frozen_config.json: reach` |
@@ -145,7 +145,7 @@ V14 当前实际执行到科学 Pilot：
 ### 4.3 数据生成与划分
 
 | 项目 | 实际口径 |
-|---|---|
+| --- | --- |
 | Reach 数据来源 | 已锁 capability pool 加两组独立 scrambled Sobol FK replicas、tip-focused pool 与 frontier inverse probes |
 | Reach 实际规模 | A slab `297,172` rows；B slab `297,099` rows；lower/upper cells `18,689/19,301` |
 | Registry | 43,442 eligible cells，分层选择 5,000；25,000 task probes；20,000 seed rows；10,715 task edges |
@@ -158,7 +158,7 @@ V14 当前实际执行到科学 Pilot：
 ### 4.4 baseline、评价和 Gate
 
 | 项目 | 实际定义 | 本轮状态 |
-|---|---|---|
+| --- | --- | --- |
 | Operational stage Gate | 检查每阶段 artifacts、exact sets、skip semantics 和上游 closure | 10/10 stages pass |
 | Reach convergence Gate | 独立 A/B occupancy 及新体积、边界和 frontier 变化 | fail |
 | Branch saturation Gate | 高预算审计后新 candidate-family rate 的 overall/stratum Wilson upper | fail |
@@ -212,7 +212,7 @@ ModuleNotFoundError: No module named 'tests.test_segmented_tension_solver'
 ## 5. 实验结果
 
 | Fact ID | 已观察结果 | 数值 | 证据等级 | 实际附件/JSON key | 适用边界 |
-|---|---|---:|---|---|---|
+| --- | --- | ---: | --- | --- | --- |
 | F1 | 运行与 artifact closure 完成 | 10/10 stages；96 artifacts | operational | `v14_summary_report.json: stage_gate_pass`、`v14_artifact_manifest.json` | 不等于 scientific Gate pass |
 | F2 | Reach lower/upper proxy | 18,689 / 19,301 cells | exploratory | `v14_workspace_proxy_report.json` | empirical proxy，不是连续 Reach 证明 |
 | F3 | 第三轮 weighted Jaccard | 0.927166，阈值 0.95 | exploratory fail | `v14_workspace_proxy_report.json: metrics[2]` | A/B finite occupancy |
@@ -259,7 +259,7 @@ ModuleNotFoundError: No module named 'tests.test_segmented_tension_solver'
 ### 6.2 诊断、探索、evidence-only、post-hoc 或历史事实
 
 | 内容 | 等级 | 能支持什么 | 不能支持什么 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Q16 计划及历史 GPT 回答 | historical | 解释 V14 设计来源 | 证明 V14 已执行或 Gate 合理 |
 | 5k-cell Pilot | exploratory with sealed provenance | 比较当前固定配置下三项 Gate、成本和 failure modes | 全域、Formal 或部署结论 |
 | Reach A/B occupancy | exploratory empirical proxy | 独立 replica 的有限占用差异 | 连续 Reach 的完整性/不可达证明 |
@@ -302,7 +302,7 @@ ModuleNotFoundError: No module named 'tests.test_segmented_tension_solver'
 本节只比较已执行的方法、配置或结果，不给出 Codex 推荐或路线排序。
 
 | 对照对象 | 已执行输入/方法 | 已观察结果 | 证据等级 | 已知限制 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Operational Gate | 每阶段 artifact/exact-set/skip closure | 10/10 pass | operational | 不要求三项科学目标成立 |
 | Scientific Pilot Gate | Reach + branch saturation + representation + downstream evidence | fail | exploratory | 是否阈值合理仍是待审计问题 |
 | Reach round 1 | Sobol power 17 A/B | weighted Jaccard 0.784315 | exploratory | 首轮 boundary/new-volume 定义为 1.0 |
@@ -346,7 +346,7 @@ GPT-5 Pro 实际可见的是“上传文件名”列；原始 SSH 路径只用�
 唯一上传 ZIP 的成员数（`QUESTION.md + 51` 个实际证据附件）：`52`。无论成员数多少，网页端只上传打包器生成的 `Q17_GPT5Pro_upload.zip`。
 
 | 上传文件名 | 原始 SSH 路径 | 大小 | 证据等级 | 支持事实 | 上传理由 |
-|---|---|---:|---|---|---|
+| --- | --- | ---: | --- | --- | --- |
 | `q16_previous_protocol.md` | `/mnt/ML_projects/quasi_exp/docs/16-pro提问-200mm工作空间覆盖与20万点泛化数据集设计.md` | 79,303 B | historical | V14 设计来源 | 区分上轮协议/建议与本轮执行事实 |
 | `v14_context.md` | `/mnt/ML_projects/quasi_exp/.worktrees/bacra-v14-omega200-workspace-atlas/CONTEXT.md` | 2,230 B | implementation | fixed point、范围 | 最短实现上下文 |
 | `v14_config.yaml` | `/mnt/ML_projects/quasi_exp/.worktrees/bacra-v14-omega200-workspace-atlas/configs/bacra_v14_omega200_workspace_atlas.yaml` | 8,003 B | implementation | thresholds、presets | 审计 Gate 定义和 Formal override |
@@ -424,3 +424,1217 @@ GPT-5 Pro 实际可见的是“上传文件名”列；原始 SSH 路径只用�
 3. 局部 16 charts 的 fresh cycle/multipath audit 通过，但各只含 5 probes；77,453 robust edges 中仅 27 条跨 cell，25k probes 中只有 5 个属于 primary section，6 个 overlaps 全部 non-stitchable，故 representation 被 blocked。
 4. Budget arithmetic `N_min=30,050<=200k` 通过，但监督 rows、Student、spatial、trajectory、Formal 均为 0/未执行；不能以预算 Gate 代替 representation Gate。
 5. 用户已确认的问题：审计三项 Gate 的科学含义和是否可直接放宽，区分定义/实现、预算/图连接与冗余 IK 表示限制，并给出含对照、指标、Gate、停止条件、预算优先级和 representation 转向证据的下一轮可执行方案。
+
+---
+
+# 核心判断
+
+当前 V14 Pilot 的真正瓶颈已经非常明确：
+
+$$
+\boxed{
+\text{不是单点 IK 求不出来，也不是 Student 不够强，}
+\quad
+\text{而是 canonical branch 无法从一个 cell 传播到相邻 cell。}
+}
+$$
+
+现有实验中：
+
+- (5000/5000) 个代表点都至少找到了一组有效 IK candidate；
+- 高预算搜索还能在每个审计 cell 中发现大量不同的 (\beta) 解；
+- 每个单 cell 内部的 5 个 probes 可以形成局部连续、闭合、可重复的小 chart；
+- 但 (77{,}453) 条 robust product edges 中，只有 (27) 条跨 cell，只涉及 (25) 个相邻 cell pair；
+- 最终 16 个 charts 每个恰好只包含 5 个 probes，实际上就是 16 个“单 cell chart”；
+- 因而 (5000) 个 cell 中 (4989) 个被判为 `teacher_unresolved`，最终数据行数为 (0)。
+
+所以当前主要矛盾是：
+
+$$
+\boxed{
+\text{广域任务空间覆盖}
+\quad\longleftrightarrow\quad
+\text{跨 cell 的 canonical branch 连续传播}
+}
+$$
+
+其中当前起决定作用的主要方面，是**跨 cell 图构造与 section 提取方法**。Reach proxy 尚未完全收敛、候选解仍会继续增加，都是真问题，但不是目前让 atlas 几乎完全坍缩成单 cell 的直接原因。
+
+下一轮不应再直接重跑完整 5k Pilot，也不应简单放宽三个 Gate。应先实施一个规模较小但信息增益极高的：
+
+# BACRA V14.1 — Cross-Cell Canonical Atlas Repair
+
+它的目标不是立刻证明完整 (\Omega_{200})，而是先回答：
+
+> 在相邻任务单元之间，当前 Teacher 是否能够沿同一 branch 连续传播，并形成真正跨越几十至几百个 cell 的局部 atlas？
+
+只有这个问题解决，后续 50k、200k 数据集和 Student 才有意义。
+
+---
+
+# 一、当前实验已经直接证明了什么
+
+## 1. 单点可达性不是当前主要瓶颈
+
+普通预算下，(5000/5000) 个代表任务点都找到了至少一个 candidate，共运行了 (90{,}888) 次 candidate attempts。这说明在选出的 Pilot cells 上，Teacher 并没有普遍遭遇“目标点没有 IK”的问题。
+
+因此，当前失败不能解释为：
+
+> (\Omega_{200}) 中绝大部分点不可达。
+
+更准确地说是：
+
+> 点可以逐个到达，但当前算法没有把各点的逆解连接成跨空间连续的 section。
+
+---
+
+## 2. 局部 canonical consistency 已经成立
+
+16 个已提取的小 chart 均通过了 fresh path、正反方向、fundamental cycle、multipath 和 repeat 审计。聚合指标约为：
+
+$$
+d_{\mathrm{path,P95}}=0.347^\circ,
+$$
+
+$$
+d_{\mathrm{loop,P95}}=0.396^\circ,
+$$
+
+$$
+d_{\mathrm{multipath,P95}}=0.407^\circ.
+$$
+
+这些指标都低于当前 (0.5^\circ) 的局部 Gate。
+
+这说明当前方法不是完全错误。它已经能在非常小的邻域内建立稳定 canonical label。
+
+---
+
+## 3. 真正的断点发生在跨 cell 连接
+
+我进一步检查了 ZIP 中的 `v14_workspace_protocol.py` 和 `v14_workspace_atlas_integration.py`，发现当前图结构具有两个关键特征。
+
+### Cell 内部
+
+每个 cell 有 1 个 representative 和 4 个 measure probes。代码将同一 cell 中的 5 个 probes 两两连接，形成完全图：
+
+$$
+K_5.
+$$
+
+因此每个 cell 天然有：
+
+$$
+\binom52=10
+$$
+
+条 task edges，并产生 6 个 fundamental cycles。
+
+这与实验中每个小 chart 恰好：
+
+- 5 个 probes；
+- 10 条 selected task edges；
+- 6 个 fundamental cycles；
+
+完全吻合。
+
+也就是说，当前“local atlas audit pass”主要证明的是：
+
+> 同一 cell 内部的五个点可以构成稳定小 chart。
+
+### Cell 之间
+
+跨 cell 只连接两个 cell 的 representative probe，而且只做一次直接 predictor-corrector。若 continuation 得到的目标 (\beta) 与目标 cell 中**预先已经存在**的 candidate 相差超过：
+
+$$
+0.5^\circ,
+$$
+
+这条 edge 就会被拒绝。
+
+即使 continuation 实际成功、residual 很低，只要该终点没有被原 candidate bank 预先采中，也不会被加入 target candidate bank。
+
+于是当前流程实际上是：
+
+$$
+\text{先独立生成静态 candidate bank}
+\rightarrow
+\text{再要求邻居 continuation 恰好落入已有 cluster}.
+$$
+
+对于一个 (6\to3) 的冗余逆问题，这个要求非常苛刻。相邻点属于同一连续 branch，并不意味着两个独立多起点 IK 搜索恰好采到了彼此相差 (0.5^\circ) 以内的代表解。
+
+按照当前 registry 的 (10{,}715) 个 cell 邻接关系计算，最终只有 25 个 cell pair 出现跨 cell robust connection，连接率约为：
+
+$$
+\frac{25}{10715}\approx0.23%.
+$$
+
+这已经足以解释为什么 atlas 没有生长起来。跨 cell robust edges 极少是完整数据直接支持的事实；Q17 材料本身也强调，该现象尚未被归因到具体实现机制。
+
+---
+
+## 4. Primary partition 的实现又进一步放大了失败
+
+当前 `_primary_partition()` 对每个 task-space connected component 寻找：
+
+> 能够覆盖该 component **全部节点**的单一 chart。
+
+只有满足：
+
+$$
+V_{\mathrm{component}}
+\subseteq
+V_{\mathrm{chart}}
+$$
+
+的 chart 才能被用于该 component。
+
+这与 multi-chart atlas 的原理并不相符。一个大的 task-space 连通区域，本来就应当允许：
+
+$$
+\Omega
+======
+
+\Omega_1\cup\Omega_2\cup\cdots\cup\Omega_K,
+$$
+
+由多张局部 chart 分片覆盖。它不应要求一张 chart 单独覆盖整个 task component。
+
+当前 charts 只有单 cell 大小，自然不可能覆盖由大量 cell 构成的 task component，于是几乎全部被标为 `uncovered_component`。最终 primary partition 只有 `chart_06` 的 5 个 probes，另外 (24{,}995) 个 probes 全部未覆盖。
+
+因此当前 representation failure 包含一个明确的实现层缺口：
+
+$$
+\boxed{
+\text{当前 partition 规则要求“单 chart 覆盖整个 component”，}
+}
+$$
+
+而真正需要的是：
+
+$$
+\boxed{
+\text{多张局部 chart 对一个 component 做空间连贯的分片覆盖。}
+}
+$$
+
+---
+
+# 二、三个 Gate 应该分别如何处理
+
+三个 Gate 不能统一解释，也不能统一放宽。
+
+---
+
+## 1. Reach convergence Gate：继续运行，但不应阻塞 atlas 修复 Pilot
+
+三轮 Reach 指标为：
+
+| Round | Weighted Jaccard | New volume | Boundary change |
+| ----- | ---------------: | ---------: | --------------: |
+| 1     |         (0.7843) |   (1.0000) |        (1.0000) |
+| 2     |         (0.8928) |   (0.1049) |        (0.4478) |
+| 3     |         (0.9272) |   (0.0276) |        (0.1506) |
+
+它们显示了明确的收敛趋势，但尚未达到原始标准：
+
+$$
+J\ge0.95,\qquad
+r_{\mathrm{new}}\le0.01,\qquad
+r_{\mathrm{boundary}}\le0.02.
+$$
+
+同时当前 Reach lower/upper cells 为 (18{,}689/19{,}301)，二者的相对差距约为：
+
+$$
+\frac{19301-18689}{19301}\approx3.17%.
+$$
+
+说明工作空间总测度已经比 (15.1%) 的 boundary-change 数字更稳定；后者对边界 cell 的进出较敏感。现有材料明确把 Reach 解释为有限前向采样的经验代理，而不是连续可达域的数学证明。
+
+### 建议
+
+- 再追加 (1\sim2) 轮独立 scrambled Sobol A/B 采样；
+- frontier probing 继续只作用于 A/B disagreement 和高 (x) tip；
+- 暂时保留原 Gate，不把当前数值事后改判为通过；
+- **V14.1 atlas 修复 Pilot 直接使用稳定 lower proxy：**
+
+$$
+\Omega_{\mathrm{pilot}}
+=======================
+
+\Omega_A\cap\Omega_B.
+$$
+
+因此 Reach sampling 可以后台并行运行，不再阻塞跨 cell atlas 方法验证。
+
+### Reach 的后续 Formal 条件
+
+优先继续使用原条件。如果 boundary-change 长期不低于 (2%)，但：
+
+- lower/upper measure gap (\le3%)；
+- weighted Jaccard (\ge0.95)；
+- new volume (\le1%)；
+- frontier new volume (\le1%)；
+
+则可以在一个**新协议**中，把 raw boundary-cell change 替换为 lower/upper measure gap，而不是直接把 (0.02) 改成 (0.15)。
+
+---
+
+## 2. Branch saturation Gate：不是放宽，而是应当替换
+
+当前 Gate 的逻辑是：
+
+> 高预算搜索只要发现一组距普通预算候选超过 (1^\circ) 的 candidate family，就记作 `new_stable_branch=true`。
+
+在正常满秩点附近：
+
+$$
+F:\mathbb R^6\rightarrow\mathbb R^3
+$$
+
+的固定目标逆像通常局部具有：
+
+$$
+6-3=3
+$$
+
+维自由度。
+
+因此，在同一个连续 self-motion fiber 上，增加更多 seed 几乎必然会不断找到彼此相差超过 (1^\circ) 的解。要求：
+
+$$
+P(\text{new candidate family})\le2%
+$$
+
+并不是合理的“branch saturation”标准。
+
+500/500 高预算 cell 都发现新 family，只能证明：
+
+> 普通预算没有穷尽整个逆解集合。
+
+它不能证明：
+
+> 每个 cell 都出现了新的拓扑 branch。
+
+Q17 文档也明确指出，当前 `new_stable_branch` 实际只是 candidate-family gap，而尚未区分 same-fiber 与 distinct-component。
+
+### 新 Gate：Canonical Selection Stability
+
+真正需要稳定的不是所有候选集合，而是最终被选中的 canonical label。
+
+对同一批审计 cells，设置预算：
+
+$$
+B\in{4,8,16,32}.
+$$
+
+每个预算下完成：
+
+1. candidate discovery；
+2. same-target candidate component 分析；
+3. 与邻居的 continuation connectivity；
+4. canonical candidate 选择。
+
+定义：
+
+$$
+\beta_B^\star(x)
+================
+
+\text{预算 }B\text{ 下被选中的 canonical label}.
+$$
+
+检查：
+
+$$
+d_{\mathrm{select}}(x)
+======================
+
+d_\beta
+\left(
+\beta_{16}^\star(x),
+\beta_{32}^\star(x)
+\right).
+$$
+
+建议探索性 Gate：
+
+$$
+d_{\mathrm{select,P95}}\le0.5^\circ,
+$$
+
+$$
+d_{\mathrm{select,max}}\le1^\circ,
+$$
+
+$$
+\text{selected component switch ratio}\le5%,
+$$
+
+$$
+\text{outgoing cross-cell edge set change}\le5%.
+$$
+
+只要最终 canonical label、所属 component 和邻接结构稳定，即使增加预算后仍然发现更多 self-motion candidates，也不应阻止实验。
+
+---
+
+## 3. Representation Gate：不能直接放宽，必须先修复图和 partition
+
+当前 representation failure 不是“80% coverage 阈值比结果略高”。
+
+当前实际覆盖是：
+
+- 5 个 primary probes；
+- (24{,}995) 个 uncovered probes；
+- 全 registry unresolved measure 约 (99.9873%)。
+
+这与 (80%) 的目标相差四个数量级，不属于阈值微调问题。
+
+因此不能把 representation coverage 从 (80%) 改为 (1%) 来继续 Formal。
+
+但为了推进探索性实验，可以新增两级 Gate：
+
+### Exploratory dataset Gate
+
+允许从已解决的大连通区域生成数据并训练 probe Student：
+
+$$
+R_{\mathrm{resolved}}\ge30%,
+$$
+
+$$
+R_{\mathrm{largest\ component}}\ge20%,
+$$
+
+$$
+R_{\mathrm{unresolved}}\le70%.
+$$
+
+它只能支持：
+
+> large connected atlas patch
+
+不能称为完整 (\Omega_{200})。
+
+### Formal Gate
+
+保持更高标准：
+
+$$
+R_{\mathrm{labelable}}\ge60%,
+$$
+
+强成功目标：
+
+$$
+R_{\mathrm{labelable}}\ge80%,
+$$
+
+并且：
+
+$$
+R_{\mathrm{unresolved}}\le20%.
+$$
+
+---
+
+# 三、下一轮实验的总体结构
+
+建议新实验命名为：
+
+```text
+BACRA V14.1 — Cross-Cell Canonical Atlas Repair
+```
+
+新实验首先不跑完整 5k cells，而是在一组紧凑的空间 patches 上做机制消融。
+
+总流程为：
+
+$$
+\boxed{
+\begin{aligned}
+&\text{局部连通 patch 选择}\
+&\rightarrow\text{跨 cell edge 构造消融}\
+&\rightarrow\text{动态 candidate 传播}\
+&\rightarrow\text{piecewise chart partition}\
+&\rightarrow\text{canonical selection stability}\
+&\rightarrow\text{5k-cell rerun}\
+&\rightarrow\text{50k exploratory dataset}\
+&\rightarrow\text{probe Student}
+\end{aligned}
+}
+$$
+
+---
+
+# 四、Phase 0：建立机制诊断 Patch 集
+
+## 4.1 Patch 选择
+
+从当前 lower Reach proxy 中选取 (12) 个连通 patches。
+
+每个 patch 包含：
+
+$$
+4\times4\times4=64
+$$
+
+个相邻 10 mm cells。
+
+总计：
+
+$$
+12\times64=768
+$$
+
+个 cells。
+
+Patch 应覆盖：
+
+- 低 (x)、中 (x)、高 (x)；
+- interior；
+- Reach boundary；
+- tip；
+- V13 retention 邻域；
+- 低、中、高 (\kappa)；
+- 当前有/无 cross-cell edge 的区域。
+
+所有消融方法使用完全相同的 patch cells、task probes、初始 candidate bank 和随机种子。
+
+---
+
+# 五、Phase 1：跨 cell graph 构造消融
+
+这是整个下一轮的最高优先级。
+
+## E0：当前方法基线
+
+- 每个 cell 内 5 probes 完全连接；
+- 跨 cell 只连接 representative-to-representative；
+- 一次直接 predictor-corrector；
+- outcome 必须落入已有 target candidate (0.5^\circ) 范围；
+- 不插入新 candidate。
+
+它应复现当前极低的跨 cell edge rate。
+
+---
+
+## E1：Shared-face 多 probe 连接
+
+对两个面邻接 cells，不再只比较 representative。
+
+在共享面附近，为每一对 cells 选择：
+
+- 最近的 (2\sim4) 对 probe；
+- representative pair；
+- capability medoid pair。
+
+对每个 candidate pair 都尝试 continuation。
+
+这用于检验当前失败是否主要由 task adjacency 过稀造成。
+
+---
+
+## E2：分段 continuation
+
+对相邻任务点 (x_a,x_b)，不再一步完成：
+
+$$
+x_a\rightarrow x_b.
+$$
+
+将路径分段：
+
+$$
+x^{(r)} = x_a+
+\frac{r}{M}(x_b-x_a),
+$$
+
+并要求：
+
+$$
+|x^{(r+1)}-x^{(r)}|\le5\text{ mm}.
+$$
+
+每一步都用上一构型作为 seed，并 exact correct。
+
+这用于检验 10–20 mm 单步位移是否超过了局部 continuation 的有效半径。
+
+---
+
+## E3：Edge-induced candidate insertion
+
+这是最关键的改动。
+
+若从 source candidate 向 target point 的 continuation：
+
+- solver 成功；
+- FK residual (\le3)mm；
+- actual bounds 内；
+
+但与 target 现有 candidates 的距离全部大于 (0.5^\circ)，当前代码会拒绝该 edge。
+
+V14.1 应改为：
+
+1. 将 continuation endpoint 作为 target node 的新 candidate；
+2. 按 (0.5^\circ) 聚类；
+3. 标记 provenance：
+
+```text
+source = propagated_from_neighbor
+```
+
+1. 使用该新 candidate 向目标其他邻居继续传播。
+
+即：
+
+$$
+\text{successful continuation}
+\Rightarrow
+\text{candidate propagation},
+$$
+
+而不是：
+
+$$
+\text{successful continuation}
+\land
+\text{pre-existing cluster match}
+\Rightarrow
+\text{edge}.
+$$
+
+最多运行 (2\sim3) 轮传播 wave，直到：
+
+- 没有新 cell 被连接；
+- 或达到 candidate budget。
+
+每个 node 每个 lineage 最多保留 (8\sim12) 个候选，避免指数爆炸。
+
+---
+
+## E4：Frontier-only 高预算增广
+
+仅对以下节点增加到 (16\sim32) starts：
+
+- 当前 chart frontier；
+- 无 cross-cell edge；
+- 两个 propagation fronts 相遇；
+- suspected multichart；
+- 高 (\kappa)。
+
+不应再给全部 5000 cells 统一增加到 32 starts。现有实验已经证明“候选数量不足”不是唯一问题；把预算集中在 frontier 更有效。
+
+---
+
+# 六、Phase 1 的评价指标
+
+对每个消融方法报告：
+
+## 1. Cell-pair connection rate
+
+$$
+R_E
+===
+
+\frac{
+\text{有至少一条 robust candidate edge 的相邻 cell pairs}
+}{
+\text{被尝试的相邻 cell pairs}
+}.
+$$
+
+当前基线约为 (0.23%)。
+
+## 2. Connected-cell coverage
+
+$$
+R_C
+===
+
+\frac{
+\text{至少连接到一个其他 cell 的 cells}
+}{
+\text{patch 总 cells}
+}.
+$$
+
+## 3. Largest component ratio
+
+$$
+R_{\max}
+========
+
+\frac{
+\text{最大跨 cell component 中的 cells}
+}{
+\text{patch 总 cells}
+}.
+$$
+
+## 4. Chart 尺度
+
+报告：
+
+- chart cell count P50/P95/max；
+- 单 cell chart 比例；
+- 最大 chart 直径；
+- 跨 (x)-bin 数量。
+
+## 5. 一致性
+
+继续要求：
+
+$$
+d_{\mathrm{path,P95}}\le0.5^\circ,
+$$
+
+$$
+d_{\mathrm{loop,P95}}\le0.5^\circ,
+$$
+
+$$
+d_{\mathrm{return,max}}\le1^\circ,
+$$
+
+$$
+e_{\mathrm{FK,max}}\le3\text{ mm}.
+$$
+
+## 探索性通过标准
+
+最低推进条件：
+
+$$
+R_E\ge5%
+$$
+
+且至少相对 E0 提升 (20\times)；
+
+$$
+R_{\max}\ge30%.
+$$
+
+强通过标准：
+
+$$
+R_E\ge25%,
+$$
+
+$$
+R_{\max}\ge60%.
+$$
+
+如果 E3 相对 E2 出现数量级提升，可以确认当前主要瓶颈是：
+
+> 静态 candidate bank 与 continuation endpoint 不匹配。
+
+---
+
+# 七、Phase 2：修复 Primary Partition
+
+当前“一个 chart 覆盖整个 task component”的规则应被替换。
+
+## 7.1 正确的 section 变量
+
+对每个 task node (i)，选择一个 candidate：
+
+$$
+s_i\in{1,\ldots,K_i}.
+$$
+
+定义能量：
+
+$$
+E(s)
+====
+
+\sum_i U_i(s_i)
++
+\lambda
+\sum_{(i,j)\in E_X}
+V_{ij}(s_i,s_j).
+$$
+
+其中：
+
+$$
+U_i(s_i)
+========
+
+C_{\mathrm{posture}}
++
+C_{\mathrm{margin}}
++
+C_{\mathrm{condition}},
+$$
+
+而：
+
+$$
+V_{ij}(s_i,s_j)
+===============
+
+\begin{cases}
+d_W^2(\beta_{i,s_i},\beta_{j,s_j}),
+&\text{存在 robust product edge},\
++\infty,
+&\text{不存在 robust edge}.
+\end{cases}
+$$
+
+## 7.2 Piecewise chart partition
+
+一个大的 task component 可以由多张 chart 分片覆盖：
+
+$$
+\Omega_C
+========
+
+\Omega_{C,1}\cup\cdots\cup\Omega_{C,K}.
+$$
+
+使用：
+
+- multi-source region growing；
+- ICM/Potts graph labeling；
+- 或最短路初始化加局部更新；
+
+生成空间连贯的 `primary_chart_id`。
+
+不得再要求：
+
+$$
+\exists k:\Omega_C\subseteq\Omega_k.
+$$
+
+## 7.3 Overlap 处理
+
+### Stitchable
+
+若同一物理点处：
+
+$$
+d_{\beta,\mathrm{P95}}\le0.5^\circ,
+$$
+
+可以合并或平滑切换。
+
+### Non-stitchable
+
+若：
+
+$$
+d_\beta>1^\circ,
+$$
+
+保留为 branch boundary，不强制平均。
+
+在探索性静态数据中：
+
+- 选择一侧作为 primary chart；
+- 在边界设置 abstention band；
+- alternative branch 仅保存到 expert/candidate table。
+
+不能仅因为一个 task component 中出现 non-stitchable overlap，就把整个 component 判定为 stateful。
+
+---
+
+# 八、Phase 3：Canonical Selection Stability Audit
+
+在原有 500 个 saturation cells 上重新运行。
+
+## 8.1 Same-fiber connectivity
+
+对同一 (x) 的候选 (\beta_a,\beta_b)，通过：
+
+- Jacobian null-space 小步移动；
+- 每步 exact correct 回到同一 (x)；
+- joint bounds 检查；
+
+判断二者能否通过连续 self-motion 路径连接。
+
+由此区分：
+
+- 同一个 fiber component 中的不同采样点；
+- 可能不同的 inverse components。
+
+不再把所有相差 (1^\circ) 的候选都称为新 branch。
+
+## 8.2 预算序列
+
+$$
+B\in{4,8,16,32}.
+$$
+
+每个预算下记录：
+
+- raw candidate count；
+- estimated fiber-component count；
+- canonical selected candidate；
+- canonical selected component；
+- outgoing robust cell edges；
+- canonical cost。
+
+## 8.3 新 Gate
+
+$$
+\operatorname{P95}
+d_\beta
+\left(
+\beta^\star_{16},
+\beta^\star_{32}
+\right)
+\le0.5^\circ,
+$$
+
+$$
+\max
+d_\beta
+\left(
+\beta^\star_{16},
+\beta^\star_{32}
+\right)
+\le1^\circ,
+$$
+
+$$
+\text{selected-component switch ratio}\le5%,
+$$
+
+$$
+\text{outgoing-edge-set change ratio}\le5%.
+$$
+
+新 candidates 可以继续出现，只要 canonical section 的选择不再变化即可。
+
+---
+
+# 九、Phase 4：Reach 采样并行推进
+
+在 cross-cell repair 实验运行期间，后台继续完成：
+
+- Reach A round 4、5；
+- Reach B round 4、5；
+- frontier disagreements；
+- high-(x) tip。
+
+V14.1 Patch Pilot 只使用：
+
+$$
+\Omega_A\cap\Omega_B.
+$$
+
+因此 Reach 尚未完全收敛不阻止机制实验。
+
+只有准备进入完整 Formal 时，才要求 Reach Gate 通过。
+
+---
+
+# 十、Phase 5：重新运行 5k-cell Pilot
+
+只有 Patch Pilot 中至少一个方法达到最低推进条件，才重跑 5k。
+
+推荐冻结：
+
+- Shared-face probe edges；
+- (5)mm 分段 continuation；
+- edge-induced candidate insertion；
+- 最多 3 个 propagation waves；
+- frontier-only high-budget search；
+- piecewise primary partition；
+- canonical selection stability Gate。
+
+## 5k exploratory Gate
+
+建议先采用：
+
+$$
+R_{\mathrm{resolved}}\ge30%,
+$$
+
+$$
+R_{\mathrm{largest\ primary\ region}}\ge20%,
+$$
+
+$$
+R_{\mathrm{unresolved}}\le70%,
+$$
+
+$$
+R_E\ge5%.
+$$
+
+所有保留的 charts 仍须通过 local path/cycle/multipath audit。
+
+这不授权 Formal，但授权生成一个 (20k\sim50k) 行的探索性数据集。
+
+---
+
+# 十一、Phase 6：先训练探索性 Student
+
+当前项目已经在局部 chart 上证明 Student 能拟合 Teacher，因此一旦得到真正跨 cell 的 atlas，就应尽快训练 probe Student，而不是再次因为全域 Gate 没达到 (80%) 而停住。
+
+## 11.1 数据集
+
+从 resolved regions 中生成：
+
+$$
+20{,}000\sim50{,}000
+$$
+
+行数据。
+
+每个物理 (xyz) 在 primary 表中只保存一组：
+
+$$
+(x,\beta^\star,\mathrm{primary\ chart\ id}).
+$$
+
+alternative branches 单独保存到：
+
+```text
+expert_branch_dataset.parquet
+```
+
+## 11.2 模型对照
+
+### S0：全局静态 MLP
+
+$$
+xyz\rightarrow\beta_6.
+$$
+
+只训练最大 primary chart 或经过空间 partition 后的 primary labels。
+
+### S1：xyz-only router + experts
+
+$$
+r(x)\rightarrow chart,
+$$
+
+$$
+g_k(x)\rightarrow\beta.
+$$
+
+Router 目标来自固定 primary partition，而不是用 FK residual在不同有效 branch 之间选择。
+
+### S2：Student + 1–2 次 DLS
+
+用于判断 Student 是否已经进入正确局部 basin。
+
+## 11.3 暂不直接训练 stateful 模型
+
+目前 6 个 non-stitchable overlaps 都来自单 cell 大小的小 charts；它们不足以证明整个工作空间需要历史状态。
+
+只有在跨 cell atlas 修复后仍观察到：
+
+1. 相同 (xyz) 存在稳定的 non-stitchable branches；
+2. 不同路径到达同一点得到相差 (>1^\circ) 的 (\beta)；
+3. static primary partition 在轨迹中产生 branch jump；
+4. 无法通过空间连贯 partition 和 abstention 消除；
+
+才转向：
+
+$$
+(x_t,\beta_{t-1})\rightarrow\Delta\beta_t.
+$$
+
+---
+
+# 十二、Inverse Representation 的明确转向条件
+
+## 保留静态 (xyz\to\beta_6)
+
+当：
+
+- 一个 coherent primary section 覆盖主要 resolved region；
+- graph cycles 和 multipath 一致；
+- chart boundary 可 stitch 或可通过小 abstention band 隔离；
+- Student 输出沿轨迹连续。
+
+## 使用 xyz-only router + experts
+
+当：
+
+- 有多张局部 chart；
+- chart domains 在任务空间中可以分区；
+- 每个 (xyz) 有确定的 primary chart；
+- 不依赖上一构型也能稳定路由。
+
+## 使用 stateful inverse
+
+当：
+
+$$
+\beta_t
+\text{ 的正确选择依赖 }
+\beta_{t-1},
+$$
+
+并且这种依赖在多路径实验中稳定复现。
+
+形式为：
+
+$$
+(x_t,\beta_{t-1})\rightarrow\Delta\beta_t.
+$$
+
+## 使用 branch token / multiple candidates
+
+当同一个 (xyz) 上确实存在多个稳定、非 stitchable 且任务上都需要保留的 branch：
+
+$$
+(x,branch_id)\rightarrow\beta
+$$
+
+或：
+
+$$
+x\rightarrow{\beta^{(1)},\ldots,\beta^{(K)}}.
+$$
+
+## 使用 abstention
+
+在：
+
+- Reach proxy 不确定；
+- teacher unresolved；
+- chart non-stitchable boundary；
+- router 低置信度；
+- 所有 expert FK residual 过大；
+
+的区域拒绝输出。
+
+---
+
+# 十三、Formal 准入条件
+
+V14.1 完整 5k Pilot 只有满足以下条件后才应授权 Formal。
+
+## 1. Reach
+
+原 Reach Gate通过，或新协议预先注册的 lower/upper measure Gate通过。
+
+## 2. Canonical selection saturation
+
+使用新的 selection stability，不再使用 raw candidate-family exhaustion。
+
+## 3. Atlas coverage
+
+最低：
+
+$$
+R_{\mathrm{labelable}}\ge60%,
+$$
+
+$$
+R_{\mathrm{unresolved}}\le20%.
+$$
+
+强成功：
+
+$$
+R_{\mathrm{labelable}}\ge80%.
+$$
+
+## 4. Cross-cell connectivity
+
+- 跨 cell robust edges 不再只占极少数；
+- 最大 connected chart/primary region 跨越多个 x-bins；
+- 单 cell charts 不应占主要比例；
+- 所有 retained charts 通过 cycle/multipath。
+
+## 5. Representation
+
+必须明确冻结为：
+
+- global static；
+- router-expert；
+- stateful；
+- 或 candidate-set。
+
+不能再由一个 `blocked/stateful` 布尔结果代替完整表示决策。
+
+## 6. Budget
+
+使用真实 labelable cells 重新计算：
+
+$$
+N_{\min}.
+$$
+
+当前 (30{,}050) 的预算通过没有意义，因为它只来自 11 个 labelable cells。
+
+---
+
+# 十四、计算预算优先级
+
+建议按以下顺序投入资源：
+
+1. **768-cell Patch 的 E0–E4 cross-cell 消融**；
+2. **修复 `_primary_partition()`**；
+3. **canonical selection stability audit**；
+4. **Reach round 4/5 后台并行**；
+5. **修复后重新运行 5k Pilot**；
+6. **生成 20k–50k 探索性数据并训练 Student**；
+7. **达到 Formal 准入条件后才运行完整 registry 和 200k 数据**。
+
+不建议直接再跑一次接近 6 小时的完整 5k Pilot，因为当前代码结构不变时，结果大概率仍然是大量单 cell charts。
+
+---
+
+# 十五、可直接交给 Codex 的任务定义
+
+> Implement BACRA V14.1 as a cross-cell canonical-atlas repair experiment. Preserve the existing V14 Pilot as the E0 baseline. First select twelve deterministic connected patches of sixty-four adjacent 10 mm cells spanning interior, reach-boundary, tip, retention, conditioning, and x-bin strata. On exactly the same patches compare the current representative-to-representative graph against shared-face multi-probe edges, continuation subdivided into at most 5 mm Cartesian steps, dynamic insertion of successful continuation endpoints into the target candidate bank, and frontier-only high-budget candidate enrichment. A successful continuation that satisfies FK residual and actual bounds must no longer be rejected solely because no pre-existing target candidate lies within 0.5 degrees; it should become a new lineage candidate and be propagated for at most three waves.
+>
+> Replace the current primary-partition rule that requires one chart to cover an entire task-space component. Extract one candidate per task node and allow multiple spatially connected chart regions to cover one task component. Use graph-constrained region growing or discrete labeling with infinite cost where no robust product edge exists. Merge only same-target stitchable overlaps, retain non-stitchable overlaps as explicit branch boundaries, and allow abstention bands rather than declaring an entire component stateful.
+>
+> Replace the raw new-candidate-family branch-saturation Gate with a canonical-selection-stability audit. For the same audit cells compare budgets 4, 8, 16, and 32; estimate same-fiber connectivity through null-space predictor-corrector paths; measure the stability of the selected canonical beta, selected component, and outgoing cross-cell edge set. New distant candidates may continue to appear, but the selected section must stabilize.
+>
+> Report cross-cell neighbor-pair connection rate, connected-cell ratio, largest component ratio, chart cell-count distribution, unresolved ratio, candidate-propagation acceptance, cycle/multipath consistency, residual, and runtime for every ablation. Authorize a repaired 5k-cell Pilot only after cross-cell connection increases by at least twenty times over the current baseline and the largest patch component covers at least thirty percent of patch cells while retaining the existing local consistency thresholds.
+>
+> Continue independent Reach A/B sampling in parallel, but use the stable intersection proxy for the repair Pilot. After a repaired 5k run resolves at least thirty percent of selected cells in sizeable connected chart regions, materialize a 20k–50k exploratory dataset and train the existing global bounded MLP, an xyz-only router with local experts, and a Student-plus-one/two-step-DLS baseline. Do not select stateful representation solely from the six current one-cell overlaps; require reproducible non-stitchable path dependence after cross-cell atlas repair.
+>
+> Formal generation remains blocked until Reach convergence, canonical-selection stability, cross-cell atlas coverage, representation choice, and the real labelable-cell budget all pass their registered criteria.
+
+---
+
+# 最终结论
+
+当前实验不是因为 Gate “太严格”而停住，也不是因为连续体机器人天然无法形成广域数据集而停住。
+
+当前主要失败链条是：
+
+$$
+\boxed{
+\begin{aligned}
+&\text{跨 cell 只连接 representative}\
+&+\text{一步 continuation}\
+&+\text{必须匹配静态 target candidate}\
+&+\text{不插入成功 propagation endpoint}\
+&+\text{primary partition 要求单 chart 覆盖整个 component}\
+&\Downarrow\
+&\text{atlas 被限制成单 cell charts}\
+&\Downarrow\
+&\text{99.987% domain 被标为 unresolved}\
+&\Downarrow\
+&\text{representation blocked，数据和 Student 均为 0}
+\end{aligned}
+}
+$$
+
+因此，下一步推进实验的最优先事项是：
+
+$$
+\boxed{
+\text{修复跨 cell branch propagation 和 piecewise chart partition}
+}
+$$
+
+Reach 继续补采；branch saturation 改为 canonical selection stability；stateful representation 暂不提前决定。
+
+只要跨 cell atlas 能从当前的单 cell 尺度扩展到几十、几百个连通 cell，就应立即生成一个探索性区域数据集并训练 Student。这样才能尽快判断整套方法是否真正具备从局部成功走向工作空间泛化的能力，而不是继续在三个不合适的总 Gate 前反复停住。

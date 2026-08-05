@@ -546,6 +546,28 @@ def build_dynamic_product_graph(
     budget_exhausted = False
     lineage_node_count: dict[tuple[str, int], int] = defaultdict(int)
     propagated_node_count: dict[int, int] = defaultdict(int)
+    continuation_cache: dict[
+        tuple[CandidateKey, bytes, int, bytes], ContinuationOutcome
+    ] = {}
+
+    def run_cached(
+        source: AtlasCandidate, target: AtlasTaskNode
+    ) -> ContinuationOutcome:
+        # Candidate IDs alone are insufficient because fresh path execution can
+        # carry a numerically updated beta under the same selected key.  Dynamic
+        # propagation candidates are immutable, but binding the exact source
+        # and target bytes keeps this cache safe if that invariant is relaxed.
+        key = (
+            source.key,
+            np.asarray(source.beta_rad, dtype="<f8").tobytes(),
+            target.node_id,
+            np.asarray(target.xyz_m, dtype="<f8").tobytes(),
+        )
+        outcome = continuation_cache.get(key)
+        if outcome is None:
+            outcome = continuation(source, target)
+            continuation_cache[key] = outcome
+        return outcome
 
     for wave in range(1, int(active.maximum_waves) + 1):
         next_frontier: list[AtlasCandidate] = []
@@ -557,7 +579,7 @@ def build_dynamic_product_graph(
             for target_node_id in source_node.neighbor_node_ids:
                 target_node = node_by_id[target_node_id]
                 attempts += 1
-                forward = continuation(source, target_node)
+                forward = run_cached(source, target_node)
                 if not (
                     forward.success
                     and forward.actual_bounds
@@ -576,10 +598,10 @@ def build_dynamic_product_graph(
                 matched = tuple(
                     sorted(
                         (
-                            (beta_rms_deg(forward.beta_rad, target.beta_rad), target)
+                            (gap, target)
                             for target in target_candidates
-                            if beta_rms_deg(forward.beta_rad, target.beta_rad)
-                            <= active.propagated_cluster_deg + 1.0e-12
+                            for gap in (beta_rms_deg(forward.beta_rad, target.beta_rad),)
+                            if gap <= active.propagated_cluster_deg + 1.0e-12
                         ),
                         key=lambda item: (item[0], item[1].candidate_id),
                     )
@@ -638,7 +660,7 @@ def build_dynamic_product_graph(
                 directed.append(_directed_edge(source, target, forward))
 
                 attempts += 1
-                reverse = continuation(target, source_node)
+                reverse = run_cached(target, source_node)
                 reverse_gap = beta_rms_deg(reverse.beta_rad, source.beta_rad)
                 reverse_ok = bool(
                     reverse.success

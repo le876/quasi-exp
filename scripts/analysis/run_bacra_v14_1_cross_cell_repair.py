@@ -32,6 +32,8 @@ import pandas as pd
 import yaml
 from scipy.spatial import cKDTree
 
+from quasi_exp.model.kinematics import dh_transform_i_to_im1
+from quasi_exp.model.sampling import beta_to_theta
 from quasi_exp.teacher.atlas_audit import AtlasAuditPolicy
 from quasi_exp.teacher.canonical import beta_rms_deg, weighted_damped_pinv
 from quasi_exp.teacher.canonical_atlas import (
@@ -130,6 +132,70 @@ def project_root_from(source_root: Path) -> Path:
     return resolved
 
 
+class _EndpointOnlyForwardAdapter:
+    """V14.1-local FK fast path that preserves historical source fixed points."""
+
+    def __init__(self, environment: Any) -> None:
+        self._environment = environment
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._environment, name)
+
+    def fk(self, beta_rad: np.ndarray) -> np.ndarray:
+        beta = np.asarray(beta_rad, dtype=float)
+        if beta.ndim == 1 and beta.shape == (6,):
+            beta = beta.reshape(1, 6)
+        if beta.ndim != 2 or beta.shape[1] != 6:
+            raise ValueError(f"beta_rad must have shape (N, 6), got {beta.shape}")
+        if not np.isfinite(beta).all():
+            raise ValueError("beta_rad must contain only finite values")
+        lengths = np.asarray(self._environment.lengths_m, dtype=float).reshape(-1)
+        endpoint = np.asarray(self._environment.p_end_local_m, dtype=float).reshape(4)
+        theta_sign = float(self._environment.theta_sign)
+        xyz = np.empty((len(beta), 3), dtype=float)
+        for row_index, row in enumerate(beta):
+            theta = beta_to_theta(row) * theta_sign
+            if len(lengths) != len(theta) + 1:
+                raise ValueError(
+                    f"lengths_m must have shape ({len(theta)+1},), got {lengths.shape}"
+                )
+            transform = np.eye(4, dtype=float)
+            for joint_index, angle in enumerate(theta, start=1):
+                alpha = (
+                    0.0
+                    if joint_index == 1
+                    else (
+                        np.pi / 2.0
+                        if joint_index % 2 == 1
+                        else -np.pi / 2.0
+                    )
+                )
+                transform = transform @ dh_transform_i_to_im1(
+                    alpha,
+                    float(lengths[joint_index - 1]),
+                    float(angle),
+                    0.0,
+                )
+            xyz[row_index] = (transform @ endpoint)[:3]
+        return xyz
+
+    def numerical_jacobian(
+        self, beta_rad: np.ndarray, *, eps_rad: float = 1.0e-4
+    ) -> np.ndarray:
+        beta = np.asarray(beta_rad, dtype=float)
+        if beta.shape != (6,) or not np.isfinite(beta).all():
+            raise ValueError("beta_rad must have finite shape (6,)")
+        if not np.isfinite(eps_rad) or eps_rad <= 0.0:
+            raise ValueError("eps_rad must be finite and positive")
+        offsets = np.eye(6, dtype=float) * float(eps_rad)
+        plus = self.fk(beta[None, :] + offsets)
+        minus = self.fk(beta[None, :] - offsets)
+        return ((plus - minus) / (2.0 * float(eps_rad))).T
+
+    def jacobian(self, beta_rad: np.ndarray) -> np.ndarray:
+        return self.numerical_jacobian(beta_rad)
+
+
 def _strict(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _strict(item) for key, item in value.items()}
@@ -188,6 +254,16 @@ def load_config(path: str | Path) -> dict[str, Any]:
     seeds = [int(row[key]) for row in reach_rounds for key in ("seed_a", "seed_b")]
     if len(set(seeds)) != len(seeds):
         raise ValueError("V14.1 Reach A/B extension seeds must be disjoint")
+    parallel = dict(config["parallel"])
+    patch_workers = int(parallel["patch_workers"])
+    heavy_workers = int(parallel.get("heavy_ablation_workers", patch_workers))
+    if patch_workers < 1 or not 1 <= heavy_workers <= patch_workers:
+        raise ValueError(
+            "parallel workers require 1 <= heavy_ablation_workers <= patch_workers"
+        )
+    parallel["patch_workers"] = patch_workers
+    parallel["heavy_ablation_workers"] = heavy_workers
+    config["parallel"] = parallel
     return config
 
 
@@ -529,22 +605,14 @@ def _require_stage(output_root: Path, stage_name: str) -> dict[str, Any]:
 def _enrich_candidates(
     task_frame: pd.DataFrame,
     base_candidates: Sequence[AtlasCandidate],
-    graph: Any,
     environment: Any,
     config: Mapping[str, Any],
+    *,
+    requests: pd.DataFrame,
 ) -> tuple[AtlasCandidate, ...]:
+    """Solve the deterministic E4 candidate requests emitted by E3 repair."""
+
     task_frame = task_frame.copy()
-    condition_by_node: dict[int, list[float]] = {}
-    for candidate in base_candidates:
-        condition_by_node.setdefault(candidate.node_id, []).append(candidate.condition_number)
-    task_frame["condition_number"] = task_frame["task_node_id"].map(
-        lambda node_id: float(np.median(condition_by_node.get(int(node_id), (0.0,))))
-    )
-    requests = select_frontier_enrichment_nodes(
-        task_frame,
-        graph,
-        policy=_repair_policy(config),
-    )
     if not len(requests):
         return tuple(base_candidates)
     node_by_id = {int(row.task_node_id): row for row in task_frame.itertuples(index=False)}
@@ -555,8 +623,7 @@ def _enrich_candidates(
     for request in requests.itertuples(index=False):
         global_node_id = int(request.task_node_id)
         target = node_by_id[global_node_id]
-        graph_node = graph.node_by_id[global_node_id]
-        seed_node_ids = (global_node_id, *graph_node.neighbor_node_ids)
+        seed_node_ids = tuple(map(int, str(request.seed_node_ids).split("|")))
         source_candidates = sorted(
             (
                 candidate
@@ -625,6 +692,111 @@ def _enrich_candidates(
     return tuple(base_candidates) + tuple(additions)
 
 
+def _frontier_enrichment_requests(
+    task_frame: pd.DataFrame,
+    base_candidates: Sequence[AtlasCandidate],
+    graph: Any,
+    config: Mapping[str, Any],
+) -> pd.DataFrame:
+    """Freeze the E3-derived E4 inputs before independent E3/E4 auditing."""
+
+    task_frame = task_frame.copy()
+    condition_by_node: dict[int, list[float]] = {}
+    for candidate in base_candidates:
+        condition_by_node.setdefault(candidate.node_id, []).append(candidate.condition_number)
+    task_frame["condition_number"] = task_frame["task_node_id"].map(
+        lambda node_id: float(np.median(condition_by_node.get(int(node_id), (0.0,))))
+    )
+    requests = select_frontier_enrichment_nodes(
+        task_frame,
+        graph,
+        policy=_repair_policy(config),
+    )
+    node_by_id = graph.node_by_id
+    if len(requests):
+        requests = requests.copy()
+        requests["seed_node_ids"] = requests["task_node_id"].map(
+            lambda raw: "|".join(
+                map(
+                    str,
+                    (
+                        int(raw),
+                        *node_by_id[int(raw)].neighbor_node_ids,
+                    ),
+                )
+            )
+        )
+    else:
+        requests = requests.assign(seed_node_ids=pd.Series(dtype=str))
+    return requests[
+        [
+            "task_node_id",
+            "flags",
+            "severe",
+            "start_budget",
+            "condition_number",
+            "seed_node_ids",
+        ]
+    ]
+
+
+def _e4_request_paths(stage: Path, patch_id: str) -> tuple[Path, Path]:
+    stem = RepairAblation.E4_FRONTIER_ENRICHMENT.value
+    patch_dir = stage / str(patch_id)
+    return (
+        patch_dir / f"{stem}_requests.parquet",
+        patch_dir / f"{stem}_requests_checkpoint.json",
+    )
+
+
+def _seal_e4_requests(
+    stage: Path,
+    patch_id: str,
+    requests: pd.DataFrame,
+    config: Mapping[str, Any],
+) -> None:
+    request_path, checkpoint_path = _e4_request_paths(stage, patch_id)
+    inventory_gate = stage.parent / STAGE_DIRS["inventory"] / "gate.json"
+    _write_parquet(requests, request_path)
+    _write_json(
+        checkpoint_path,
+        {
+            "schema_version": 1,
+            "gate_pass": True,
+            "patch_id": str(patch_id),
+            "request_file": request_path.name,
+            "request_sha256": sha256_file(request_path),
+            "config_sha256": sha256_file(Path(str(config["config_path"]))),
+            "inventory_gate_sha256": sha256_file(inventory_gate),
+        },
+    )
+
+
+def _verified_e4_request_path(
+    stage: Path,
+    patch_id: str,
+    config: Mapping[str, Any],
+) -> Path | None:
+    request_path, checkpoint_path = _e4_request_paths(stage, patch_id)
+    inventory_gate = stage.parent / STAGE_DIRS["inventory"] / "gate.json"
+    if not request_path.is_file() or not checkpoint_path.is_file() or not inventory_gate.is_file():
+        return None
+    try:
+        checkpoint = _read_json(checkpoint_path)
+        expected = {
+            "schema_version": 1,
+            "gate_pass": True,
+            "patch_id": str(patch_id),
+            "request_file": request_path.name,
+            "request_sha256": sha256_file(request_path),
+            "config_sha256": sha256_file(Path(str(config["config_path"]))),
+            "inventory_gate_sha256": sha256_file(inventory_gate),
+        }
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return request_path if checkpoint == expected else None
+
+
 def _e0_edge_key_frame(frame: pd.DataFrame) -> set[tuple[int, str, int, str]]:
     return {
         (
@@ -635,6 +807,44 @@ def _e0_edge_key_frame(frame: pd.DataFrame) -> set[tuple[int, str, int, str]]:
         )
         for row in frame.itertuples(index=False)
     }
+
+
+_HEAVY_ABLATIONS = frozenset(
+    {
+        RepairAblation.E3_DYNAMIC_INSERTION,
+        RepairAblation.E4_FRONTIER_ENRICHMENT,
+    }
+)
+
+
+def _select_next_ablation_job(
+    ready: Iterable[tuple[str, RepairAblation]],
+    running_ablations: Iterable[RepairAblation],
+    *,
+    worker_count: int,
+    heavy_soft_limit: int,
+) -> tuple[str, RepairAblation] | None:
+    """Choose one deterministic DAG job without letting E3/E4 starve E0--E2."""
+
+    jobs = tuple(ready)
+    light = sorted(
+        (job for job in jobs if job[1] not in _HEAVY_ABLATIONS),
+        key=lambda job: (tuple(RepairAblation).index(job[1]), job[0]),
+    )
+    heavy = sorted(
+        (job for job in jobs if job[1] in _HEAVY_ABLATIONS),
+        key=lambda job: (
+            0 if job[1] is RepairAblation.E4_FRONTIER_ENRICHMENT else 1,
+            job[0],
+        ),
+    )
+    running_heavy = sum(item in _HEAVY_ABLATIONS for item in running_ablations)
+    heavy_limit = min(worker_count, heavy_soft_limit if light else worker_count)
+    if heavy and running_heavy < heavy_limit:
+        return heavy[0]
+    if light:
+        return light[0]
+    return None
 
 
 def stage_ablations(
@@ -649,7 +859,9 @@ def stage_ablations(
     candidate_frame = pd.read_parquet(inventory / "patch_candidate_clusters.parquet")
     sealed_product = pd.read_parquet(inventory / "patch_product_edges_e0.parquet")
     paths = _source_paths(config, project_root)
-    environment = load_environment(project_root, paths["robot_config"])
+    environment = _EndpointOnlyForwardAdapter(
+        load_environment(project_root, paths["robot_config"])
+    )
     base_continuation = make_predictor_corrector_continuation(
         environment,
         residual_tolerance_mm=float(config["repair"]["continuation_residual_max_mm"]),
@@ -657,15 +869,17 @@ def stage_ablations(
     reports: list[dict[str, Any]] = []
     all_patch_ids = tuple(sorted(tasks["patch_id"].unique()))
     patch_filter = config.get("_patch_filter")
+    ablation_filter = config.get("_ablation_filter")
     if patch_filter is None:
-        pending = [
-            patch_id
+        pending = {
+            (str(patch_id), ablation)
             for patch_id in all_patch_ids
-            if not (stage / str(patch_id) / "patch_complete.json").is_file()
-        ]
+            for ablation in RepairAblation
+            if not (stage / str(patch_id) / f"{ablation.value}_report.json").is_file()
+        }
         if pending:
-            environment = os.environ.copy()
-            environment.update(
+            worker_environment = os.environ.copy()
+            worker_environment.update(
                 {
                     "OMP_NUM_THREADS": "1",
                     "OPENBLAS_NUM_THREADS": "1",
@@ -674,14 +888,64 @@ def stage_ablations(
                     "MPLCONFIGDIR": "/tmp/mpl-bacra-v14-1",
                 }
             )
-            waiting = list(pending)
-            running: list[tuple[str, subprocess.Popen[str], Any]] = []
+            running: list[
+                tuple[str, RepairAblation, subprocess.Popen[str], Any]
+            ] = []
             failures: list[dict[str, Any]] = []
-            worker_count = min(int(config["parallel"]["patch_workers"]), len(waiting))
-            while waiting or running:
-                while waiting and len(running) < worker_count:
-                    patch_id = waiting.pop(0)
-                    log_path = stage / f"{patch_id}.log"
+            worker_count = min(int(config["parallel"]["patch_workers"]), len(pending))
+            heavy_soft_limit = min(
+                worker_count,
+                int(config["parallel"]["heavy_ablation_workers"]),
+            )
+            while pending or running:
+                next_running: list[
+                    tuple[str, RepairAblation, subprocess.Popen[str], Any]
+                ] = []
+                for patch_id, ablation, process, handle in running:
+                    status = process.poll()
+                    if status is None:
+                        next_running.append((patch_id, ablation, process, handle))
+                        continue
+                    handle.close()
+                    if status != 0:
+                        failures.append(
+                            {
+                                "patch_id": patch_id,
+                                "ablation": ablation.value,
+                                "returncode": status,
+                            }
+                        )
+                running = next_running
+                if failures:
+                    for _patch_id, _ablation, process, handle in running:
+                        process.terminate()
+                        process.wait(timeout=30)
+                        handle.close()
+                    raise RuntimeError(f"patch ablation workers failed: {failures}")
+
+                def is_ready(job: tuple[str, RepairAblation]) -> bool:
+                    patch_id, ablation = job
+                    if ablation is not RepairAblation.E4_FRONTIER_ENRICHMENT:
+                        return True
+                    return _verified_e4_request_path(
+                        stage, patch_id, config
+                    ) is not None
+
+                while len(running) < worker_count:
+                    ready = [job for job in pending if is_ready(job)]
+                    if not ready:
+                        break
+                    selected_job = _select_next_ablation_job(
+                        ready,
+                        (ablation for _patch, ablation, _process, _handle in running),
+                        worker_count=worker_count,
+                        heavy_soft_limit=heavy_soft_limit,
+                    )
+                    if selected_job is None:
+                        break
+                    patch_id, ablation = selected_job
+                    pending.remove((patch_id, ablation))
+                    log_path = stage / f"{patch_id}.{ablation.value}.log"
                     handle = log_path.open("w", encoding="utf-8")
                     command = [
                         sys.executable,
@@ -690,34 +954,48 @@ def stage_ablations(
                         "--output-root", str(output_root),
                         "--stage", "ablations",
                         "--patch-id", str(patch_id),
+                        "--ablation", ablation.value,
                     ]
                     process = subprocess.Popen(
                         command,
                         cwd=SOURCE_ROOT,
-                        env=environment,
+                        env=worker_environment,
                         stdout=handle,
                         stderr=subprocess.STDOUT,
                         text=True,
                     )
-                    running.append((str(patch_id), process, handle))
-                next_running: list[tuple[str, subprocess.Popen[str], Any]] = []
-                for patch_id, process, handle in running:
-                    status = process.poll()
-                    if status is None:
-                        next_running.append((patch_id, process, handle))
-                        continue
-                    handle.close()
-                    if status != 0:
-                        failures.append({"patch_id": patch_id, "returncode": status})
-                running = next_running
-                if failures:
-                    for _patch_id, process, handle in running:
-                        process.terminate()
-                        process.wait(timeout=30)
-                        handle.close()
-                    raise RuntimeError(f"patch ablation workers failed: {failures}")
-                if waiting or running:
+                    running.append((patch_id, ablation, process, handle))
+                if pending and not running:
+                    blocked = [
+                        f"{patch_id}:{ablation.value}"
+                        for patch_id, ablation in sorted(
+                            pending, key=lambda job: (job[0], job[1].value)
+                        )
+                    ]
+                    raise RuntimeError(
+                        "ablation scheduler has no ready work; missing E3-derived "
+                        f"E4 request artifacts: {blocked}"
+                    )
+                if pending or running:
                     time.sleep(1.0)
+        for patch_id in all_patch_ids:
+            patch_dir = stage / str(patch_id)
+            missing = [
+                ablation.value
+                for ablation in RepairAblation
+                if not (patch_dir / f"{ablation.value}_report.json").is_file()
+            ]
+            if missing:
+                raise RuntimeError(f"patch {patch_id} is missing ablation reports: {missing}")
+            _write_json(
+                patch_dir / "patch_complete.json",
+                {
+                    "gate_pass": True,
+                    "patch_id": str(patch_id),
+                    "ablation_count": len(RepairAblation),
+                    "scheduler": "deterministic_ablation_dag_v1",
+                },
+            )
         reports = [
             _read_json(stage / str(patch_id) / f"{ablation.value}_report.json")
             for patch_id in all_patch_ids
@@ -741,26 +1019,33 @@ def stage_ablations(
             .loc[lambda frame: frame["patch_id"].eq(patch_id), "patch_split"]
             .iloc[0]
         )
-        previous_graph = None
-        for ablation in RepairAblation:
+        selected_ablations = (
+            tuple(RepairAblation)
+            if ablation_filter is None
+            else (RepairAblation(str(ablation_filter)),)
+        )
+        for ablation in selected_ablations:
             report_path = patch_dir / f"{ablation.value}_report.json"
-            e4_report = patch_dir / f"{RepairAblation.E4_FRONTIER_ENRICHMENT.value}_report.json"
-            if report_path.is_file() and not (
-                ablation is RepairAblation.E3_DYNAMIC_INSERTION
-                and not e4_report.is_file()
-            ):
+            if report_path.is_file():
                 reports.append(_read_json(report_path))
                 continue
             candidates_for_method = patch_candidates
             if ablation is RepairAblation.E4_FRONTIER_ENRICHMENT:
-                if previous_graph is None:
-                    raise RuntimeError("E4 requires the completed E3 graph")
+                requests_path = _verified_e4_request_path(stage, patch_id, config)
+                if requests_path is None:
+                    expected_request, expected_checkpoint = _e4_request_paths(
+                        stage, patch_id
+                    )
+                    raise RuntimeError(
+                        "E4 requires a verified deterministic request checkpoint "
+                        f"emitted by E3: {expected_request}, {expected_checkpoint}"
+                    )
                 candidates_for_method = _enrich_candidates(
                     patch_tasks,
                     patch_candidates,
-                    previous_graph,
                     environment,
                     config,
+                    requests=pd.read_parquet(requests_path),
                 )
             started = time.time()
             result = run_cross_cell_repair_ablation(
@@ -773,7 +1058,17 @@ def stage_ablations(
                 repair_policy=_repair_policy(config),
             )
             if ablation is RepairAblation.E3_DYNAMIC_INSERTION:
-                previous_graph = result.graph
+                _seal_e4_requests(
+                    stage,
+                    patch_id,
+                    _frontier_enrichment_requests(
+                        patch_tasks,
+                        patch_candidates,
+                        result.graph,
+                        config,
+                    ),
+                    config,
+                )
             result_candidates = _candidate_frame(result.graph.candidates)
             _write_parquet(result.task_edges, patch_dir / f"{ablation.value}_task_edges.parquet")
             _write_parquet(result_candidates, patch_dir / f"{ablation.value}_candidates.parquet")
@@ -879,19 +1174,26 @@ def stage_ablations(
             }
             _write_json(report_path, report)
             reports.append(report)
-        _write_json(
-            patch_dir / "patch_complete.json",
-            {
-                "gate_pass": True,
-                "patch_id": str(patch_id),
-                "ablation_count": len(RepairAblation),
-            },
-        )
+        if ablation_filter is None:
+            _write_json(
+                patch_dir / "patch_complete.json",
+                {
+                    "gate_pass": True,
+                    "patch_id": str(patch_id),
+                    "ablation_count": len(RepairAblation),
+                    "scheduler": "sequential_patch_compatibility",
+                },
+            )
     if patch_filter is not None:
         return {
             "gate_pass": True,
             "patch_id": str(patch_filter),
-            "ablation_count": len(RepairAblation),
+            "ablation_count": (
+                len(RepairAblation) if ablation_filter is None else 1
+            ),
+            "ablation": (
+                None if ablation_filter is None else str(ablation_filter)
+            ),
         }
     metrics = pd.DataFrame.from_records(reports).sort_values(
         ["patch_id", "ablation"], kind="stable"
@@ -2138,6 +2440,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--stage", choices=STAGE_ORDER, default="inventory")
     parser.add_argument("--patch-id", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ablation",
+        choices=tuple(item.value for item in RepairAblation),
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -2158,6 +2466,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config(args.config)
     if args.patch_id is not None:
         config["_patch_filter"] = str(args.patch_id)
+    if args.ablation is not None:
+        if args.patch_id is None:
+            raise ValueError("--ablation requires --patch-id")
+        config["_ablation_filter"] = str(args.ablation)
     project_root = project_root_from(SOURCE_ROOT)
     output_root = (
         Path(args.output_root).resolve()

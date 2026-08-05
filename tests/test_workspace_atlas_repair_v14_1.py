@@ -174,6 +174,38 @@ def test_dynamic_insertion_matches_an_existing_target_candidate() -> None:
     assert any(row.status == "bidirectional_robust" for row in records)
 
 
+def test_dynamic_insertion_reuses_identical_directed_continuation_solve() -> None:
+    """Logical attempts stay auditable while duplicate deterministic solves are cached."""
+
+    nodes = (
+        AtlasTaskNode(0, np.zeros(3), (1,)),
+        AtlasTaskNode(1, np.asarray([0.01, 0.0, 0.0]), (0,)),
+    )
+    source = _candidate(0, np.zeros(6), "source")
+    target = _candidate(1, np.asarray([0.01, 0.0, 0.0, 0.0, 0.0, 0.0]), "target")
+    calls: list[tuple[tuple[int, str], int]] = []
+
+    def continuation(candidate, target_node):
+        calls.append((candidate.key, target_node.node_id))
+        beta = candidate.beta_rad.copy()
+        beta[:3] = target_node.xyz_m
+        return ContinuationOutcome(beta, 0.0, True, True, status="affine")
+
+    graph, _records, exhausted = build_dynamic_product_graph(
+        nodes,
+        (source, target),
+        continuation,
+        repair_policy=CrossCellRepairPolicy(maximum_waves=1),
+    )
+
+    assert exhausted is False
+    assert graph.continuation_attempt_count == 4
+    assert calls == [
+        ((0, "source"), 1),
+        ((1, "target"), 0),
+    ]
+
+
 def _edge(source: AtlasCandidate, target: AtlasCandidate) -> DirectedContinuationEdge:
     return DirectedContinuationEdge(
         source.key,

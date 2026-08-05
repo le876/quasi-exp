@@ -137,6 +137,9 @@ formal_gate:
   deployment_claim: false
 
 parallel:
-  # Schedule all registered patches concurrently while keeping numerical
-  # kernels single-threaded inside each worker.
+  # Schedule deterministic patch/ablation work items while keeping numerical
+  # kernels single-threaded inside each subprocess.  E3/E4 own the critical
+  # path, so all slots remain eligible for ready heavy work; short E0--E2 jobs
+  # fill slots only when no additional critical-path job can start.
   patch_workers: 12
+  heavy_ablation_workers: 12

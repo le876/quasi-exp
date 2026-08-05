@@ -26,6 +26,7 @@ def test_v14_1_config_freezes_nested_ablation_and_no_padding_contract() -> None:
     assert config["exploratory_dataset"]["row_padding"] is False
     assert config["formal_gate"]["row_padding"] is False
     assert config["formal_gate"]["deployment_claim"] is False
+    assert config["parallel"]["patch_workers"] == config["patches"]["count"] == 12
     assert [row["seed_a"] for row in config["reach_extension"]["rounds"]] == [
         20260847,
         20260853,

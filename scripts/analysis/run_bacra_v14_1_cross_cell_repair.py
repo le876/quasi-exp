@@ -1960,6 +1960,17 @@ def stage_formal_gate(
     reach = _read_json(reach_path) if reach_path.is_file() else {}
     pilot = _read_json(pilot_path) if pilot_path.is_file() else {}
     student = _read_json(student_path) if student_path.is_file() else {}
+    inventory_gate_path = output_root / STAGE_DIRS["inventory"] / "gate.json"
+    inventory_gate = (
+        _read_json(inventory_gate_path) if inventory_gate_path.is_file() else {}
+    )
+    stage_source_git_sha = subprocess.run(
+        ["git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    upstream_source_git_sha = inventory_gate.get("source_git_sha")
     repaired = output_root / STAGE_DIRS["repaired_pilot"]
     labelable = float(pilot.get("labelable_measure_ratio", 0.0))
     unresolved = float(pilot.get("unresolved_abstain_ratio", 1.0))
@@ -2038,9 +2049,22 @@ def stage_formal_gate(
         "n_min": n_min,
         "direct_threshold_relaxation_authorized": False,
         "formal_generation_authorized": formal["gate_pass"],
+        "stage_source_git_sha": stage_source_git_sha,
+        "upstream_scientific_source_git_sha": upstream_source_git_sha,
+        "aggregation_only_hotfix": bool(
+            upstream_source_git_sha
+            and str(upstream_source_git_sha) != stage_source_git_sha
+        ),
     }
     _write_json(stage / "formal_admission_report.json", report)
-    return _gate(stage / "gate.json", {"operational_completion": True}, **report)
+    formal_checks = {
+        "operational_completion": True,
+        **{str(key): bool(value) for key, value in formal["checks"].items()},
+    }
+    gate_evidence = {
+        key: value for key, value in report.items() if key not in {"gate_pass", "checks"}
+    }
+    return _gate(stage / "gate.json", formal_checks, **gate_evidence)
 
 
 def stage_summary(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -68,3 +69,23 @@ def test_formal_gate_never_passes_by_relaxing_failed_reach_or_representation() -
     assert report["checks"]["reach_convergence"] is False
     assert report["padding_authorized"] is False
     assert report["deployment_claim"] is False
+
+
+def test_formal_stage_writes_failed_gate_when_upstream_scientific_gates_fail(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_1_cross_cell_repair.yaml")
+    for stage_name in ("reach_extension", "repaired_pilot", "exploratory_student"):
+        stage = tmp_path / module.STAGE_DIRS[stage_name]
+        stage.mkdir(parents=True)
+        (stage / "gate.json").write_text(
+            json.dumps({"gate_pass": False, "scientific_gate_pass": False}),
+            encoding="utf-8",
+        )
+
+    gate = module.stage_formal_gate(config, ROOT, tmp_path)
+
+    assert gate["gate_pass"] is False
+    assert gate["formal_generation_authorized"] is False
+    assert gate["checks"]["operational_completion"] is True

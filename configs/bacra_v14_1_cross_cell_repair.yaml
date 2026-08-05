@@ -137,4 +137,6 @@ formal_gate:
   deployment_claim: false
 
 parallel:
-  patch_workers: 4
+  # One CPU-bound process per patch.  The 12-patch Pilot uses all logical
+  # capacity without nesting BLAS/OpenMP threads inside each worker.
+  patch_workers: 12

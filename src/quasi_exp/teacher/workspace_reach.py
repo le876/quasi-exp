@@ -263,6 +263,31 @@ def _symmetric_change_ratio(current: frozenset[CellKey], previous: frozenset[Cel
     return 0.0 if not union else float(len(current ^ previous) / len(union))
 
 
+def measure_weighted_boundary_change_ratio(
+    current_cells: frozenset[CellKey],
+    previous_cells: frozenset[CellKey],
+) -> float:
+    """Measure boundary change relative to occupied workspace measure.
+
+    The historical diagnostic divides the symmetric difference by the union
+    of the two *boundary* sets.  Thin boundary motion can therefore look large
+    even when it changes little of the represented workspace.  V14.2 retains
+    that diagnostic and adds this separately named, measure-aware quantity:
+
+    ``measure(boundary_t xor boundary_t-1) / measure(omega_t union omega_t-1)``.
+    """
+
+    current = frozenset(current_cells)
+    previous = frozenset(previous_cells)
+    occupied = current | previous
+    if not occupied:
+        return 0.0
+    changed_boundary = _boundary(current) ^ _boundary(previous)
+    numerator = sum(cell.volume_m3 for cell in changed_boundary)
+    denominator = sum(cell.volume_m3 for cell in occupied)
+    return float(numerator / denominator)
+
+
 class ReachProxyBuilder:
     """Reduce independent forward replicas and explicit frontier evidence."""
 

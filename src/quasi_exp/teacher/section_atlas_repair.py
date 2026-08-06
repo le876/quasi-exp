@@ -208,15 +208,29 @@ def section_growth_from_frames(
         for node_id, node_rows in rows.groupby("task_node_id", sort=True):
             values: list[SectionHypothesis] = []
             for row in node_rows.itertuples(index=False):
+                def optional(name: str, default: Any) -> Any:
+                    value = getattr(row, name, default)
+                    return default if pd.isna(value) else value
+
                 candidate = AtlasCandidate(
                     node_id=int(node_id),
                     candidate_id=str(row.candidate_id),
                     beta_rad=np.asarray([getattr(row, f"beta{index}_rad") for index in range(1, 7)]),
-                    residual_mm=0.0,
-                    min_margin_deg=1.0,
-                    normalized_min_margin=0.1,
-                    condition_number=0.0,
-                    quality="Gold",
+                    residual_mm=float(optional("residual_mm", 0.0)),
+                    min_margin_deg=float(optional("min_margin_deg", 1.0)),
+                    normalized_min_margin=float(
+                        optional("normalized_min_margin", 0.1)
+                    ),
+                    posture_cost=float(optional("posture_cost", 0.0)),
+                    condition_number=float(optional("condition_number", 0.0)),
+                    quality=str(optional("quality", "Gold")),
+                    solver_success=bool(optional("solver_success", True)),
+                    actual_bounds=bool(optional("actual_bounds", True)),
+                    cluster_id=(
+                        None
+                        if optional("cluster_id", None) is None
+                        else int(optional("cluster_id", None))
+                    ),
                     diagnostics={"rehydrated_selected_section": True},
                 )
                 parent_nodes = tuple(map(int, row.parent_node_ids))
@@ -380,17 +394,17 @@ def repair_rooted_section_atlas(
     method: str,
     policy: AtlasRepairPolicy | None = None,
     retry_continuation: Callable[..., ContinuationOutcome] | None = None,
+    schedule_executor: Callable[..., pd.DataFrame] | None = None,
 ) -> RepairedSectionAtlas:
     """Freshly audit, qualify, stitch, and select one deployable primary atlas."""
 
     active = AtlasRepairPolicy() if policy is None else policy
     schedules = _build_schedules(growth, patch_id=patch_id, method=method)
-    executions = _execute_schedules(
-        growth,
-        schedules,
-        continuation,
-        active.audit,
+    executions = _execute_phase(
+        growth, schedules, continuation, active.audit,
         retry_continuation=retry_continuation,
+        schedule_executor=schedule_executor,
+        phase_id="chart_initial",
     )
     initial = diagnose_rooted_section_artifacts(
         growth,
@@ -403,12 +417,11 @@ def repair_rooted_section_atlas(
     )
     if working_growth is not growth:
         schedules = _build_schedules(working_growth, patch_id=patch_id, method=f"{method}_fragment")
-        executions = _execute_schedules(
-            working_growth,
-            schedules,
-            continuation,
-            active.audit,
+        executions = _execute_phase(
+            working_growth, schedules, continuation, active.audit,
             retry_continuation=retry_continuation,
+            schedule_executor=schedule_executor,
+            phase_id="fragment_reaudit",
         )
         initial = diagnose_rooted_section_artifacts(
             working_growth,
@@ -466,12 +479,11 @@ def repair_rooted_section_atlas(
     primary_schedules = _build_schedules(
         primary_growth, patch_id=patch_id, method=f"{method}_primary_certificate"
     )
-    primary_executions = _execute_schedules(
-        primary_growth,
-        primary_schedules,
-        continuation,
-        active.audit,
+    primary_executions = _execute_phase(
+        primary_growth, primary_schedules, continuation, active.audit,
         retry_continuation=retry_continuation,
+        schedule_executor=schedule_executor,
+        phase_id="primary_certificate",
     )
     final_diagnostic = diagnose_rooted_section_artifacts(
         primary_growth,
@@ -664,7 +676,7 @@ def _build_schedules(growth: SectionGrowthResult, *, patch_id: str, method: str)
     return pd.DataFrame.from_records(rows)
 
 
-def _execute_schedules(
+def execute_audit_schedules(
     growth: SectionGrowthResult,
     schedules: pd.DataFrame,
     continuation: ContinuationAdapter,
@@ -718,6 +730,37 @@ def _execute_schedules(
                 for row in rows[-policy.repeats_per_direction:]:
                     row["repeat_gap_deg"] = max(repeat_gaps, default=0.0)
     return pd.DataFrame.from_records(rows)
+
+
+def _execute_phase(
+    growth: SectionGrowthResult,
+    schedules: pd.DataFrame,
+    continuation: ContinuationAdapter,
+    policy: AuditV2Policy,
+    *,
+    retry_continuation: Callable[..., ContinuationOutcome] | None,
+    schedule_executor: Callable[..., pd.DataFrame] | None,
+    phase_id: str,
+) -> pd.DataFrame:
+    if schedule_executor is None:
+        return execute_audit_schedules(
+            growth,
+            schedules,
+            continuation,
+            policy,
+            retry_continuation=retry_continuation,
+        )
+    executions = schedule_executor(
+        growth,
+        schedules,
+        continuation,
+        policy,
+        retry_continuation,
+        str(phase_id),
+    )
+    if not isinstance(executions, pd.DataFrame):
+        raise TypeError("schedule executor must return a pandas DataFrame")
+    return executions
 
 
 def _retry_trace(

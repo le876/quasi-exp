@@ -220,6 +220,19 @@ class SectionGrowthResult:
                             # still reconstruct the exact lineage.
                             "parent_node_ids": [int(key[0]) for key in value.parent_keys],
                             "parent_candidate_ids": [str(key[1]) for key in value.parent_keys],
+                            "residual_mm": float(value.candidate.residual_mm),
+                            "min_margin_deg": float(value.candidate.min_margin_deg),
+                            "normalized_min_margin": float(
+                                value.candidate.normalized_min_margin
+                            ),
+                            "posture_cost": float(value.candidate.posture_cost),
+                            "condition_number": float(
+                                value.candidate.condition_number
+                            ),
+                            "quality": str(value.candidate.quality),
+                            "solver_success": bool(value.candidate.solver_success),
+                            "actual_bounds": bool(value.candidate.actual_bounds),
+                            "cluster_id": value.candidate.cluster_id,
                             **{
                                 f"beta{index + 1}_rad": float(value.candidate.beta_rad[index])
                                 for index in range(6)

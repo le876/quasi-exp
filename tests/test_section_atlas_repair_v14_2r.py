@@ -12,6 +12,7 @@ from quasi_exp.teacher.section_atlas_repair import (
     AuditV2Policy,
     compare_stitched_primary_atlases,
     diagnose_rooted_section_artifacts,
+    execute_audit_schedules,
     repair_rooted_section_atlas,
     section_growth_from_frames,
 )
@@ -254,6 +255,17 @@ def test_parquet_safe_section_frames_rehydrate_the_same_selected_beta() -> None:
                 left.selected_by_node[node_id].candidate.beta_rad,
                 right.selected_by_node[node_id].candidate.beta_rad,
             )
+            left_candidate = left.selected_by_node[node_id].candidate
+            right_candidate = right.selected_by_node[node_id].candidate
+            assert left_candidate.residual_mm == right_candidate.residual_mm
+            assert left_candidate.min_margin_deg == right_candidate.min_margin_deg
+            assert (
+                left_candidate.normalized_min_margin
+                == right_candidate.normalized_min_margin
+            )
+            assert left_candidate.posture_cost == right_candidate.posture_cost
+            assert left_candidate.condition_number == right_candidate.condition_number
+            assert left_candidate.quality == right_candidate.quality
 
 
 def test_persistent_failed_edge_splits_and_reaudits_nontrivial_fragments() -> None:
@@ -394,3 +406,61 @@ def test_repeat_audit_uses_registered_nonzero_source_perturbations() -> None:
     executions = repaired.frames["audit_v2_executions"]
     assert executions.loc[executions["repeat_index"].eq(0), "repeat_perturbation_l2_rad"].eq(0.0).all()
     assert executions.loc[executions["repeat_index"].gt(0), "repeat_perturbation_l2_rad"].gt(0.0).all()
+
+
+def test_phase_executor_preserves_serial_audit_semantics() -> None:
+    growth = _growth((0.0,))
+    policy = AtlasRepairPolicy(audit=AuditV2Policy(repeats_per_direction=1))
+    serial = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_executor",
+        method="serial",
+        policy=policy,
+    )
+    phases: list[str] = []
+
+    def executor(
+        local_growth,
+        schedules,
+        continuation,
+        audit_policy,
+        retry_continuation,
+        phase_id,
+    ):
+        phases.append(phase_id)
+        return execute_audit_schedules(
+            local_growth,
+            schedules,
+            continuation,
+            audit_policy,
+            retry_continuation=retry_continuation,
+        )
+
+    delegated = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_executor",
+        method="delegated",
+        policy=policy,
+        schedule_executor=executor,
+    )
+
+    assert phases == ["chart_initial", "primary_certificate"]
+    columns = [
+        "direction",
+        "repeat_index",
+        "solver_success",
+        "geometry_gap_deg",
+        "classification",
+    ]
+    left = serial.frames["audit_v2_executions"].sort_values(
+        ["schedule_id", "direction", "repeat_index"]
+    )
+    right = delegated.frames["audit_v2_executions"].sort_values(
+        ["schedule_id", "direction", "repeat_index"]
+    )
+    assert left[columns].reset_index(drop=True).equals(
+        right[columns].reset_index(drop=True)
+    )
+    assert serial.certificate_gate == delegated.certificate_gate

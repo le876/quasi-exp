@@ -5,6 +5,7 @@ robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
+  performance_protocol: docs/21-BACRA-V14.2R性能修复与retry2协议.md
   legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
   v14_2_root: runs/bacra_v14_2_section_first_atlas
@@ -13,6 +14,12 @@ sources:
 parallel:
   patch_workers: 12
   numerical_threads_per_worker: 1
+
+audit_execution:
+  total_shard_workers: 12
+  checkpoint_resume: true
+  heartbeat_every_completed_shards: 1
+  patch_benchmark_runtime_per_parent_max_s: 120.0
 
 diagnostic_patch_ids: [patch_00, patch_03, patch_07, patch_09]
 development_patch_ids: [patch_00, patch_01, patch_02, patch_03, patch_04, patch_05, patch_06, patch_07]

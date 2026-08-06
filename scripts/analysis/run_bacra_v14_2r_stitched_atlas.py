@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import hashlib
 import json
 import math
 import os
@@ -29,6 +30,12 @@ from scipy.sparse import lil_matrix
 from scipy.spatial import cKDTree
 
 from quasi_exp.teacher.canonical import beta_rms_deg
+from quasi_exp.teacher.audit_shards import (
+    build_audit_shard_registry,
+    build_shard_completion_report,
+    merge_validated_audit_shards,
+    validate_shard_completion,
+)
 from quasi_exp.teacher.canonical_atlas import (
     AtlasCandidate,
     AtlasTaskNode,
@@ -41,7 +48,9 @@ from quasi_exp.teacher.section_atlas_repair import (
     AuditV2Policy,
     RetryTier,
     compare_stitched_primary_atlases,
+    execute_audit_schedules,
     repair_rooted_section_atlas,
+    section_growth_from_frames,
 )
 from quasi_exp.teacher.section_first_atlas import RootedSectionPolicy, build_section_first_atlas
 from quasi_exp.teacher.workspace_atlas_repair import atlas_nodes_from_frames, make_segmented_continuation
@@ -100,6 +109,15 @@ def load_config(path: str | Path) -> dict[str, Any]:
     config["config_path"] = str(config_path)
     if config["parallel"] != {"patch_workers": 12, "numerical_threads_per_worker": 1}:
         raise ValueError("V14.2R requires exactly twelve single-threaded patch workers")
+    audit_execution = config.get("audit_execution")
+    if not isinstance(audit_execution, Mapping):
+        raise ValueError("V14.2R requires an audit_execution contract")
+    if int(audit_execution.get("total_shard_workers", 0)) != 12:
+        raise ValueError("V14.2R requires exactly twelve total audit shard workers")
+    if audit_execution.get("checkpoint_resume") is not True:
+        raise ValueError("V14.2R audit shards must be checkpoint-resumable")
+    if int(audit_execution.get("heartbeat_every_completed_shards", 0)) != 1:
+        raise ValueError("V14.2R audit shards require one-shard heartbeat cadence")
     if list(config["diagnostic_patch_ids"]) != ["patch_00", "patch_03", "patch_07", "patch_09"]:
         raise ValueError("V14.2R diagnostic patches are registered")
     if list(config["confirmation_patch_ids"]) != ["patch_08", "patch_10", "patch_11", "patch_12"]:
@@ -117,6 +135,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 
 def _strict(value: Any) -> Any:
+    if value is pd.NA or value is pd.NaT:
+        return None
     if isinstance(value, Mapping):
         return {str(key): _strict(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -178,6 +198,27 @@ def _require(output_root: Path, stage_name: str) -> dict[str, Any]:
     return _read_json(path)
 
 
+def _validate_resume_fixed_point(
+    config: Mapping[str, Any], output_root: Path
+) -> None:
+    fixed_path = output_root / STAGE_DIRS["inventory"] / "source_fixed_point.json"
+    if not fixed_path.is_file():
+        raise FileNotFoundError(
+            f"non-inventory stage requires a sealed fixed point: {fixed_path}"
+        )
+    fixed = _read_json(fixed_path)
+    checks = {
+        "source_sha": str(fixed.get("source_sha", "")) == _git_sha(),
+        "config_sha256": str(fixed.get("config_sha256", ""))
+        == sha256_file(Path(str(config["config_path"]))),
+        "working_tree_clean": _tree_clean(),
+    }
+    if not all(checks.values()):
+        raise RuntimeError(
+            f"V14.2R resume fixed-point validation failed: {checks}"
+        )
+
+
 def _git_sha() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SOURCE_ROOT, text=True).strip()
 
@@ -190,6 +231,7 @@ def _source_paths(config: Mapping[str, Any], project_root: Path) -> dict[str, Pa
     sources = config["sources"]
     return {
         "plan": SOURCE_ROOT / str(sources["reviewed_plan"]),
+        "performance_protocol": SOURCE_ROOT / str(sources["performance_protocol"]),
         "legacy_config": SOURCE_ROOT / str(sources["legacy_config"]),
         "retry4": project_root / str(sources["retry4_root"]),
         "v14_2": project_root / str(sources["v14_2_root"]),
@@ -261,7 +303,7 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         raise FileExistsError(f"V14.2R inventory already sealed: {stage}")
     paths = _source_paths(config, project_root)
     required = [
-        paths["plan"], paths["legacy_config"], paths["robot_config"],
+        paths["plan"], paths["performance_protocol"], paths["legacy_config"], paths["robot_config"],
         paths["retry4"] / "07_summary/artifact_manifest.json",
         paths["v14_2"] / "08_summary/artifact_manifest.json",
     ]
@@ -278,8 +320,16 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         "working_tree_clean": _tree_clean(),
         "runtime": runtime_fingerprint(),
         "config_sha256": sha256_file(Path(config["config_path"])),
-        "patch_workers": 12,
-        "numerical_threads_per_worker": 1,
+        "patch_workers": int(config["parallel"]["patch_workers"]),
+        "numerical_threads_per_worker": int(
+            config["parallel"]["numerical_threads_per_worker"]
+        ),
+        "audit_shard_workers_total": int(
+            config["audit_execution"]["total_shard_workers"]
+        ),
+        "audit_checkpoint_resume": bool(
+            config["audit_execution"]["checkpoint_resume"]
+        ),
         "source_records": records,
     }
     _write_json(stage / "source_fixed_point.json", report)
@@ -288,7 +338,12 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         {
             "clean_fixed_point": report["working_tree_clean"],
             "source_inventory_complete": not missing,
-            "twelve_workers_registered": True,
+            "twelve_workers_registered": report["patch_workers"] == 12,
+            "twelve_audit_shards_registered": report["audit_shard_workers_total"]
+            == 12,
+            "audit_checkpoint_resume_registered": report[
+                "audit_checkpoint_resume"
+            ],
         },
         **report,
     )
@@ -766,6 +821,546 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
     return adapter
 
 
+AUDIT_EXECUTION_COLUMNS = (
+    "schedule_id",
+    "chart_id",
+    "direction",
+    "repeat_index",
+    "repeat_perturbation_l2_rad",
+    "solver_success",
+    "geometry_gap_deg",
+    "repeat_gap_deg",
+    "residual_mm",
+    "retry_tier",
+    "classification",
+    "failure_source_node",
+    "failure_target_node",
+    "oracle_used_for_pass",
+)
+
+
+def _audit_shards_per_patch(active_patch_jobs: int, *, total_workers: int) -> int:
+    if active_patch_jobs < 1 or total_workers < 1:
+        raise ValueError("active patch and audit worker counts must be positive")
+    return max(1, int(total_workers) // int(active_patch_jobs))
+
+
+def _audit_shard_allocations(
+    active_patch_jobs: int, *, total_workers: int
+) -> tuple[int, ...]:
+    if not 1 <= active_patch_jobs <= total_workers:
+        raise ValueError("active patch jobs must fit inside the audit worker budget")
+    base, remainder = divmod(int(total_workers), int(active_patch_jobs))
+    return tuple(
+        base + (1 if index < remainder else 0)
+        for index in range(int(active_patch_jobs))
+    )
+
+
+def _payload_sha256(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        _strict(dict(value)), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _frame_payload_sha256(frame: pd.DataFrame) -> str:
+    normalized = frame.copy()
+    for column in normalized.columns:
+        if normalized[column].dtype == object:
+            normalized[column] = normalized[column].map(
+                lambda value: json.dumps(
+                    _strict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            )
+    row_hashes = pd.util.hash_pandas_object(normalized, index=True).to_numpy(
+        dtype=np.uint64
+    )
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(list(map(str, normalized.columns)), separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
+    digest.update(row_hashes.tobytes())
+    return digest.hexdigest()
+
+
+def _thread_limited_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            "TF_NUM_INTRAOP_THREADS": "1",
+            "TF_NUM_INTEROP_THREADS": "1",
+            "MPLCONFIGDIR": "/tmp/mpl-bacra-v14-2r",
+        }
+    )
+    return environment
+
+
+def _audit_bundle_artifacts(phase_directory: Path) -> tuple[dict[str, Any], ...]:
+    names = (
+        "task_nodes.parquet",
+        "task_edges.parquet",
+        "section_hypotheses.parquet",
+        "selected_edges.parquet",
+        "schedule_registry.parquet",
+    )
+    return tuple(
+        {
+            "path": name,
+            "bytes": (phase_directory / name).stat().st_size,
+            "sha256": sha256_file(phase_directory / name),
+        }
+        for name in names
+    )
+
+
+def _audit_source_records() -> tuple[dict[str, Any], ...]:
+    paths = (
+        Path(__file__).resolve(),
+        SOURCE_ROOT / "src/quasi_exp/teacher/audit_shards.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/section_atlas_repair.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/section_first_atlas.py",
+    )
+    return tuple(
+        {
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in paths
+    )
+
+
+def _validate_audit_bundle(
+    manifest: Mapping[str, Any], phase_directory: Path, config: Mapping[str, Any]
+) -> None:
+    if str(manifest.get("source_sha", "")) != _git_sha():
+        raise RuntimeError("audit bundle source SHA does not match the executing fixed point")
+    config_sha = sha256_file(Path(str(config["config_path"])))
+    if str(manifest.get("config_sha256", "")) != config_sha:
+        raise RuntimeError("audit bundle config hash does not match the executing config")
+    artifacts = tuple(manifest.get("artifacts", ()))
+    for record in artifacts:
+        path = phase_directory / str(record["path"])
+        if not path.is_file() or path.stat().st_size != int(record["bytes"]):
+            raise RuntimeError(f"audit bundle artifact is absent or truncated: {path}")
+        if sha256_file(path) != str(record["sha256"]):
+            raise RuntimeError(f"audit bundle artifact hash mismatch: {path}")
+    source_records = tuple(manifest.get("source_records", ()))
+    for record in source_records:
+        path = Path(str(record["path"]))
+        if not path.is_file() or path.stat().st_size != int(record["bytes"]):
+            raise RuntimeError(f"audit source artifact is absent or truncated: {path}")
+        if sha256_file(path) != str(record["sha256"]):
+            raise RuntimeError(f"audit source artifact hash mismatch: {path}")
+    expected_input_sha = _payload_sha256(
+        {"artifacts": artifacts, "source_records": source_records}
+    )
+    if str(manifest.get("input_sha256", "")) != expected_input_sha:
+        raise RuntimeError("audit bundle input closure hash mismatch")
+
+
+def _run_audit_shard_worker(
+    config: Mapping[str, Any], project_root: Path, phase_directory: Path, shard_id: int
+) -> dict[str, Any]:
+    manifest = _read_json(phase_directory / "input_manifest.json")
+    _validate_audit_bundle(manifest, phase_directory, config)
+    registry = pd.read_parquet(phase_directory / "schedule_registry.parquet")
+    shard_registry = registry[registry["shard_id"].astype(int).eq(int(shard_id))].copy()
+    registered_count = int(manifest["shard_count"])
+    if not 0 <= int(shard_id) < registered_count:
+        raise ValueError(f"audit shard id outside registered range: {shard_id}")
+    tasks = pd.read_parquet(phase_directory / "task_nodes.parquet")
+    task_edges = pd.read_parquet(phase_directory / "task_edges.parquet")
+    hypotheses = pd.read_parquet(phase_directory / "section_hypotheses.parquet")
+    selected_edges = pd.read_parquet(phase_directory / "selected_edges.parquet")
+    nodes = atlas_nodes_from_frames(tasks, task_edges)
+    growth = section_growth_from_frames(nodes, hypotheses, selected_edges)
+    environment = legacy._EndpointOnlyForwardAdapter(
+        load_environment(project_root, _source_paths(config, project_root)["robot_config"])
+    )
+    _nodes, continuation = legacy._segmented_continuation(
+        environment, tasks, task_edges
+    )
+    retry = _registered_retry_adapter(environment, tasks, task_edges)
+    if len(shard_registry):
+        executions = execute_audit_schedules(
+            growth,
+            shard_registry,
+            continuation,
+            _audit_policy(config),
+            retry_continuation=retry,
+        )
+    else:
+        executions = pd.DataFrame(columns=AUDIT_EXECUTION_COLUMNS)
+    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
+    _write_parquet(executions, shard_directory / "executions.parquet")
+    report = build_shard_completion_report(
+        shard_registry,
+        executions,
+        source_sha=_git_sha(),
+        config_sha256=sha256_file(Path(str(config["config_path"]))),
+        input_sha256=str(manifest["input_sha256"]),
+        phase_id=str(manifest["phase_id"]),
+        shard_id=int(shard_id),
+        repeats_per_direction=int(config["audit_v2"]["repeats_per_direction"]),
+    )
+    report["pid"] = os.getpid()
+    report["executions_file_sha256"] = sha256_file(
+        shard_directory / "executions.parquet"
+    )
+    _write_json(shard_directory / "report.json", report)
+    return report
+
+
+class _SubprocessAuditExecutor:
+    """Run exact audit schedules in independent, resumable subprocess shards."""
+
+    def __init__(
+        self,
+        *,
+        config: Mapping[str, Any],
+        project_root: Path,
+        tasks: pd.DataFrame,
+        task_edges: pd.DataFrame,
+        patch_directory: Path,
+        shard_count: int,
+    ) -> None:
+        self.config = config
+        self.project_root = project_root
+        self.tasks = tasks.copy()
+        self.task_edges = task_edges.copy()
+        self.patch_directory = patch_directory
+        self.shard_count = max(1, int(shard_count))
+
+    def __call__(
+        self,
+        growth: Any,
+        schedules: pd.DataFrame,
+        continuation: Any,
+        policy: AuditV2Policy,
+        retry_continuation: Any,
+        phase_id: str,
+    ) -> pd.DataFrame:
+        del continuation
+        if retry_continuation is None:
+            raise ValueError("subprocess audit execution requires the registered retry adapter")
+        phase_directory = self.patch_directory / "_audit_checkpoints" / str(phase_id)
+        phase_directory.mkdir(parents=True, exist_ok=True)
+        frames = growth.frames()
+        registry = build_audit_shard_registry(
+            schedules,
+            shard_count=self.shard_count,
+            repeats_per_direction=policy.repeats_per_direction,
+        )
+        _write_parquet(self.tasks, phase_directory / "task_nodes.parquet")
+        _write_parquet(self.task_edges, phase_directory / "task_edges.parquet")
+        _write_parquet(
+            frames["section_hypotheses"], phase_directory / "section_hypotheses.parquet"
+        )
+        _write_parquet(frames["selected_edges"], phase_directory / "selected_edges.parquet")
+        _write_parquet(registry, phase_directory / "schedule_registry.parquet")
+        artifacts = _audit_bundle_artifacts(phase_directory)
+        source_records = _audit_source_records()
+        input_sha = _payload_sha256(
+            {"artifacts": artifacts, "source_records": source_records}
+        )
+        manifest = {
+            "schema_version": 1,
+            "source_sha": _git_sha(),
+            "config_sha256": sha256_file(Path(str(self.config["config_path"]))),
+            "input_sha256": input_sha,
+            "phase_id": str(phase_id),
+            "shard_count": self.shard_count,
+            "schedule_count": len(registry),
+            "repeats_per_direction": policy.repeats_per_direction,
+            "artifacts": artifacts,
+            "source_records": source_records,
+        }
+        _write_json(phase_directory / "input_manifest.json", manifest)
+
+        completed: dict[int, pd.DataFrame] = {}
+        missing: list[int] = []
+        for shard_id in range(self.shard_count):
+            shard_directory = phase_directory / f"shard_{shard_id:02d}"
+            report_path = shard_directory / "report.json"
+            execution_path = shard_directory / "executions.parquet"
+            if report_path.is_file() and execution_path.is_file():
+                try:
+                    executions = pd.read_parquet(execution_path)
+                    report = _read_json(report_path)
+                    shard_registry = registry[registry["shard_id"].eq(shard_id)]
+                    valid = validate_shard_completion(
+                        report,
+                        shard_registry,
+                        executions,
+                        source_sha=_git_sha(),
+                        config_sha256=str(manifest["config_sha256"]),
+                        input_sha256=input_sha,
+                        phase_id=str(phase_id),
+                        shard_id=shard_id,
+                        repeats_per_direction=policy.repeats_per_direction,
+                    )
+                    file_hash_ok = str(report.get("executions_file_sha256", "")) == sha256_file(
+                        execution_path
+                    )
+                    if valid["gate_pass"] and file_hash_ok:
+                        completed[shard_id] = executions
+                        continue
+                except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                    pass
+            missing.append(shard_id)
+        reused_shard_count = len(completed)
+
+        started = time.time()
+        running: list[tuple[int, subprocess.Popen[str], Any]] = []
+        environment = _thread_limited_environment()
+
+        def heartbeat() -> None:
+            payload = {
+                "phase_id": str(phase_id),
+                "completed_shards": len(completed),
+                "total_shards": self.shard_count,
+                "running_shards": [shard for shard, _process, _handle in running],
+                "pending_shards": list(missing),
+                "elapsed_s": time.time() - started,
+                "updated_at_unix_s": time.time(),
+            }
+            _write_json(phase_directory / "heartbeat.json", payload)
+            print(json.dumps(_strict({"audit_shard_progress": payload}), sort_keys=True), flush=True)
+
+        heartbeat()
+        while missing or running:
+            while missing and len(running) < self.shard_count:
+                shard_id = missing.pop(0)
+                shard_directory = phase_directory / f"shard_{shard_id:02d}"
+                shard_directory.mkdir(parents=True, exist_ok=True)
+                handle = (shard_directory / "worker.log").open("w", encoding="utf-8")
+                command = [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "--config",
+                    str(self.config["config_path"]),
+                    "--audit-shard-bundle",
+                    str(phase_directory),
+                    "--audit-shard-id",
+                    str(shard_id),
+                ]
+                process = subprocess.Popen(
+                    command,
+                    cwd=SOURCE_ROOT,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=handle,
+                    text=True,
+                )
+                running.append((shard_id, process, handle))
+            progressed = False
+            survivors: list[tuple[int, subprocess.Popen[str], Any]] = []
+            for shard_id, process, handle in running:
+                if process.poll() is None:
+                    survivors.append((shard_id, process, handle))
+                    continue
+                stdout, _stderr = process.communicate()
+                handle.close()
+                if process.returncode != 0:
+                    for _other_id, other, other_handle in running:
+                        if other.pid == process.pid:
+                            continue
+                        if other.poll() is None:
+                            other.terminate()
+                            other.wait(timeout=30)
+                        other_handle.close()
+                    raise RuntimeError(
+                        f"audit shard failed phase={phase_id} shard={shard_id} "
+                        f"returncode={process.returncode} stdout={stdout[-1000:]}"
+                    )
+                shard_directory = phase_directory / f"shard_{shard_id:02d}"
+                executions = pd.read_parquet(shard_directory / "executions.parquet")
+                report = _read_json(shard_directory / "report.json")
+                shard_registry = registry[registry["shard_id"].eq(shard_id)]
+                valid = validate_shard_completion(
+                    report,
+                    shard_registry,
+                    executions,
+                    source_sha=_git_sha(),
+                    config_sha256=str(manifest["config_sha256"]),
+                    input_sha256=input_sha,
+                    phase_id=str(phase_id),
+                    shard_id=shard_id,
+                    repeats_per_direction=policy.repeats_per_direction,
+                )
+                if not valid["gate_pass"]:
+                    raise RuntimeError(
+                        f"audit shard exact-set validation failed: {valid}"
+                    )
+                if str(report.get("executions_file_sha256", "")) != sha256_file(
+                    shard_directory / "executions.parquet"
+                ):
+                    raise RuntimeError(
+                        f"audit shard file hash failed phase={phase_id} shard={shard_id}"
+                    )
+                completed[shard_id] = executions
+                progressed = True
+            running = survivors
+            if progressed:
+                heartbeat()
+            elif running:
+                time.sleep(0.25)
+        merged = merge_validated_audit_shards(
+            registry,
+            completed,
+            repeats_per_direction=policy.repeats_per_direction,
+        )
+        _write_parquet(merged, phase_directory / "executions.parquet")
+        aggregate = _gate(
+            phase_directory / "gate.json",
+            {
+                "all_registered_shards_complete": len(completed) == self.shard_count,
+                "exact_execution_set": len(merged)
+                == len(registry) * 2 * policy.repeats_per_direction,
+            },
+            phase_id=str(phase_id),
+            schedule_count=len(registry),
+            execution_count=len(merged),
+            shard_count=self.shard_count,
+            input_sha256=input_sha,
+            executions_sha256=sha256_file(phase_directory / "executions.parquet"),
+            resumed_shard_count=reused_shard_count,
+        )
+        if not aggregate["gate_pass"]:
+            raise RuntimeError(f"audit shard aggregate failed: {aggregate}")
+        return merged
+
+
+def _growth_checkpoint_input_sha256(
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    assignments: pd.DataFrame,
+) -> str:
+    return _payload_sha256(
+        {
+            "tasks": _frame_payload_sha256(tasks),
+            "task_edges": _frame_payload_sha256(task_edges),
+            "candidates": _frame_payload_sha256(candidate_frame),
+            "assignments": _frame_payload_sha256(assignments),
+        }
+    )
+
+
+def _load_growth_checkpoint(
+    directory: Path,
+    *,
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+    input_sha256: str,
+    config: Mapping[str, Any],
+    patch_id: str,
+    variant: str,
+) -> tuple[Any, dict[str, Any], dict[str, pd.DataFrame]] | None:
+    checkpoint = directory / "_growth_checkpoint"
+    manifest_path = checkpoint / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = _read_json(manifest_path)
+        checks = (
+            str(manifest.get("source_sha", "")) == _git_sha(),
+            str(manifest.get("config_sha256", ""))
+            == sha256_file(Path(str(config["config_path"]))),
+            str(manifest.get("input_sha256", "")) == str(input_sha256),
+            str(manifest.get("patch_id", "")) == str(patch_id),
+            str(manifest.get("variant", "")) == str(variant),
+        )
+        if not all(checks):
+            return None
+        frames: dict[str, pd.DataFrame] = {}
+        for record in manifest.get("artifacts", ()):
+            path = checkpoint / str(record["path"])
+            if (
+                not path.is_file()
+                or path.stat().st_size != int(record["bytes"])
+                or sha256_file(path) != str(record["sha256"])
+            ):
+                return None
+            if path.suffix == ".parquet":
+                frames[path.stem] = pd.read_parquet(path)
+        required = {"section_hypotheses", "selected_edges"}
+        if not required <= set(frames):
+            return None
+        root_report = _read_json(checkpoint / "root_report.json")
+        nodes = atlas_nodes_from_frames(tasks, task_edges)
+        growth = section_growth_from_frames(
+            nodes,
+            frames["section_hypotheses"],
+            frames["selected_edges"],
+            policy=_section_policy(
+                config,
+                beam_width=int(manifest["beam_width"]),
+                root_count=int(manifest["selected_root_count"]),
+                consensus=bool(manifest["consensus"]),
+            ),
+        )
+        return growth, root_report, frames
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _write_growth_checkpoint(
+    directory: Path,
+    *,
+    growth: Any,
+    root_report: Mapping[str, Any],
+    input_sha256: str,
+    config: Mapping[str, Any],
+    patch_id: str,
+    variant: str,
+    beam_width: int,
+    consensus: bool,
+) -> dict[str, pd.DataFrame]:
+    checkpoint = directory / "_growth_checkpoint"
+    frames = {str(name): frame.copy() for name, frame in growth.frames().items()}
+    artifacts = []
+    for name, frame in frames.items():
+        path = checkpoint / f"{name}.parquet"
+        _write_parquet(frame, path)
+        artifacts.append(
+            {"path": path.name, "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+        )
+    _write_json(checkpoint / "root_report.json", root_report)
+    root_path = checkpoint / "root_report.json"
+    artifacts.append(
+        {
+            "path": root_path.name,
+            "bytes": root_path.stat().st_size,
+            "sha256": sha256_file(root_path),
+        }
+    )
+    _write_json(
+        checkpoint / "manifest.json",
+        {
+            "schema_version": 1,
+            "source_sha": _git_sha(),
+            "config_sha256": sha256_file(Path(str(config["config_path"]))),
+            "input_sha256": str(input_sha256),
+            "patch_id": str(patch_id),
+            "variant": str(variant),
+            "beam_width": int(beam_width),
+            "selected_root_count": int(len(growth.charts)),
+            "consensus": bool(consensus),
+            "artifacts": artifacts,
+        },
+    )
+    return frames
+
+
 def _variant_spec(name: str) -> tuple[int, int, int, bool, bool, bool]:
     specs = {
         "baseline": (4, 8, 20260871, False, False, False),
@@ -959,6 +1554,7 @@ def _execute_patch(
 ) -> dict[str, Any]:
     if (directory / "report.json").is_file():
         return _read_json(directory / "report.json")
+    directory.mkdir(parents=True, exist_ok=True)
     legacy_config = legacy.load_config(_source_paths(config, project_root)["legacy_config"])
     if patch_id == "patch_12":
         replacement = output_root / STAGE_DIRS["replacement_confirmation"]
@@ -986,23 +1582,56 @@ def _execute_patch(
     if refine_graph:
         task_edges = _refine_task_graph(tasks, task_edges)
         nodes, continuation = legacy._segmented_continuation(environment, tasks, task_edges)
-    initial_roots = legacy._root_keys(tasks, assignments, candidates, max(1, root_count))
-    candidates, root_keys, root_report = _root_candidates_with_enrichment(
-        environment, tasks, candidates, initial_roots, root_count, seed
+    growth_input_sha = _growth_checkpoint_input_sha256(
+        tasks, task_edges, candidate_frame, assignments
     )
-    if leave_one_out and root_keys:
-        root_keys = root_keys[1:]
-        root_report["leave_one_root_out"] = True
-    if not root_keys:
-        raise RuntimeError(f"no usable roots for {patch_id}/{variant}")
     started = time.time()
-    growth = build_section_first_atlas(
-        nodes,
-        candidates,
-        continuation,
-        root_keys=root_keys,
-        policy=_section_policy(config, beam_width=beam, root_count=max(1, len(root_keys)), consensus=consensus),
+    checkpoint = _load_growth_checkpoint(
+        directory,
+        tasks=tasks,
+        task_edges=task_edges,
+        input_sha256=growth_input_sha,
+        config=config,
+        patch_id=patch_id,
+        variant=variant,
     )
+    if checkpoint is None:
+        initial_roots = legacy._root_keys(tasks, assignments, candidates, max(1, root_count))
+        candidates, root_keys, root_report = _root_candidates_with_enrichment(
+            environment, tasks, candidates, initial_roots, root_count, seed
+        )
+        if leave_one_out and root_keys:
+            root_keys = root_keys[1:]
+            root_report["leave_one_root_out"] = True
+        if not root_keys:
+            raise RuntimeError(f"no usable roots for {patch_id}/{variant}")
+        growth = build_section_first_atlas(
+            nodes,
+            candidates,
+            continuation,
+            root_keys=root_keys,
+            policy=_section_policy(
+                config,
+                beam_width=beam,
+                root_count=max(1, len(root_keys)),
+                consensus=consensus,
+            ),
+        )
+        growth_frames = _write_growth_checkpoint(
+            directory,
+            growth=growth,
+            root_report=root_report,
+            input_sha256=growth_input_sha,
+            config=config,
+            patch_id=patch_id,
+            variant=variant,
+            beam_width=beam,
+            consensus=consensus,
+        )
+        growth_checkpoint_resumed = False
+    else:
+        growth, root_report, growth_frames = checkpoint
+        growth_checkpoint_resumed = True
     repaired = repair_rooted_section_atlas(
         growth,
         continuation,
@@ -1010,6 +1639,14 @@ def _execute_patch(
         method=variant,
         policy=_repair_policy(config),
         retry_continuation=_registered_retry_adapter(environment, tasks, task_edges),
+        schedule_executor=_SubprocessAuditExecutor(
+            config=config,
+            project_root=project_root,
+            tasks=tasks,
+            task_edges=task_edges,
+            patch_directory=directory,
+            shard_count=int(config.get("_audit_shards_per_patch", 1)),
+        ),
     )
     strong_reference_required = bool(
         int(tasks["source_parent_node_id"].nunique()) <= 64
@@ -1026,12 +1663,12 @@ def _execute_patch(
         }
     )
     directory.mkdir(parents=True, exist_ok=True)
-    for name, frame in growth.frames().items():
+    for name, frame in growth_frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     for name, frame in repaired.frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     _write_json(directory / "strong_reference.json", strong_reference)
-    hypothesis = growth.frames()["section_hypotheses"]
+    hypothesis = growth_frames["section_hypotheses"]
     multiplicity = hypothesis.groupby(["chart_id", "task_node_id"]).size()
     alternative_ratio = float((multiplicity > 1).mean()) if len(multiplicity) else 0.0
     executions = repaired.frames["audit_v2_executions"]
@@ -1113,6 +1750,7 @@ def _execute_patch(
             if len(optimization) else math.inf
         ),
         "runtime_s": time.time() - started,
+        "growth_checkpoint_resumed": growth_checkpoint_resumed,
         **root_report,
     }
     mechanism = config["mechanism_gate"]
@@ -1136,45 +1774,33 @@ def _execute_patch(
 def _run_patch_jobs(
     config: Mapping[str, Any], output_root: Path, stage_name: str, jobs: Sequence[tuple[str, str]]
 ) -> None:
-    pending = list(jobs)
-    running: list[tuple[str, str, subprocess.Popen[str], Any]] = []
-    failures: list[dict[str, Any]] = []
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "OMP_NUM_THREADS": "1",
-            "OPENBLAS_NUM_THREADS": "1",
-            "MKL_NUM_THREADS": "1",
-            "NUMEXPR_NUM_THREADS": "1",
-            "TF_NUM_INTRAOP_THREADS": "1",
-            "TF_NUM_INTEROP_THREADS": "1",
-            "MPLCONFIGDIR": "/tmp/mpl-bacra-v14-2r",
-        }
-    )
-    while pending or running:
-        survivors = []
-        for patch_id, variant, process, handle in running:
-            status = process.poll()
-            if status is None:
-                survivors.append((patch_id, variant, process, handle))
-            else:
-                handle.close()
-                if status != 0:
-                    failures.append({"patch_id": patch_id, "variant": variant, "returncode": status})
-        running = survivors
-        if failures:
-            for _patch, _variant, process, handle in running:
-                process.terminate()
-                process.wait(timeout=30)
-                handle.close()
-            raise RuntimeError(f"V14.2R patch worker failures: {failures}")
-        while pending and len(running) < 12:
-            patch_id, variant = pending.pop(0)
+    pending = [
+        (patch_id, variant)
+        for patch_id, variant in jobs
+        if not (
+            output_root
+            / STAGE_DIRS[stage_name]
+            / patch_id
+            / variant
+            / "report.json"
+        ).is_file()
+    ]
+    if not pending:
+        return
+    environment = _thread_limited_environment()
+    patch_worker_limit = int(config["parallel"]["patch_workers"])
+    total_audit_workers = int(config["audit_execution"]["total_shard_workers"])
+    while pending:
+        batch = pending[:patch_worker_limit]
+        del pending[: len(batch)]
+        allocations = _audit_shard_allocations(
+            len(batch), total_workers=total_audit_workers
+        )
+        running: list[tuple[str, str, subprocess.Popen[str], Any]] = []
+        for (patch_id, variant), audit_shards in zip(batch, allocations, strict=True):
             directory = output_root / STAGE_DIRS[stage_name] / patch_id / variant
-            if (directory / "report.json").is_file():
-                continue
             directory.mkdir(parents=True, exist_ok=True)
-            handle = (directory / "worker.log").open("w", encoding="utf-8")
+            handle = (directory / "worker.log").open("a", encoding="utf-8")
             command = [
                 sys.executable, str(Path(__file__).resolve()),
                 "--config", str(config["config_path"]),
@@ -1182,13 +1808,40 @@ def _run_patch_jobs(
                 "--stage", stage_name,
                 "--patch-id", patch_id,
                 "--variant", variant,
+                "--audit-shards-per-patch", str(audit_shards),
             ]
             process = subprocess.Popen(
                 command, cwd=SOURCE_ROOT, env=environment,
                 stdout=handle, stderr=subprocess.STDOUT, text=True,
             )
             running.append((patch_id, variant, process, handle))
-        if pending or running:
+        failures: list[dict[str, Any]] = []
+        while running:
+            survivors = []
+            for patch_id, variant, process, handle in running:
+                status = process.poll()
+                if status is None:
+                    survivors.append((patch_id, variant, process, handle))
+                    continue
+                handle.close()
+                if status != 0:
+                    failures.append(
+                        {
+                            "patch_id": patch_id,
+                            "variant": variant,
+                            "returncode": status,
+                        }
+                    )
+            running = survivors
+            if failures:
+                for _patch, _variant, process, handle in running:
+                    process.terminate()
+                    process.wait(timeout=30)
+                    handle.close()
+                raise RuntimeError(f"V14.2R patch worker failures: {failures}")
+            if running:
+                time.sleep(1.0)
+        if pending:
             time.sleep(1.0)
 
 
@@ -2014,20 +2667,45 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(SOURCE_ROOT / "configs/bacra_v14_2r_stitched_atlas.yaml"))
     parser.add_argument("--output-root")
-    parser.add_argument("--stage", choices=STAGE_ORDER, required=True)
+    parser.add_argument("--stage", choices=STAGE_ORDER)
     parser.add_argument("--patch-id")
     parser.add_argument("--variant")
+    parser.add_argument("--audit-shards-per-patch", type=int)
+    parser.add_argument("--audit-shard-bundle")
+    parser.add_argument("--audit-shard-id", type=int)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
+    project_root = project_root_from(SOURCE_ROOT)
+    if args.audit_shard_bundle is not None:
+        if args.audit_shard_id is None:
+            raise SystemExit("--audit-shard-id is required with --audit-shard-bundle")
+        report = _run_audit_shard_worker(
+            config,
+            project_root,
+            Path(args.audit_shard_bundle).resolve(),
+            int(args.audit_shard_id),
+        )
+        print(json.dumps(_strict(report), ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.stage is None:
+        raise SystemExit("--stage is required outside audit shard worker mode")
     config["_patch_id"] = args.patch_id
     config["_variant"] = args.variant
-    project_root = project_root_from(SOURCE_ROOT)
+    config["_audit_shards_per_patch"] = (
+        int(args.audit_shards_per_patch)
+        if args.audit_shards_per_patch is not None
+        else int(config["audit_execution"]["total_shard_workers"])
+    )
+    if int(config["_audit_shards_per_patch"]) < 1:
+        raise SystemExit("--audit-shards-per-patch must be positive")
     output_root = Path(args.output_root).resolve() if args.output_root else project_root / str(config["output_root"])
     output_root.mkdir(parents=True, exist_ok=True)
+    if args.stage != "inventory":
+        _validate_resume_fixed_point(config, output_root)
     result = STAGE_RUNNERS[args.stage](config, project_root, output_root)
     print(json.dumps(_strict(result), ensure_ascii=False, sort_keys=True))
     return 0

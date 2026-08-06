@@ -212,7 +212,14 @@ class SectionGrowthResult:
                             "score": value.score,
                             "wave": value.wave,
                             "boundary_risk": value.boundary_risk,
-                            "parent_keys": [list(key) for key in value.parent_keys],
+                            # A CandidateKey mixes an integer task-node id and a
+                            # string candidate id.  Keeping those pairs as one
+                            # nested object column makes PyArrow infer a single
+                            # scalar type for both tuple positions.  Store the
+                            # two typed projections instead; matching positions
+                            # still reconstruct the exact lineage.
+                            "parent_node_ids": [int(key[0]) for key in value.parent_keys],
+                            "parent_candidate_ids": [str(key[1]) for key in value.parent_keys],
                             **{
                                 f"beta{index + 1}_rad": float(value.candidate.beta_rad[index])
                                 for index in range(6)

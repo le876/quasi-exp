@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pandas as pd
 
 from quasi_exp.teacher.canonical_atlas import (
     AtlasCandidate,
@@ -88,6 +89,35 @@ def test_section_first_growth_is_rooted_single_valued_and_beam_bounded() -> None
     assert set(chart.selected_by_node) == {0, 1, 2, 3}
     assert all(len(values) <= 2 for values in chart.hypotheses_by_node.values())
     assert len({item.node_id for item in chart.selected_by_node.values()}) == 4
+
+
+def test_section_first_frames_have_parquet_safe_typed_lineage(tmp_path) -> None:
+    nodes = _grid_nodes()
+    root = _candidate(0, np.zeros(6), "root")
+    result = build_section_first_atlas(
+        nodes,
+        (root,),
+        _affine_continuation,
+        root_keys=(root.key,),
+        policy=RootedSectionPolicy(beam_width=2, maximum_growth_waves=8),
+    )
+
+    frames = result.frames()
+    hypotheses = frames["section_hypotheses"]
+    assert "parent_keys" not in hypotheses
+    assert hypotheses["parent_node_ids"].map(
+        lambda values: all(isinstance(value, int) for value in values)
+    ).all()
+    assert hypotheses["parent_candidate_ids"].map(
+        lambda values: all(isinstance(value, str) for value in values)
+    ).all()
+    assert hypotheses.apply(
+        lambda row: len(row.parent_node_ids) == len(row.parent_candidate_ids), axis=1
+    ).all()
+    for name, frame in frames.items():
+        path = tmp_path / f"{name}.parquet"
+        frame.to_parquet(path, index=False)
+        assert len(frame) == len(pd.read_parquet(path))
 
 
 def test_section_first_rejects_nonstitchable_multiparent_endpoint() -> None:

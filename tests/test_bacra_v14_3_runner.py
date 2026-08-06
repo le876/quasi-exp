@@ -54,3 +54,12 @@ def test_router_feature_contract_is_xyz_only() -> None:
     module = _module()
     assert module.ROUTER_FEATURE_COLUMNS == ("x_m", "y_m", "z_m")
     assert "primary_chart_id" not in module.ROUTER_FEATURE_COLUMNS
+
+
+def test_v14_3_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
+    paths = module._sources(config, Path("/mnt/ML_projects/quasi_exp"))
+
+    assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
+    assert paths["plan"].is_file()

@@ -189,7 +189,7 @@ def _tree_clean() -> bool:
 def _source_paths(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     sources = config["sources"]
     return {
-        "plan": project_root / str(sources["reviewed_plan"]),
+        "plan": SOURCE_ROOT / str(sources["reviewed_plan"]),
         "legacy_config": SOURCE_ROOT / str(sources["legacy_config"]),
         "retry4": project_root / str(sources["retry4_root"]),
         "v14_2": project_root / str(sources["v14_2_root"]),

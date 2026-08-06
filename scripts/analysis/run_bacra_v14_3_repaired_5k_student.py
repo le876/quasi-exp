@@ -111,7 +111,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
 def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     row = config["sources"]
     return {
-        "plan": project_root / str(row["reviewed_plan"]),
+        "plan": SOURCE_ROOT / str(row["reviewed_plan"]),
         "v14_2r": project_root / str(row["v14_2r_root"]),
         "v14_2r_config": SOURCE_ROOT / str(row["v14_2r_config"]),
         "legacy_config": SOURCE_ROOT / str(row["v14_2_legacy_config"]),

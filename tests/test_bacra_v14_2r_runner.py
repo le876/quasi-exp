@@ -51,6 +51,15 @@ def test_v14_2r_stage_order_separates_repair_confirmation_and_reach() -> None:
     assert set(module.STAGE_RUNNERS) == set(module.STAGE_ORDER)
 
 
+def test_v14_2r_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas.yaml")
+    paths = module._source_paths(config, Path("/mnt/ML_projects/quasi_exp"))
+
+    assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
+    assert paths["plan"].is_file()
+
+
 def test_v14_2r_scientific_gate_failure_is_not_an_operational_error(tmp_path) -> None:
     module = _module()
     skipped = module.write_scientific_skip(tmp_path, "upstream_mechanism_gate_failed")

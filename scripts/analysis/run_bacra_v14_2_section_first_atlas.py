@@ -277,6 +277,13 @@ def _working_tree_clean() -> bool:
     ).stdout.strip()
 
 
+def _manifest_declared_size(row: Mapping[str, Any]) -> int:
+    value = row.get("size_bytes", row.get("bytes"))
+    if value is None:
+        raise KeyError("manifest artifact row lacks size_bytes/bytes")
+    return int(value)
+
+
 def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["inventory"]
     if (stage / "gate.json").is_file():
@@ -306,7 +313,12 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         manifest_report["declared"] = int(manifest.get("artifact_count", -1))
         for row in rows:
             artifact = paths["retry4"] / str(row["path"])
-            if not artifact.is_file() or artifact.stat().st_size != int(row["bytes"]) or sha256_file(artifact) != str(row["sha256"]):
+            declared_size = _manifest_declared_size(row)
+            if (
+                not artifact.is_file()
+                or artifact.stat().st_size != int(declared_size)
+                or sha256_file(artifact) != str(row["sha256"])
+            ):
                 manifest_report["failures"].append(str(row["path"]))
             else:
                 manifest_report["verified"] += 1

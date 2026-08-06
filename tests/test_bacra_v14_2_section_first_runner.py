@@ -42,3 +42,10 @@ def test_v14_2_runner_has_fail_closed_conditional_stage_order() -> None:
         "summary",
     )
     assert set(module.STAGE_RUNNERS) == set(module.STAGE_ORDER)
+
+
+def test_v14_2_inventory_accepts_retry4_size_bytes_manifest_schema() -> None:
+    module = _module()
+
+    assert module._manifest_declared_size({"size_bytes": 123}) == 123
+    assert module._manifest_declared_size({"bytes": 456}) == 456

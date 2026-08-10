@@ -5,7 +5,8 @@ three questions separate:
 
 * did a fresh numerical continuation finish (``solver_gate``),
 * do the completed continuations agree geometrically (``geometry_gate``), and
-* is the exact retained primary atlas fully supported by both kinds of
+* are repeated source perturbations stable (``repeat_gate``), and
+* is the exact retained primary atlas fully supported by all three kinds of
   evidence (``certificate_gate``)?
 
 The input remains :class:`SectionGrowthResult`; no historical artifact type is
@@ -19,6 +20,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 import hashlib
 import inspect
+import json
 import math
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
@@ -118,9 +120,11 @@ class AtlasRepairPolicy:
 class RootedArtifactDiagnostic:
     geometry_gate: bool
     solver_gate: bool
+    repeat_gate: bool
     certificate_gate: bool
     geometry_metrics: Mapping[str, Any]
     solver_metrics: Mapping[str, Any]
+    repeat_metrics: Mapping[str, Any]
     chart_gate_by_id: Mapping[str, bool]
     chart_metrics_by_id: Mapping[str, Mapping[str, Any]]
     schedules: pd.DataFrame
@@ -130,6 +134,7 @@ class RootedArtifactDiagnostic:
     def __post_init__(self) -> None:
         object.__setattr__(self, "geometry_metrics", MappingProxyType(dict(self.geometry_metrics)))
         object.__setattr__(self, "solver_metrics", MappingProxyType(dict(self.solver_metrics)))
+        object.__setattr__(self, "repeat_metrics", MappingProxyType(dict(self.repeat_metrics)))
         object.__setattr__(self, "chart_gate_by_id", MappingProxyType(dict(self.chart_gate_by_id)))
         object.__setattr__(
             self,
@@ -154,6 +159,7 @@ class RepairedSectionAtlas:
     largest_coherent_region_ratio: float
     geometry_gate: bool
     solver_gate: bool
+    repeat_gate: bool
     certificate_gate: bool
     induced_edge_count: int
     audited_edge_count: int
@@ -350,34 +356,49 @@ def diagnose_rooted_section_artifacts(
 
     geometry = _geometry_metrics(primary, active)
     solver = _solver_metrics(primary, active)
+    repeat = _repeat_metrics(primary, active)
     chart_gate: dict[str, bool] = {}
     chart_metrics: dict[str, dict[str, Any]] = {}
     for chart_id, rows in merged.groupby("chart_id", sort=True):
         chart_geometry = _geometry_metrics(rows, active)
         chart_solver = _solver_metrics(rows, active)
-        gate = bool(chart_geometry["gate_pass"] and chart_solver["gate_pass"])
+        chart_repeat = _repeat_metrics(rows, active)
+        gate = bool(
+            chart_geometry["gate_pass"]
+            and chart_solver["gate_pass"]
+            and chart_repeat["gate_pass"]
+        )
         chart_gate[str(chart_id)] = gate
         chart_metrics[str(chart_id)] = {
             "geometry_gate": bool(chart_geometry["gate_pass"]),
             "solver_gate": bool(chart_solver["gate_pass"]),
+            "repeat_gate": bool(chart_repeat["gate_pass"]),
             "certificate_gate": gate,
             "geometry_p95_deg": chart_geometry["p95_deg"],
             "geometry_max_deg": chart_geometry["max_deg"],
             "missing_count": chart_solver["missing_count"],
             "persistent_numerical_count": chart_solver["persistent_numerical_count"],
+            "repeat_p95_deg": chart_repeat["p95_deg"],
+            "repeat_missing_count": chart_repeat["missing_count"],
         }
-    certificate = bool(geometry["gate_pass"] and solver["gate_pass"])
+    certificate = bool(
+        geometry["gate_pass"] and solver["gate_pass"] and repeat["gate_pass"]
+    )
     reasons: list[str] = []
     if not geometry["gate_pass"]:
         reasons.append("geometry_gate_failed")
     if not solver["gate_pass"]:
         reasons.append("solver_gate_failed")
+    if not repeat["gate_pass"]:
+        reasons.append("repeat_gate_failed")
     return RootedArtifactDiagnostic(
         geometry_gate=bool(geometry["gate_pass"]),
         solver_gate=bool(solver["gate_pass"]),
+        repeat_gate=bool(repeat["gate_pass"]),
         certificate_gate=certificate,
         geometry_metrics=geometry,
         solver_metrics=solver,
+        repeat_metrics=repeat,
         chart_gate_by_id=chart_gate,
         chart_metrics_by_id=chart_metrics,
         schedules=schedule_frame,
@@ -586,6 +607,7 @@ def repair_rooted_section_atlas(
         largest_coherent_region_ratio=float(largest_ratio),
         geometry_gate=final_diagnostic.geometry_gate,
         solver_gate=final_diagnostic.solver_gate,
+        repeat_gate=final_diagnostic.repeat_gate,
         certificate_gate=certificate,
         induced_edge_count=len(induced_edges),
         audited_edge_count=len(audited_edge_entities),
@@ -721,13 +743,18 @@ def execute_audit_schedules(
                         "repeat_gap_deg": math.nan,
                         "residual_mm": trace["residual_mm"],
                         "retry_tier": trace["retry_tier"],
+                        "registered_solver_chain": trace[
+                            "registered_solver_chain"
+                        ],
+                        "executed_solver_chain": trace["executed_solver_chain"],
+                        "solver_chain_sha256": trace["solver_chain_sha256"],
                         "classification": trace["classification"],
                         "failure_source_node": trace["failure_source_node"],
                         "failure_target_node": trace["failure_target_node"],
                         "oracle_used_for_pass": False,
                     }
                 )
-            if len(endpoints) >= 2:
+            if len(endpoints) >= 1:
                 reference = endpoints[0]
                 repeat_gaps = [beta_rms_deg(reference, endpoint) for endpoint in endpoints[1:]]
                 for row in rows[-policy.repeats_per_direction:]:
@@ -780,6 +807,7 @@ def _retry_trace(
     if not path or path[0] not in selected or path[-1] not in selected:
         return _failed_trace("local_feasibility_failure")
     last_failed_edge: tuple[int, int] | None = None
+    last_executed_chain: tuple[str, ...] = ()
     for tier in policy.retry_tiers:
         source = selected[path[0]]
         current = AtlasCandidate(
@@ -799,8 +827,14 @@ def _retry_trace(
         )
         last_residual = 0.0
         failed = False
+        executed_chain: list[str] = []
         for target_id in path[1:]:
             outcome = _invoke_adapter(adapter, current, nodes[target_id], tier)
+            outcome_chain = _outcome_solver_chain(outcome) or tier.solver_chain
+            for solver in outcome_chain:
+                if solver not in executed_chain:
+                    executed_chain.append(solver)
+            last_executed_chain = tuple(executed_chain)
             last_residual = float(outcome.residual_mm)
             if not (
                 outcome.success
@@ -822,12 +856,25 @@ def _retry_trace(
             "geometry_gap_deg": gap,
             "residual_mm": last_residual,
             "retry_tier": tier.tier_id,
+            "registered_solver_chain": ">".join(tier.solver_chain),
+            "executed_solver_chain": ">".join(executed_chain),
+            "solver_chain_sha256": hashlib.sha256(
+                json.dumps(list(tier.solver_chain), separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
             "classification": classification,
             "endpoint_beta": current.beta_rad,
             "failure_source_node": None,
             "failure_target_node": None,
         }
-    return _failed_trace("persistent_numerical", failure_edge=last_failed_edge)
+    last_tier = policy.retry_tiers[-1] if policy.retry_tiers else None
+    return _failed_trace(
+        "persistent_numerical",
+        failure_edge=last_failed_edge,
+        tier=last_tier,
+        executed_solver_chain=last_executed_chain,
+    )
 
 
 def _repeat_perturbation(
@@ -840,6 +887,23 @@ def _repeat_perturbation(
     ).digest()
     signs = np.asarray([1.0 if digest[index] & 1 else -1.0 for index in range(6)])
     return signs * float(magnitude_rad) * repeat_index
+
+
+def _outcome_solver_chain(outcome: ContinuationOutcome) -> tuple[str, ...]:
+    """Read V14.2R provenance without changing the sealed outcome schema."""
+
+    marker = "audit_solver_chain["
+    chains: list[str] = []
+    remaining = str(outcome.status)
+    while marker in remaining:
+        remaining = remaining.split(marker, 1)[1]
+        if "]" not in remaining:
+            break
+        encoded, remaining = remaining.split("]", 1)
+        for solver in encoded.split(">"):
+            if solver and solver not in chains:
+                chains.append(solver)
+    return tuple(chains)
 
 
 def _invoke_adapter(
@@ -884,13 +948,27 @@ def _endpoint_candidate(
 
 
 def _failed_trace(
-    classification: str, *, failure_edge: tuple[int, int] | None = None
+    classification: str,
+    *,
+    failure_edge: tuple[int, int] | None = None,
+    tier: RetryTier | None = None,
+    executed_solver_chain: tuple[str, ...] = (),
 ) -> dict[str, Any]:
+    chain = () if tier is None else tier.solver_chain
     return {
         "solver_success": False,
         "geometry_gap_deg": math.nan,
         "residual_mm": math.nan,
-        "retry_tier": None,
+        "retry_tier": None if tier is None else tier.tier_id,
+        "registered_solver_chain": ">".join(chain),
+        "executed_solver_chain": ">".join(executed_solver_chain),
+        "solver_chain_sha256": (
+            ""
+            if tier is None
+            else hashlib.sha256(
+                json.dumps(list(chain), separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        ),
         "classification": classification,
         "endpoint_beta": None,
         "failure_source_node": None if failure_edge is None else failure_edge[0],
@@ -933,6 +1011,39 @@ def _solver_metrics(rows: pd.DataFrame, policy: AuditV2Policy) -> dict[str, Any]
         "geometric_branch_disagreement_count": int((classifications == "geometric_branch_disagreement").sum()),
         "local_feasibility_failure_count": int((classifications == "local_feasibility_failure").sum()),
         "gate_pass": bool(len(rows) > 0 and missing == 0),
+    }
+
+
+def _repeat_metrics(rows: pd.DataFrame, policy: AuditV2Policy) -> dict[str, Any]:
+    """Evaluate repeat stability without reclassifying solver failures."""
+
+    if not len(rows):
+        return {
+            "sample_count": 0,
+            "missing_count": 0,
+            "p95_deg": math.nan,
+            "gate_pass": True,
+        }
+    solver_success = rows["solver_success"].fillna(False).astype(bool)
+    values = pd.to_numeric(
+        rows.get("repeat_gap_deg", pd.Series(index=rows.index, dtype=float)),
+        errors="coerce",
+    )
+    eligible = values.loc[solver_success]
+    finite = eligible[np.isfinite(eligible.to_numpy(dtype=float))].to_numpy(dtype=float)
+    missing = int(len(eligible) - len(finite))
+    p95 = float(np.percentile(finite, 95)) if len(finite) else math.nan
+    return {
+        "sample_count": int(len(finite)),
+        "missing_count": missing,
+        "p95_deg": p95,
+        "gate_pass": bool(
+            missing == 0
+            and (
+                not len(finite)
+                or p95 <= policy.repeat_p95_max_deg + 1e-12
+            )
+        ),
     }
 
 

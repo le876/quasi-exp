@@ -1,0 +1,101 @@
+extends: bacra_v12_7_5_nullspace_projection.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.8.2-enriched-constrained-dp-independent-geometry-loop-evaluation
+schema_version: 1
+claim_scope: simulation_independent_task_geometry_closed_loop_evaluation
+deployment_claim_gate_pass: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_8_2_enriched_constrained_dp_independent_geometry_loops
+
+geometry_holdout:
+  anchor_task_json: runs/generalized_ellipse_region_v11_relaxed2x/01_anchor/verify_tasks/A4_A2_178_r0_reverse_c0045.json
+  expected_anchor_sha256: d4f205410b3c827f0d42a2e7685d9c3e4b9c65d791fbfb576f2d67a4d53de6ae
+  phase_count: 720
+  groups:
+    - group_id: core_interpolation
+      count: 4
+      seed: 20260744
+      major_semiaxis_m: [0.490, 0.500]
+      axis_ratio: [0.325, 0.350]
+      center_q1_offset_mm: [-3.0, 3.0]
+      center_q2_offset_mm: [-3.0, 3.0]
+      center_normal_offset_mm: [-1.5, 1.5]
+      tilt_deg: [-1.0, 1.0]
+    - group_id: historical_range_stress
+      count: 4
+      seed: 20260745
+      major_semiaxis_m: [0.460, 0.500]
+      axis_ratio: [0.310, 0.360]
+      center_q1_offset_mm: [-10.0, 10.0]
+      center_q2_offset_mm: [-10.0, 10.0]
+      center_normal_offset_mm: [-5.0, 5.0]
+      tilt_deg: [-3.0, 3.0]
+
+source_lock:
+  v12_7_5_root: runs/branch_aware_canonical_region_atlas_v12_7_5_nullspace_projection
+  v12_7_root: runs/branch_aware_canonical_region_atlas_v12_7_canonical_student
+  v12_5_root: runs/branch_aware_canonical_region_atlas_v12_5_composable_lift_pilot_retry5
+  admission_gate: 03_exploratory_admission/gate.json
+  selected_projection: 01_pilot/selected_config.json
+  completion_marker: V12_7_5_EXPLORATORY_ADMISSION_PASSED.json
+  canonical_charts: 03_atlas/canonical_charts.parquet
+  expected_sha256:
+    admission_gate: 4bfa37227ec2098f3cd5ffc861123af0c4bf676a2302481e7646a19cc8ee0f34
+    selected_projection: 2a29baa2120bcce17ca8e0cc7a80d49faebf2b22d4e4aca9d32afcabe702a636
+    completion_marker: ae3277a05943648bf6394ac1aa7e72554cf7d58ca587b208b1a6d3c603c97bcb
+    canonical_charts: c6264f9d6b509c111c8a10dd9deb1266e12ad4793a50443397a4591d344da35e
+  mlp_model_template: 02_formal/seed_{seed}/model.keras
+  tree_model_template: 02_formal/seed_{seed}/canonical_tree.joblib
+  expected_alpha: 0.25
+
+teacher_reference:
+  max_tetrahedron_edge_mm: 12.99038105676658
+  target_support_max_mm: 7.5
+  # Local tetrahedra are preferred seeds, not the capability boundary.
+  # Unsupported roots connect from the nearest frozen chart anchor through
+  # deterministic straight task-space predictor-corrector waypoints.
+  continuation_step_mm: 2.0
+  candidate_nearest_count: 64
+  candidate_representative_count: 16
+  candidate_budget_per_phase: 32
+  candidate_cluster_deg: 0.5
+  residual_p95_mm: 1.0
+  residual_max_mm: 3.0
+  joint_margin_min_deg: 1.5
+  phase_beta_rms_p95_deg: 1.0
+  phase_beta_rms_max_deg: 2.0
+  acceleration_beta_rms_p95_deg: 0.5
+  seam_beta_rms_deg: 1.0
+  direction_gap_p95_deg: 0.5
+  direction_gap_max_deg: 1.0
+
+student_trajectory_gate:
+  phase_beta_rms_p95_deg: 1.0
+  phase_beta_rms_max_deg: 2.0
+  acceleration_beta_rms_p95_deg: 0.5
+  seam_beta_rms_deg: 1.0
+
+parallel:
+  teacher_workers: 8
+  student_cpu_workers: 5
+  student_intraop_threads: 2
+  student_interop_threads: 1
+
+device:
+  execution: cpu_fallback
+  force_cuda_disabled: true
+  reason: gpu_probe_on_2026_07_27_returned_no_visible_device
+
+completion_marker: V12_8_2_INDEPENDENT_GEOMETRY_LOOP_EVALUATION_COMPLETED.json
+pass_marker: V12_8_2_CORE_GEOMETRY_LOOP_GATE_PASSED.json
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_8_2_enriched_constrained_dp_independent_geometry_loops_smoke
+  geometry_holdout:
+    phase_count: 180
+  # Preserve the same per-unit-arc continuity meaning at one quarter of the
+  # formal phase density. Formal thresholds above remain unchanged.
+  teacher_reference:
+    phase_beta_rms_p95_deg: 4.0
+    phase_beta_rms_max_deg: 8.0
+    acceleration_beta_rms_p95_deg: 2.0
+    seam_beta_rms_deg: 4.0

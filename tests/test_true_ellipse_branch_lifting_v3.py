@@ -196,6 +196,45 @@ def test_cyclic_residual_sparsity_wraps_first_and_last_waypoints() -> None:
     assert set(range(24, 30)).issubset(touched)
 
 
+def test_cyclic_residual_and_sparsity_include_registered_joint_margin_barrier() -> None:
+    mod = _load_utils()
+    targets, beta = _smooth_targets(mod, n=5)
+    bounds = np.deg2rad(
+        np.asarray([[-5, 5], [-5, 5], [-10, 10], [-10, 10], [-15, 15], [-15, 15]], dtype=float)
+    )
+    beta[:, 0] = np.deg2rad(4.99)
+    base = mod.cyclic_trajectory_residual(
+        beta.reshape(-1),
+        targets_xyz=targets[mod.TARGET_XYZ_COLS].to_numpy(dtype=float),
+        lengths_m=_robot_inputs()[0],
+        p_end_local_m=_robot_inputs()[1],
+        theta_sign=-1.0,
+        bounds=bounds,
+        lambda_margin=0.0,
+    )
+    with_margin = mod.cyclic_trajectory_residual(
+        beta.reshape(-1),
+        targets_xyz=targets[mod.TARGET_XYZ_COLS].to_numpy(dtype=float),
+        lengths_m=_robot_inputs()[0],
+        p_end_local_m=_robot_inputs()[1],
+        theta_sign=-1.0,
+        bounds=bounds,
+        lambda_margin=1.0,
+        soft_margin_deg=0.25,
+    )
+    sparsity = mod.cyclic_trajectory_jac_sparsity(
+        n_points=5,
+        include_acceleration=False,
+        include_anchor=False,
+        include_posture=False,
+        include_margin=True,
+    )
+
+    assert len(with_margin) == len(base) + 5 * 6
+    assert sparsity.shape == (len(with_margin), 5 * 6)
+    assert np.linalg.norm(with_margin[-30:]) > 0.0
+
+
 def test_trajectory_optimization_reduces_periodic_roughness_without_losing_tracking() -> None:
     mod = _load_utils()
     targets, true_beta = _smooth_targets(mod, n=12)

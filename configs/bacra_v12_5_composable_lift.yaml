@@ -1,0 +1,106 @@
+extends: bacra_v12_4_constructive_section.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.5-composable-lift
+schema_version: 1
+claim_scope: simulation_canonical_atlas_and_student_diagnostics
+deployment_claim_gate_pass: false
+uncertainty_budget_calibrated: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_5_composable_lift
+
+v12_4_source:
+  root: runs/branch_aware_canonical_region_atlas_v12_4_constructive_section_formal_retry1
+  frozen_config: 00_protocol/frozen_config.json
+  protocol_gate: 00_protocol/gate.json
+  capability_gate: 01_capability/gate.json
+  capability_map: 01_capability/capability_map.parquet
+  task_nodes: 01_capability/task_nodes.parquet
+  task_edges: 01_capability/task_edges.parquet
+  task_edge_waypoints: 01_capability/task_edge_waypoints.parquet
+  candidate_gate: 02_candidates/gate.json
+  candidate_bank: 02_candidates/candidate_bank.parquet
+  candidate_node_summary: 02_candidates/candidate_node_summary.parquet
+  atlas_gate: 03_atlas/gate.json
+  atlas_pickle: 03_atlas/atlas.pkl
+  canonical_charts: 03_atlas/canonical_charts.parquet
+  directed_edges: 03_atlas/directed_edges.parquet
+  robust_edges: 03_atlas/robust_edges.parquet
+  chart_coverage: 03_atlas/chart_coverage.csv
+  global_section_certificate: 03_atlas/global_section_certificate.parquet
+  global_section_report: 03_atlas/global_section_report.json
+  global_section_verification: 03_atlas/global_section_verification.json
+  expected_sha256:
+    frozen_config: 7ff9761ee4ca3a9c7a3c8fb6798fffee27112b45e2c50250c40c432147fdfbba
+    protocol_gate: 6f847788da923597f53a5324ce210e57f494e0d491aeea30576c1967565af7c0
+    capability_gate: 5c8eef3d5c27b0b231e4b2fc73e33f71b1f28d34bdb12dfea919775efc02dfee
+    capability_map: 938a3f0ce2df3acaae256c3252b1c4c3731d29ac0758f36d2eb9bc0878c5de12
+    task_nodes: 23e52f209bf599356e4c08acb76357eb44e9983bb96f521e1ab378a6dfb9963c
+    task_edges: cb0807a64fea0aa6ea5a8c8a68d4c0b3d81470cbeef41c0b7f2f04eb7d016d00
+    task_edge_waypoints: acbbdbd082964ce54bc6c68d070a799ad68b6b7bde59a2c07ddd9626bb1de40b
+    candidate_gate: 41e01d0e8165cb45ed017056b7bf93999707f143ef274cf8d7ff4d011ecb6575
+    candidate_bank: bd82470e03fa5e774f341880a2bcc7ae777cde724905df7bb2323dd477c9ebfb
+    candidate_node_summary: 49f920a93fc402c81ea41ffd58c0a726b4b45aa3626405759856030f8c54f916
+    atlas_gate: 74752f08f0032d95fe066ad592d122a166c153b03961e5c740ac037bfe540a84
+    atlas_pickle: 22a6fc5be9808a90037ae1bec1ca333fec00795bf6822741bd69474fb45f0329
+    canonical_charts: c6264f9d6b509c111c8a10dd9deb1266e12ad4793a50443397a4591d344da35e
+    directed_edges: b8d543ce52d744ecd9af7e984a85721ec2232deb98a218c9f95982c9c884d361
+    robust_edges: 39761c0fc25c11092e0b2796b0df17cc9ee89846bfe03cd2c04f85c385e696ac
+    chart_coverage: 84168ef2aac2fdfb31545203c28824e6edae1c3300ed49f41a633cce60a3cc6a
+    global_section_certificate: 7020fd3e693e7ef99ab7b622879ad1955fdfe3d84eee34016b52ec4ae3fffb30
+    global_section_report: b8cdec993b534c744682b1faf0c5f12f073600bf4daeaa4af5c85850dfeda492
+    global_section_verification: af01c560e01abcf07072480fc936b0793091fa5bc9c856ae696e053a89308641
+
+composable_lift:
+  strategy_id: strict_gold_edge_plus_linear_fiber_retraction_v1
+  beta_step_deg: 0.05
+  endpoint_match_max_deg: 0.5
+  residual_max_mm: 3.0
+  gold_margin_deg: 1.5
+  require_all_selected_saved_edges: true
+  factorize_fresh_audit_edges: true
+  independent_repeat_replicates: 2
+
+dense:
+  # V12.5's dataset domain is the admitted canonical chart, not task nodes
+  # explicitly excluded by the composability restriction.
+  include_canonical_anchors: true
+  coverage_reference: admitted_canonical_chart
+  max_tetrahedron_edge_mm: 12.99038105676658
+  target_support_max_mm: 7.5
+  canonical_barycentric_retraction: true
+  # Rejection rate is computational evidence.  Label validity, complete row
+  # materialization, fill distance, consistency and conflicts remain hard.
+  acceptance_ratio_is_gate: false
+
+student:
+  use_full_d3_dataset: true
+
+parallel:
+  audit_workers: 12
+  dense_workers: 12
+  default_workers: 12
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_5_composable_lift_smoke
+  candidates:
+    # V12.4 source edges were admitted with the pilot Teacher setting.  The
+    # composability smoke may shrink path inventory, but must not change the
+    # corrector used to reproduce those frozen edges.
+    max_corrector_iterations: 100
+  audit:
+    endpoint_count: 20
+    formal_endpoint_count: 20
+    paths_per_endpoint: 2
+    formal_paths_per_endpoint: 2
+    loop_count: 20
+    formal_loop_count: 20
+  dense:
+    row_count: 2000
+    nested_rows: [2000]
+    attempt_multiplier: 2
+    acceptance_ratio_min: 0.0
+    nn_p95_mm: 1000.0
+    nn_max_mm: 1000.0
+  parallel:
+    audit_workers: 12
+    dense_workers: 12
+    default_workers: 12

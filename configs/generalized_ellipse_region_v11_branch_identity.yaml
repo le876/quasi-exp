@@ -1,0 +1,107 @@
+protocol_id: generalized-ellipse-region-v11.3-branch-identity
+source_protocol_id: generalized-ellipse-region-v11.2-relaxed2x
+source_artifact_root: runs/generalized_ellipse_region_v11_relaxed2x/01_anchor
+output_root: runs/generalized_ellipse_region_v11_branch_identity
+robot_config: configs/robot_rods_only_standard_100k.yaml
+v10_evidence_root: runs/trajectory_canonical_teacher_v10/07_large_scale_challenge
+
+candidates:
+  pilot:
+    - A4_A2_178_r0_reverse_c0045
+    - A4_A2_143_r1_reverse_c0045
+  negative_control:
+    - A4_A2_134_r0_reverse_c0045
+  formal_top_count: 2
+
+phase_counts:
+  forensics: 720
+  pilot: 180
+  formal: 720
+
+variants:
+  directions: [forward, reverse]
+  pilot_cuts: [0, 45, 90, 135]
+  formal_cuts: [0, 45, 90, 135]
+
+canonical_root:
+  seed_count: 64
+  cluster_threshold_deg: 0.5
+  safe_margin_deg: 1.5
+
+repair:
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  candidate_budget: 4
+  local_seed_std_deg: 0.1
+  trust_radius_pilot_deg: [0.25, 0.5, 1.0]
+  selected_trust_radius_deg: 0.5
+  lambda_reference: 2.0
+  lambda_previous: 1.0
+  graph_lambda_velocity: 1.0
+  graph_lambda_acceleration: 0.5
+  graph_lambda_reference: 2.0
+  graph_closure_weight: 5.0
+  graph_candidates_min_per_phase: 8
+  graph_candidates_per_phase: 16
+  graph_candidate_seed_attempts: 24
+  graph_seed_step_deg: 2.0
+  consensus_reference_weight: 2.0
+  consensus_reference_scale_deg: 1.0
+
+teacher_policy:
+  variant: T3
+  candidate_budget: 4
+  damping: 0.001
+  nullspace_weight: 0.001
+  safe_joint_margin_deg: 1.5
+  safe_margin_repulsion_step_deg: 0.05
+  surface_neighbor_weight: 0.0
+  surface_neighbor_scale_deg: 1.0
+  max_corrector_iterations: 100
+  tracking_tolerance_mm: 1.0
+  lambda_velocity: 5.0
+  lambda_acceleration: 0.5
+  lambda_posture: 0.1
+  lambda_conditioning: 0.05
+  closure_weight: 5.0
+  solver_seed: 20260725
+
+gates:
+  residual_p95_mm: 1.0
+  residual_max_mm: 3.0
+  joint_margin_min_deg: 1.5
+  delta_beta_rms_p95_deg: 1.0
+  delta_beta_rms_max_deg: 2.0
+  acceleration_beta_rms_p95_deg: 0.5
+  seam_beta_rms_deg: 1.0
+  repeat_beta_rms_p95_deg: 0.2
+  variant_beta_rms_p95_deg: 1.0
+  variant_beta_rms_max_deg: 2.0
+  variant_ratio_gt_1deg: 0.01
+
+protocol_constraints:
+  tube_authorized: false
+  downstream_outputs_are_formal: false
+  preserve_source_phase1_failure: true
+  prohibit_branch_averaging: true
+  prohibit_phase_deletion: true
+
+smoke:
+  output_root: runs/generalized_ellipse_region_v11_branch_identity_smoke
+  phase_counts:
+    forensics: 12
+    pilot: 12
+    formal: 12
+  canonical_root:
+    seed_count: 8
+  repair:
+    candidate_budget: 2
+    trust_radius_pilot_deg: [0.5]
+    graph_candidates_min_per_phase: 4
+    graph_candidates_per_phase: 4
+    graph_candidate_seed_attempts: 8
+  variants:
+    pilot_cuts: [0, 3]
+    formal_cuts: [0, 3]
+  teacher_policy:
+    candidate_budget: 2
+    max_corrector_iterations: 20

@@ -1,0 +1,84 @@
+extends: bacra_v12_1_capability_bridge.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.2-topology-preserving-task-graph
+schema_version: 1
+claim_scope: simulation_canonical_atlas_and_student_diagnostics
+deployment_claim_gate_pass: false
+uncertainty_budget_calibrated: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_2_topology_preserving
+
+v12_1_source:
+  root: runs/branch_aware_canonical_region_atlas_v12_1_capability_bridge_attempt7_direct_w12
+  frozen_config: 00_protocol/frozen_config.json
+  protocol_gate: 00_protocol/gate.json
+  capability_gate: 01_capability/gate.json
+  capability_map: 01_capability/capability_map.parquet
+  bridge_report: 01_capability_bridge/bridge_report.json
+  combined_capability_light: 01_capability_bridge/02_local_enrichment/combined_4m_local_light.parquet
+  expected_sha256:
+    frozen_config: 3a2d23ee4758d1281618b2663a92507a887da1e2d2f0c9f0883c2965100a8d0b
+    protocol_gate: 16ee81aa7c7b6dcff2a561b01dffa58c42e3b667ef11ee9a39456099d6bc3c30
+    capability_gate: 7c71488892b055029e90be4380dcf8ac4081e2f89bf10c99d49936355703c020
+    capability_map: 938a3f0ce2df3acaae256c3252b1c4c3731d29ac0758f36d2eb9bc0878c5de12
+    bridge_report: 9845b9297095797ecbaa212f435dccd6e77314958bd8b010cbbf86b90e28458f
+    combined_capability_light: a715f46cc114a3dda9290b97211a0b0c25bcf6e2a19e5e35de6864c131a22eaa
+
+topology_task_region:
+  voxel_mm: 7.5
+  roi_mm: 10.0
+  adjacency: 6
+  origin_fraction: 0.0
+  gold_margin_deg: 1.5
+  waypoint_step_mm: 1.0
+  difficult_quantile: 0.85
+  expected_phase_count: 720
+  expected_main_voxel_count: 2161
+  expected_task_node_count: 2881
+  expected_task_edge_count: 5546
+
+candidates:
+  gold_node_ratio_min: 1.0
+  ordinary_gold_candidate_median_min: 1
+
+student:
+  probe_seed_count: 5
+  required_seed_passes: 4
+
+parallel:
+  capability_extraction_workers: 5
+  default_workers: 12
+  product_workers: 12
+  audit_workers: 12
+  dense_workers: 12
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_2_topology_preserving_smoke
+  topology_task_region:
+    expected_main_voxel_count: null
+    expected_task_node_count: null
+    expected_task_edge_count: null
+  candidates:
+    ordinary_seed_budget: 4
+    difficult_seed_budget: 4
+    formal_difficult_seed_budget: 4
+    gold_node_ratio_min: 0.0
+    ordinary_gold_candidate_median_min: 0
+  atlas:
+    root_count: 2
+    formal_root_count: 2
+    minimum_chart_coverage: 0.0
+  audit:
+    endpoint_count: 10
+    formal_endpoint_count: 10
+    paths_per_endpoint: 1
+    formal_paths_per_endpoint: 1
+    loop_count: 10
+    formal_loop_count: 10
+  dense:
+    row_count: 1000
+    nested_rows: [500, 1000]
+  student:
+    max_epochs: 2
+    patience: 1
+    probe_seed_count: 1
+    required_seed_passes: 1

@@ -1,0 +1,82 @@
+extends: bacra_v12_9_gap_directed_bridge.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.12-independent-gold-set-student-geometry-holdout
+schema_version: 1
+claim_scope: simulation_decision_independent_task_geometry_closed_loop_validation
+deployment_claim_gate_pass: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout
+
+independent_holdout:
+  source_v12_11_root: runs/branch_aware_canonical_region_atlas_v12_11_gold_set_aware_student
+  historical_v12_9_root: runs/branch_aware_canonical_region_atlas_v12_9_gap_directed_capability_bridge_retry2
+  expected_source_sha256:
+    v12_11_training_gate: 1af08e1d5ee6008d21987cdf75a958d9eb9071ca0dcaa92a00621595fe707c22
+    v12_11_summary_gate: ee3feaa52bddcc0d94a1eb5e9d8eea9b88d08fab5e282a393eb5e8ea6288a76f
+    v12_11_completion_marker: a8a8b7504fa17d3d639b2b9eb2bfff8f2b401dda84712fa0585badde031e234f
+    v12_11_metrics: b29f81ab4b5f4856a84c3adfd36f7b1bba9850ad5ac60bb8fa9fb9855f2544f3
+    historical_geometry_catalog: e41ef6860c37406930f1dd4ef1fde3dab87657e7f3e2ccb92a22c3b68b17a107
+    historical_v12_9_summary_gate: 0cb161e0f003a3e15a144805a5a9d9a43a46f628977aefd8d0bb0fde3d056579
+  expected_model_sha256:
+    20260737: 10c4d4cd4811a57c11525e0733ac3befe6a6e064834dc4e0ce1c2faa8373416b
+    20260738: c70bd18df770aa8bc5c1a9c5a8068d16c77a3ad6f5600779c2c1ca9e7720e419
+    20260739: 7248d4a04b0dbfa04c422be93be64ebcee6e2af6ac789b3c81ca315d48e6ea3e
+    20260740: 2534158997c66b25c06cf8a4a5dab03fc7c7444be3cd6953f7089e64712b1c32
+  expected_primary_seed: 20260740
+  accepted_model_count: 4
+  required_core_seed_passes: 3
+  hard_transition_deg: 2.0
+  completion_marker: V12_12_INDEPENDENT_GOLD_SET_GEOMETRY_HOLDOUT_COMPLETED.json
+  pass_marker: V12_12_INDEPENDENT_GEOMETRY_GATE_PASSED.json
+
+# These families were generated only after V12.11 model hashes and the
+# selection rule above were frozen. They do not reuse V12.8/V12.9 family
+# fingerprints and do not read any historical virgin/sealed split.
+geometry_holdout:
+  phase_count: 720
+  groups:
+    - group_id: independent_core
+      count: 4
+      seed: 20260758
+      major_semiaxis_m: [0.490, 0.500]
+      axis_ratio: [0.325, 0.350]
+      center_q1_offset_mm: [-3.0, 3.0]
+      center_q2_offset_mm: [-3.0, 3.0]
+      center_normal_offset_mm: [-1.5, 1.5]
+      tilt_deg: [-1.0, 1.0]
+    - group_id: independent_stress
+      count: 4
+      seed: 20260759
+      major_semiaxis_m: [0.460, 0.500]
+      axis_ratio: [0.310, 0.360]
+      center_q1_offset_mm: [-10.0, 10.0]
+      center_q2_offset_mm: [-10.0, 10.0]
+      center_normal_offset_mm: [-5.0, 5.0]
+      tilt_deg: [-3.0, 3.0]
+
+parallel:
+  teacher_workers: 8
+  evaluation_cpu_workers: 4
+  student_intraop_threads: 2
+  student_interop_threads: 1
+
+device:
+  prediction_device: gpu_if_available
+  gpu_prediction_workers: 1
+  evaluation_device: cpu
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_smoke
+  independent_holdout:
+    # The smoke loop has one quarter of the formal phase density, so this
+    # preserves the same per-unit-arc transition meaning. Formal remains 2°.
+    hard_transition_deg: 8.0
+  geometry_holdout:
+    phase_count: 180
+  teacher_reference:
+    phase_beta_rms_p95_deg: 4.0
+    phase_beta_rms_max_deg: 8.0
+    acceleration_beta_rms_p95_deg: 2.0
+    seam_beta_rms_deg: 4.0
+    gap_enrichment_rounds: 4
+    gap_enrichment_round_candidate_budget: 64
+    gap_enrichment_max_candidates_per_phase: 64

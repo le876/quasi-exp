@@ -1,0 +1,249 @@
+protocol_id: bacra-v14-omega200-fixed-budget-workspace-atlas
+schema_version: 1
+claim_scope: simulation_empirical_omega200_workspace_atlas
+deployment_claim_gate_pass: false
+robot_config: configs/robot_rods_only_standard_100k.yaml
+output_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+formal_requirements:
+  pilot_summary: runs/bacra_v14_omega200_workspace_atlas_pilot/11_summary/pilot_gate.json
+  require_reach_convergence: true
+  require_branch_saturation: true
+  require_representation_gate: true
+
+sources:
+  capability_pool: runs/branch_aware_canonical_region_atlas_v12_pilot/01_capability/capability_map.parquet
+  capability_beta: runs/branch_aware_canonical_region_atlas_v12_pilot/01_capability/sobol_beta.npy
+  v13_retention: runs/bacra_v13_ellipsoidal_shell_atlas_formal_dense_replay1_20260801/04_dense_dataset/A3_shell_dataset.parquet
+  historical_final8_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
+  historical_final8_catalog: runs/bacra_v12_13_exploratory_expansion/06_final/new_family_catalog.parquet
+  v13_ellipse_points: runs/bacra_v13_formal_ellipse_generalization_retry1_20260801/02_results/point_metrics.parquet
+  v13_path_targets: runs/bacra_v13_formal_3d_path_generalization_20260802/00_protocol/target_paths.parquet
+  reviewed_plan: docs/16-pro提问-200mm工作空间覆盖与20万点泛化数据集设计.md
+  expected_sha256:
+    robot_config: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+    capability_pool: ce71915dd337837b08d6e6959ba81eb7b8122470d0d439cee8677c43b91d5d74
+    capability_beta: b0c0dfa07e41ea7213bbbab6beddf1498a7773957abef19f55d4766f64331a42
+    v13_retention: 528c8a6dd902c6d665a1d28378c30eb19c6969f314a44399c18872e1a1a6f1a8
+    historical_final8_teacher: 383c1f3e09844188bbeac1e2b875e1678751cdb0654f9a1b5ee141fa6e925b29
+    historical_final8_catalog: 0c40e67f61fe0fa7bc59f8976ac393e520e5fb5fe804df59c9badd75a8becb7a
+    v13_ellipse_points: 6a6f7c1caf49b619603247dfdf49b436f60c9d7d80c6fdd6c11eb990ee93c03f
+    v13_path_targets: da304e35de77e7439173d64ac723b1f3751362f3eeac269a52948944ec4e0aab
+    reviewed_plan: ae9c46e2ad842b979879d4d028e757b98cbaaa67b8deca549c094acde7e4e1bb
+
+domain:
+  x_min_m: 1.015498
+  x_max_m: 1.215498
+  origin_m: [0.0, 0.0, 0.0]
+  levels_mm: [20, 10, 5]
+
+reach:
+  # Each cumulative replica owns disjoint scramble seeds.  A and B are never
+  # made by splitting one low-discrepancy sequence.
+  rounds:
+    - {power: 17, seed_a: 20260841, seed_b: 20260842}
+    - {power: 18, seed_a: 20260843, seed_b: 20260844}
+    - {power: 18, seed_a: 20260845, seed_b: 20260846}
+  chunk_rows: 65536
+  tip_power: 16
+  tip_seed: 20260840
+  tip_scale_max: 0.25
+  minimum_weighted_jaccard: 0.95
+  maximum_new_volume_ratio: 0.01
+  maximum_boundary_change_ratio: 0.02
+  maximum_frontier_new_volume_ratio: 0.01
+  required_consecutive_rounds: 2
+  frontier_rounds: 2
+  frontier_cells_per_round: 128
+  frontier_starts: 8
+
+registry:
+  capability_row_limit: null
+  minimum_samples_per_cell: 2
+  probe_count: 4
+  seed_count: 4
+  tip_x_width_mm: 20.0
+  low_density_quantile: 0.20
+  ill_conditioned_kappa: 100.0
+  pilot_cell_count: 5000
+  pilot_seed: 20260850
+  x_bin_width_mm: 10.0
+  retention_radius_mm: 20.0
+
+candidates:
+  normal_starts: 4
+  difficult_starts: 8
+  saturation_starts: 32
+  saturation_fraction: 0.10
+  saturation_seed: 20260851
+  nullspace_starts: 2
+  solvers: [weighted_dls, bounded_least_squares, slsqp]
+  max_corrector_iterations: 100
+  tracking_tolerance_mm: 1.0
+  max_residual_mm: 3.0
+  gold_margin_deg: 1.5
+  # V14 separates a low-margin risk from physical invalidity.  A positive
+  # in-bounds margin remains Silver; the atlas records <0.25 deg separately.
+  silver_margin_deg: 0.0
+  cluster_deg: 0.5
+  new_branch_gap_deg: 1.0
+
+atlas:
+  root_count: 32
+  top_section_count: 16
+  edge_match_deg: 0.5
+  split_gap_deg: 1.0
+  merge_overlap_p95_deg: 0.5
+  merge_overlap_max_deg: 1.0
+  cycle_p95_deg: 0.5
+  cycle_max_deg: 1.0
+  audit_endpoint_count: 32
+  audit_paths_per_endpoint: 3
+  audit_loop_count: 2048
+  minimum_primary_measure_coverage: 0.80
+  minimum_x_bin_coverage: 0.60
+  maximum_abstention_measure_ratio: 0.20
+  branch_overall_wilson_upper: 0.02
+  branch_stratum_wilson_upper: 0.05
+  low_margin_deg: 0.25
+  normalized_sigma3_min_m: 0.05
+  normalized_kappa_max: 100.0
+
+budget:
+  total_rows: 200000
+  hard_max_rows: 300000
+  base_rows_max: 120000
+  refine_rows_max: 30000
+  router_boundary_rows_max: 20000
+  retention_rows_max: 15000
+  active_rows: 15000
+  pilot_rows: 50000
+
+split:
+  macroblock_mm: 40
+  seed: 20260860
+  train_core_fraction: 0.625
+  active_probe_fraction: 0.075
+  validation_fraction: 0.15
+  sealed_fraction: 0.15
+
+student:
+  hidden_units: [128, 128, 64]
+  router_hidden_units: [128, 64]
+  seeds: [20260871, 20260872, 20260873]
+  lambda_beta: 1.0
+  lambda_fk: 1.0
+  lambda_row: 1.0
+  learning_rate: 0.001
+  batch_size: 1024
+  max_epochs: 200
+  patience: 20
+  active_probe_max_steps: 50
+  validation_fk_p95_max_mm: 5.0
+  validation_fk_max_mm: 10.0
+  sealed_fk_p95_max_mm: 5.0
+  sealed_fk_max_mm: 10.0
+
+evaluation:
+  trajectory_phase_count: 120
+  capability_projection_max_mm: 5.0
+  path_fk_p95_max_mm: 5.0
+  path_fk_max_mm: 10.0
+  path_minimum_accepted_fraction: 0.95
+  minimum_feasible_path_pass_fraction: 0.80
+  v13_ellipse_regression_count: 8
+  v13_path_regression_count: 16
+
+parallel:
+  candidate_workers: 4
+  continuation_workers: 4
+  worker_timeout_s: 14400
+
+presets:
+  smoke:
+    output_root: runs/bacra_v14_omega200_workspace_atlas_smoke
+    reach:
+      rounds:
+        - {power: 14, seed_a: 20260841, seed_b: 20260842}
+        - {power: 15, seed_a: 20260843, seed_b: 20260844}
+      tip_power: 12
+      frontier_rounds: 1
+      frontier_cells_per_round: 8
+      frontier_starts: 4
+      required_consecutive_rounds: 1
+      minimum_weighted_jaccard: 0.50
+      maximum_new_volume_ratio: 1.0
+      maximum_boundary_change_ratio: 1.0
+      maximum_frontier_new_volume_ratio: 1.0
+    registry:
+      capability_row_limit: 65536
+      pilot_cell_count: 48
+      probe_count: 2
+      seed_count: 3
+    candidates:
+      normal_starts: 2
+      difficult_starts: 3
+      saturation_starts: 4
+      saturation_fraction: 0.25
+      nullspace_starts: 0
+      solvers: [weighted_dls, bounded_least_squares]
+      max_corrector_iterations: 40
+    atlas:
+      root_count: 4
+      top_section_count: 4
+      audit_endpoint_count: 2
+      audit_paths_per_endpoint: 2
+      audit_loop_count: 8
+      minimum_primary_measure_coverage: 0.10
+      minimum_x_bin_coverage: 0.0
+      maximum_abstention_measure_ratio: 0.90
+      branch_overall_wilson_upper: 1.0
+      branch_stratum_wilson_upper: 1.0
+    budget:
+      total_rows: 5000
+      hard_max_rows: 6000
+      base_rows_max: 3000
+      refine_rows_max: 750
+      router_boundary_rows_max: 500
+      retention_rows_max: 375
+      active_rows: 375
+      pilot_rows: 5000
+    split:
+      # Wiring-only seed: the deterministic 48-cell Smoke exercises train,
+      # validation and sealed macroblock code paths.  It is not used by Pilot.
+      seed: 20260819
+    student:
+      hidden_units: [32, 32]
+      router_hidden_units: [32]
+      seeds: [20260871]
+      batch_size: 128
+      max_epochs: 5
+      patience: 2
+      active_probe_max_steps: 2
+    evaluation:
+      trajectory_phase_count: 32
+      v13_ellipse_regression_count: 2
+      v13_path_regression_count: 2
+    parallel:
+      candidate_workers: 2
+      continuation_workers: 2
+      worker_timeout_s: 900
+
+  pilot:
+    output_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+  formal:
+    output_root: runs/bacra_v14_omega200_workspace_atlas_formal
+    reach:
+      rounds:
+        - {power: 18, seed_a: 20260841, seed_b: 20260842}
+        - {power: 19, seed_a: 20260843, seed_b: 20260844}
+        - {power: 20, seed_a: 20260845, seed_b: 20260846}
+        - {power: 20, seed_a: 20260847, seed_b: 20260848}
+      tip_power: 16
+    registry:
+      pilot_cell_count: 0
+    candidates:
+      difficult_starts: 12
+    budget:
+      pilot_rows: 200000

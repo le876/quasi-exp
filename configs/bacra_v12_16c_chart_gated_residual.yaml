@@ -1,0 +1,16 @@
+extends: bacra_v12_16b_chart_conditioned_student.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.16c-known-chart-gated-residual
+claim_scope: simulation_known_chart_multichart_spatial_generalization
+deployment_claim_gate_pass: false
+output_root: runs/bacra_v12_16c_known_chart_gated_residual
+
+v12_16b:
+  training:
+    model_architecture: chart_gated_residual
+    chart_sampling_weights:
+      chart_A: 0.10
+      chart_B: 0.90
+
+smoke:
+  output_root: runs/bacra_v12_16c_known_chart_gated_residual_smoke

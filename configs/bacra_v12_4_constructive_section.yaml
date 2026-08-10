@@ -1,0 +1,77 @@
+extends: bacra_v12_3_branch_lift_closure.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.4-constructive-section
+schema_version: 1
+claim_scope: simulation_canonical_atlas_and_student_diagnostics
+deployment_claim_gate_pass: false
+uncertainty_budget_calibrated: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_4_constructive_section
+
+v12_3_source:
+  root: runs/branch_aware_canonical_region_atlas_v12_3_branch_lift_closure
+  frozen_config: 00_protocol/frozen_config.json
+  protocol_gate: 00_protocol/gate.json
+  capability_gate: 01_capability/gate.json
+  capability_map: ../branch_aware_canonical_region_atlas_v12_2_topology_preserving/01_capability/capability_map.parquet
+  task_nodes: 01_capability/task_nodes.parquet
+  task_edges: 01_capability/task_edges.parquet
+  task_edge_waypoints: 01_capability/task_edge_waypoints.parquet
+  candidate_gate: 02_candidates/gate.json
+  candidate_bank: 02_candidates/candidate_bank.parquet
+  atlas_pickle: 03_atlas/atlas.pkl
+  closure_candidate_bank: 03_atlas/closure_candidate_bank.parquet
+  closure_report: 03_atlas/closure_report.json
+  global_section_report: 03_atlas/global_section_report.json
+  atlas_gate: 03_atlas/gate.json
+  directed_edges: 03_atlas/directed_edges.parquet
+  robust_edges: 03_atlas/robust_edges.parquet
+  parallel_manifest: 03_atlas/parallel_manifest.json
+  expected_sha256:
+    frozen_config: 73010bfffc42adfc60c261cc2fc28e75e4de982fada6a0b0431c90b226390032
+    protocol_gate: ecf5bccdc5849cced33ebcf744ada98c3cde081408638b3284df00b565c154fd
+    capability_gate: 8781f5f224d78a032e8c316f0cb5763154571018929f1697d71ccc8803e789e4
+    capability_map: 938a3f0ce2df3acaae256c3252b1c4c3731d29ac0758f36d2eb9bc0878c5de12
+    task_nodes: 23e52f209bf599356e4c08acb76357eb44e9983bb96f521e1ab378a6dfb9963c
+    task_edges: cb0807a64fea0aa6ea5a8c8a68d4c0b3d81470cbeef41c0b7f2f04eb7d016d00
+    task_edge_waypoints: acbbdbd082964ce54bc6c68d070a799ad68b6b7bde59a2c07ddd9626bb1de40b
+    candidate_gate: c8c251dbb0444d6311edcb631cf190978ad1c647d228f35e6eced647825d2864
+    candidate_bank: bd82470e03fa5e774f341880a2bcc7ae777cde724905df7bb2323dd477c9ebfb
+    atlas_pickle: 093d6a8f54aaaf236d2bc202f2129eed5fe5092f2280cb69bf7a29e9a2ae9c3c
+    closure_candidate_bank: a21995b3e5ce4bbbf446d889c6a97cb806d54dd8b7401b276a5be626a6268624
+    closure_report: a7179c594599a765212d7e53cb521598c7e3c28430bcc928171c9952b52763cf
+    global_section_report: 478f7667881119a0318ec38f8b3638935abdca0ae17bf7e66ae45cbb3614db60
+    atlas_gate: cd4dc694e1030d007ec279dd9f7caf4d348392fc0b1cd725a85e5a65c7fbcbed
+    directed_edges: d720839841c398739e514ba7ad2024a01c25eb23c38ac94c9a3b7bc80002a30d
+    robust_edges: 90a4c571b7a872ad9aa3142c78ab80d268b68a5edd228b41ba3564877a901f74
+    parallel_manifest: 3d44249ef537e0362f9b686c01d72eaaa6a54803d660136bdbcba4f0939a9247
+
+connected_section:
+  strategy_id: centerline_frontier_v1
+  minimum_coverage_ratio: 0.80
+  require_complete_centerline: true
+  gold_margin_deg: 1.5
+  residual_max_mm: 3.0
+  expected_diagnostic_coverage: 2833
+  expected_diagnostic_centerline_coverage: 720
+
+parallel:
+  section_workers: 12
+  audit_workers: 12
+  dense_workers: 12
+  default_workers: 12
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_4_constructive_section_smoke
+  atlas:
+    root_count: 8
+    formal_root_count: 8
+  audit:
+    paths_per_endpoint: 2
+    formal_paths_per_endpoint: 2
+  connected_section:
+    expected_diagnostic_coverage: 2833
+    expected_diagnostic_centerline_coverage: 720
+  parallel:
+    section_workers: 2
+    audit_workers: 2
+    dense_workers: 2

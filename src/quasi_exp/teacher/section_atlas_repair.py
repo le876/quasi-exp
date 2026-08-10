@@ -683,12 +683,15 @@ def execute_audit_schedules(
     policy: AuditV2Policy,
     *,
     retry_continuation: Callable[..., ContinuationOutcome] | None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> pd.DataFrame:
     chart_by_id = {chart.chart_id: chart for chart in growth.charts}
     node_by_id = {node.node_id: node for node in growth.task_nodes}
     adapter = continuation if retry_continuation is None else retry_continuation
     rows: list[dict[str, Any]] = []
-    for schedule in schedules.to_dict(orient="records"):
+    schedule_records = schedules.to_dict(orient="records")
+    total_schedule_count = len(schedule_records)
+    for completed_schedule_count, schedule in enumerate(schedule_records, start=1):
         chart = chart_by_id[str(schedule["chart_id"])]
         selected = {node: item.candidate for node, item in chart.selected_by_node.items()}
         base_path = tuple(int(value) for value in schedule["path_node_ids"])
@@ -729,6 +732,8 @@ def execute_audit_schedules(
                 repeat_gaps = [beta_rms_deg(reference, endpoint) for endpoint in endpoints[1:]]
                 for row in rows[-policy.repeats_per_direction:]:
                     row["repeat_gap_deg"] = max(repeat_gaps, default=0.0)
+        if progress_callback is not None:
+            progress_callback(completed_schedule_count, total_schedule_count)
     return pd.DataFrame.from_records(rows)
 
 

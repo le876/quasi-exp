@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import fcntl
 import hashlib
 import json
 import math
@@ -118,6 +119,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("V14.2R audit shards must be checkpoint-resumable")
     if int(audit_execution.get("heartbeat_every_completed_shards", 0)) != 1:
         raise ValueError("V14.2R audit shards require one-shard heartbeat cadence")
+    if int(audit_execution.get("progress_every_schedules", 0)) < 1:
+        raise ValueError("V14.2R audit shard progress cadence must be positive")
     if list(config["diagnostic_patch_ids"]) != ["patch_00", "patch_03", "patch_07", "patch_09"]:
         raise ValueError("V14.2R diagnostic patches are registered")
     if list(config["confirmation_patch_ids"]) != ["patch_08", "patch_10", "patch_11", "patch_12"]:
@@ -839,22 +842,48 @@ AUDIT_EXECUTION_COLUMNS = (
 )
 
 
-def _audit_shards_per_patch(active_patch_jobs: int, *, total_workers: int) -> int:
-    if active_patch_jobs < 1 or total_workers < 1:
-        raise ValueError("active patch and audit worker counts must be positive")
-    return max(1, int(total_workers) // int(active_patch_jobs))
+class _AuditWorkerToken:
+    """One process slot held through an advisory file lock."""
+
+    def __init__(self, handle: Any, slot_id: int) -> None:
+        self._handle = handle
+        self.slot_id = int(slot_id)
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        self._handle.close()
+        self._released = True
 
 
-def _audit_shard_allocations(
-    active_patch_jobs: int, *, total_workers: int
-) -> tuple[int, ...]:
-    if not 1 <= active_patch_jobs <= total_workers:
-        raise ValueError("active patch jobs must fit inside the audit worker budget")
-    base, remainder = divmod(int(total_workers), int(active_patch_jobs))
-    return tuple(
-        base + (1 if index < remainder else 0)
-        for index in range(int(active_patch_jobs))
-    )
+class _AuditWorkerTokenPool:
+    """Cross-process, work-conserving limit for numerical audit workers."""
+
+    def __init__(self, directory: Path, *, capacity: int) -> None:
+        if int(capacity) < 1:
+            raise ValueError("audit token capacity must be positive")
+        self.directory = Path(directory)
+        self.capacity = int(capacity)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._paths = tuple(
+            self.directory / f"slot_{slot_id:02d}.lock"
+            for slot_id in range(self.capacity)
+        )
+        for path in self._paths:
+            path.open("a", encoding="utf-8").close()
+
+    def try_acquire(self) -> _AuditWorkerToken | None:
+        for slot_id, path in enumerate(self._paths):
+            handle = path.open("a+", encoding="utf-8")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                continue
+            return _AuditWorkerToken(handle, slot_id)
+        return None
 
 
 def _payload_sha256(value: Mapping[str, Any]) -> str:
@@ -989,6 +1018,36 @@ def _run_audit_shard_worker(
         environment, tasks, task_edges
     )
     retry = _registered_retry_adapter(environment, tasks, task_edges)
+    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
+    shard_directory.mkdir(parents=True, exist_ok=True)
+    progress_path = shard_directory / "progress.json"
+    progress_every = int(config["audit_execution"]["progress_every_schedules"])
+    last_reported = -progress_every
+
+    def report_progress(completed_schedule_count: int, total_schedule_count: int) -> None:
+        nonlocal last_reported
+        completed_schedule_count = int(completed_schedule_count)
+        total_schedule_count = int(total_schedule_count)
+        if (
+            completed_schedule_count != total_schedule_count
+            and completed_schedule_count - last_reported < progress_every
+        ):
+            return
+        _write_json(
+            progress_path,
+            {
+                "schema_version": 1,
+                "status": "running",
+                "phase_id": str(manifest["phase_id"]),
+                "shard_id": int(shard_id),
+                "completed_schedule_count": completed_schedule_count,
+                "total_schedule_count": total_schedule_count,
+                "updated_at_unix_s": time.time(),
+            },
+        )
+        last_reported = completed_schedule_count
+
+    report_progress(0, len(shard_registry))
     if len(shard_registry):
         executions = execute_audit_schedules(
             growth,
@@ -996,10 +1055,10 @@ def _run_audit_shard_worker(
             continuation,
             _audit_policy(config),
             retry_continuation=retry,
+            progress_callback=report_progress,
         )
     else:
         executions = pd.DataFrame(columns=AUDIT_EXECUTION_COLUMNS)
-    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
     _write_parquet(executions, shard_directory / "executions.parquet")
     report = build_shard_completion_report(
         shard_registry,
@@ -1016,6 +1075,19 @@ def _run_audit_shard_worker(
         shard_directory / "executions.parquet"
     )
     _write_json(shard_directory / "report.json", report)
+    _write_json(
+        progress_path,
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "phase_id": str(manifest["phase_id"]),
+            "shard_id": int(shard_id),
+            "completed_schedule_count": len(shard_registry),
+            "total_schedule_count": len(shard_registry),
+            "execution_count": len(executions),
+            "updated_at_unix_s": time.time(),
+        },
+    )
     return report
 
 
@@ -1031,6 +1103,7 @@ class _SubprocessAuditExecutor:
         task_edges: pd.DataFrame,
         patch_directory: Path,
         shard_count: int,
+        token_pool: _AuditWorkerTokenPool | None = None,
     ) -> None:
         self.config = config
         self.project_root = project_root
@@ -1038,6 +1111,7 @@ class _SubprocessAuditExecutor:
         self.task_edges = task_edges.copy()
         self.patch_directory = patch_directory
         self.shard_count = max(1, int(shard_count))
+        self.token_pool = token_pool
 
     def __call__(
         self,
@@ -1119,7 +1193,9 @@ class _SubprocessAuditExecutor:
         reused_shard_count = len(completed)
 
         started = time.time()
-        running: list[tuple[int, subprocess.Popen[str], Any]] = []
+        running: list[
+            tuple[int, subprocess.Popen[str], Any, _AuditWorkerToken | None]
+        ] = []
         environment = _thread_limited_environment()
 
         def heartbeat() -> None:
@@ -1127,7 +1203,9 @@ class _SubprocessAuditExecutor:
                 "phase_id": str(phase_id),
                 "completed_shards": len(completed),
                 "total_shards": self.shard_count,
-                "running_shards": [shard for shard, _process, _handle in running],
+                "running_shards": [
+                    shard for shard, _process, _handle, _token in running
+                ],
                 "pending_shards": list(missing),
                 "elapsed_s": time.time() - started,
                 "updated_at_unix_s": time.time(),
@@ -1138,6 +1216,9 @@ class _SubprocessAuditExecutor:
         heartbeat()
         while missing or running:
             while missing and len(running) < self.shard_count:
+                token = self.token_pool.try_acquire() if self.token_pool is not None else None
+                if self.token_pool is not None and token is None:
+                    break
                 shard_id = missing.pop(0)
                 shard_directory = phase_directory / f"shard_{shard_id:02d}"
                 shard_directory.mkdir(parents=True, exist_ok=True)
@@ -1152,31 +1233,43 @@ class _SubprocessAuditExecutor:
                     "--audit-shard-id",
                     str(shard_id),
                 ]
-                process = subprocess.Popen(
-                    command,
-                    cwd=SOURCE_ROOT,
-                    env=environment,
-                    stdout=subprocess.PIPE,
-                    stderr=handle,
-                    text=True,
-                )
-                running.append((shard_id, process, handle))
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=SOURCE_ROOT,
+                        env=environment,
+                        stdout=subprocess.PIPE,
+                        stderr=handle,
+                        text=True,
+                    )
+                except Exception:
+                    handle.close()
+                    if token is not None:
+                        token.release()
+                    raise
+                running.append((shard_id, process, handle, token))
             progressed = False
-            survivors: list[tuple[int, subprocess.Popen[str], Any]] = []
-            for shard_id, process, handle in running:
+            survivors: list[
+                tuple[int, subprocess.Popen[str], Any, _AuditWorkerToken | None]
+            ] = []
+            for shard_id, process, handle, token in running:
                 if process.poll() is None:
-                    survivors.append((shard_id, process, handle))
+                    survivors.append((shard_id, process, handle, token))
                     continue
                 stdout, _stderr = process.communicate()
                 handle.close()
+                if token is not None:
+                    token.release()
                 if process.returncode != 0:
-                    for _other_id, other, other_handle in running:
+                    for _other_id, other, other_handle, other_token in running:
                         if other.pid == process.pid:
                             continue
                         if other.poll() is None:
                             other.terminate()
                             other.wait(timeout=30)
                         other_handle.close()
+                        if other_token is not None:
+                            other_token.release()
                     raise RuntimeError(
                         f"audit shard failed phase={phase_id} shard={shard_id} "
                         f"returncode={process.returncode} stdout={stdout[-1000:]}"
@@ -1211,7 +1304,7 @@ class _SubprocessAuditExecutor:
             running = survivors
             if progressed:
                 heartbeat()
-            elif running:
+            elif running or missing:
                 time.sleep(0.25)
         merged = merge_validated_audit_shards(
             registry,
@@ -1632,6 +1725,14 @@ def _execute_patch(
     else:
         growth, root_report, growth_frames = checkpoint
         growth_checkpoint_resumed = True
+    token_pool = (
+        _AuditWorkerTokenPool(
+            Path(str(config["_audit_token_pool"])),
+            capacity=int(config["_audit_token_count"]),
+        )
+        if config.get("_audit_token_pool")
+        else None
+    )
     repaired = repair_rooted_section_atlas(
         growth,
         continuation,
@@ -1646,6 +1747,7 @@ def _execute_patch(
             task_edges=task_edges,
             patch_directory=directory,
             shard_count=int(config.get("_audit_shards_per_patch", 1)),
+            token_pool=token_pool,
         ),
     )
     strong_reference_required = bool(
@@ -1790,14 +1892,14 @@ def _run_patch_jobs(
     environment = _thread_limited_environment()
     patch_worker_limit = int(config["parallel"]["patch_workers"])
     total_audit_workers = int(config["audit_execution"]["total_shard_workers"])
+    token_pool_directory = (
+        output_root / STAGE_DIRS[stage_name] / "_audit_worker_tokens"
+    )
     while pending:
         batch = pending[:patch_worker_limit]
         del pending[: len(batch)]
-        allocations = _audit_shard_allocations(
-            len(batch), total_workers=total_audit_workers
-        )
         running: list[tuple[str, str, subprocess.Popen[str], Any]] = []
-        for (patch_id, variant), audit_shards in zip(batch, allocations, strict=True):
+        for patch_id, variant in batch:
             directory = output_root / STAGE_DIRS[stage_name] / patch_id / variant
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("a", encoding="utf-8")
@@ -1808,7 +1910,9 @@ def _run_patch_jobs(
                 "--stage", stage_name,
                 "--patch-id", patch_id,
                 "--variant", variant,
-                "--audit-shards-per-patch", str(audit_shards),
+                "--audit-shards-per-patch", str(total_audit_workers),
+                "--audit-token-pool", str(token_pool_directory),
+                "--audit-token-count", str(total_audit_workers),
             ]
             process = subprocess.Popen(
                 command, cwd=SOURCE_ROOT, env=environment,
@@ -2035,7 +2139,10 @@ def _frame_stability(
     common = sorted(left_nodes & right_nodes)
     union = left_nodes | right_nodes
     gaps = np.asarray([
-        beta_rms_deg(left.loc[node, BETA_COLUMNS].to_numpy(float), right.loc[node, BETA_COLUMNS].to_numpy(float))
+        beta_rms_deg(
+            left.loc[node, list(BETA_COLUMNS)].to_numpy(float),
+            right.loc[node, list(BETA_COLUMNS)].to_numpy(float),
+        )
         for node in common
     ])
     policy = config["search_stability"]
@@ -2671,6 +2778,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--patch-id")
     parser.add_argument("--variant")
     parser.add_argument("--audit-shards-per-patch", type=int)
+    parser.add_argument("--audit-token-pool")
+    parser.add_argument("--audit-token-count", type=int)
     parser.add_argument("--audit-shard-bundle")
     parser.add_argument("--audit-shard-id", type=int)
     return parser
@@ -2702,6 +2811,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if int(config["_audit_shards_per_patch"]) < 1:
         raise SystemExit("--audit-shards-per-patch must be positive")
+    config["_audit_token_pool"] = args.audit_token_pool
+    config["_audit_token_count"] = (
+        int(args.audit_token_count)
+        if args.audit_token_count is not None
+        else int(config["audit_execution"]["total_shard_workers"])
+    )
+    if int(config["_audit_token_count"]) < 1:
+        raise SystemExit("--audit-token-count must be positive")
     output_root = Path(args.output_root).resolve() if args.output_root else project_root / str(config["output_root"])
     output_root.mkdir(parents=True, exist_ok=True)
     if args.stage != "inventory":

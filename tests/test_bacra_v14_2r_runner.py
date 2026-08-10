@@ -25,6 +25,7 @@ def test_v14_2r_config_freezes_twelve_single_threaded_workers_and_gates() -> Non
     assert config["parallel"] == {"patch_workers": 12, "numerical_threads_per_worker": 1}
     assert config["audit_execution"]["total_shard_workers"] == 12
     assert config["audit_execution"]["checkpoint_resume"] is True
+    assert config["audit_execution"]["progress_every_schedules"] > 0
     assert config["diagnostic_patch_ids"] == ["patch_00", "patch_03", "patch_07", "patch_09"]
     assert config["diagnostic_only_patch_ids"] == ["patch_09"]
     assert config["confirmation_patch_ids"] == ["patch_08", "patch_10", "patch_11", "patch_12"]
@@ -35,32 +36,121 @@ def test_v14_2r_config_freezes_twelve_single_threaded_workers_and_gates() -> Non
     assert config["meso_bridge"]["parent_cell_count"] == 512
 
 
-def test_v14_2r_distributes_a_fixed_twelve_audit_workers_across_patch_jobs() -> None:
+def test_frame_stability_selects_beta_columns_without_pandas_tuple_indexing(
+    monkeypatch,
+    tmp_path,
+) -> None:
     module = _module()
-
-    assert module._audit_shards_per_patch(1, total_workers=12) == 12
-    assert module._audit_shards_per_patch(4, total_workers=12) == 3
-    assert module._audit_shards_per_patch(5, total_workers=12) == 2
-    assert module._audit_shards_per_patch(12, total_workers=12) == 1
-    assert module._audit_shard_allocations(1, total_workers=12) == (12,)
-    assert module._audit_shard_allocations(4, total_workers=12) == (3, 3, 3, 3)
-    assert module._audit_shard_allocations(5, total_workers=12) == (3, 3, 2, 2, 2)
-    assert module._audit_shard_allocations(9, total_workers=12) == (
-        2,
-        2,
-        2,
-        1,
-        1,
-        1,
-        1,
-        1,
-        1,
+    beta = {
+        name: [0.1 * index, 0.2 * index]
+        for index, name in enumerate(module.BETA_COLUMNS, start=1)
+    }
+    left = pd.DataFrame(
+        {
+            "task_node_id": [10, 11],
+            "abstained": [False, False],
+            **beta,
+        }
     )
+    right = left.copy()
+    monkeypatch.setattr(
+        module,
+        "_verified_edge_entities",
+        lambda _directory, _config: {"edge:10:11"},
+    )
+    config = {
+        "audit_v2": {"geometry_max_deg": 1.0},
+        "search_stability": {
+            "coverage_jaccard_min": 0.95,
+            "beta_p95_max_deg": 1.0,
+            "beta_max_deg": 2.0,
+            "assignment_change_max": 0.05,
+            "verified_edge_change_max": 0.05,
+        },
+    }
+
+    report = module._frame_stability(
+        left,
+        right,
+        config,
+        left_directory=tmp_path,
+        right_directory=tmp_path,
+    )
+
+    assert report["gate_pass"] is True
+    assert report["coverage_jaccard"] == 1.0
+    assert report["beta_p95_deg"] == 0.0
+    assert report["beta_max_deg"] == 0.0
+    assert report["assignment_change_ratio"] == 0.0
+    assert report["verified_edge_change_ratio"] == 0.0
+
+
+def test_patch_jobs_register_full_shard_sets_against_one_global_token_pool(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    module = _module()
+    commands: list[list[str]] = []
+
+    class CompletedProcess:
+        returncode = 0
+        pid = 12345
+
+        def __init__(self, command, **_kwargs) -> None:
+            commands.append(list(command))
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(module.subprocess, "Popen", CompletedProcess)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    config = {
+        "config_path": tmp_path / "config.yaml",
+        "parallel": {"patch_workers": 12},
+        "audit_execution": {"total_shard_workers": 12},
+    }
+    jobs = [(f"patch_{index:02d}", "baseline") for index in range(5)]
+
+    module._run_patch_jobs(config, tmp_path, "search_stability", jobs)
+
+    assert len(commands) == len(jobs)
+    shard_counts = {
+        int(command[command.index("--audit-shards-per-patch") + 1])
+        for command in commands
+    }
+    token_pools = {
+        command[command.index("--audit-token-pool") + 1]
+        for command in commands
+    }
+    assert shard_counts == {12}
+    assert token_pools == {
+        str(tmp_path / "06_search_stability" / "_audit_worker_tokens")
+    }
+
+
+def test_global_audit_token_pool_refills_a_released_slot(tmp_path) -> None:
+    module = _module()
+    first = module._AuditWorkerTokenPool(tmp_path, capacity=2)
+    second = module._AuditWorkerTokenPool(tmp_path, capacity=2)
+
+    token_0 = first.try_acquire()
+    token_1 = first.try_acquire()
+    assert token_0 is not None
+    assert token_1 is not None
+    assert second.try_acquire() is None
+
+    token_0.release()
+    replacement = second.try_acquire()
+    assert replacement is not None
+
+    replacement.release()
+    token_1.release()
 
 
 def test_real_schedule_subprocess_shards_are_exact_and_resumable(tmp_path) -> None:
     module = _module()
     config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas.yaml")
+    config["audit_execution"]["progress_every_schedules"] = 1
     project_root = module.project_root_from(ROOT)
     paths = module._source_paths(config, project_root)
     legacy_config = module.legacy.load_config(paths["legacy_config"])
@@ -104,6 +194,7 @@ def test_real_schedule_subprocess_shards_are_exact_and_resumable(tmp_path) -> No
         task_edges=task_edges,
         patch_directory=tmp_path,
         shard_count=2,
+        token_pool=module._AuditWorkerTokenPool(tmp_path / "tokens", capacity=1),
     )
     policy = module._audit_policy(config)
     first = executor(growth, schedules, None, policy, object(), "chart_initial")
@@ -122,6 +213,14 @@ def test_real_schedule_subprocess_shards_are_exact_and_resumable(tmp_path) -> No
     )
     assert aggregate["gate_pass"] is True
     assert aggregate["resumed_shard_count"] == 2
+    progress_paths = sorted(
+        (tmp_path / "_audit_checkpoints/chart_initial").glob("shard_*/progress.json")
+    )
+    assert len(progress_paths) == 2
+    for path in progress_paths:
+        progress = module._read_json(path)
+        assert progress["status"] == "complete"
+        assert progress["completed_schedule_count"] == progress["total_schedule_count"]
 
 
 def test_growth_checkpoint_rehydrates_only_under_the_same_input_closure(tmp_path) -> None:
@@ -216,6 +315,30 @@ def test_v14_2r_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
 
     assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
     assert paths["plan"].is_file()
+    assert paths["performance_protocol"] == (
+        ROOT / "docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md"
+    )
+    assert paths["performance_protocol"].is_file()
+
+
+def test_v14_2r_retry3_launchers_keep_benchmark_and_formal_roots_distinct() -> None:
+    benchmark = (
+        ROOT
+        / "scripts/pipelines/run_bacra_v14_2r_patch07_shard_benchmark_retry2.sh"
+    )
+    retry3 = ROOT / "scripts/pipelines/run_bacra_v14_2r_stitched_atlas_retry3.sh"
+
+    assert benchmark.is_file()
+    assert retry3.is_file()
+    assert benchmark.stat().st_mode & 0o111
+    assert retry3.stat().st_mode & 0o111
+    benchmark_text = benchmark.read_text(encoding="utf-8")
+    retry3_text = retry3.read_text(encoding="utf-8")
+    assert "runs/bacra_v14_2r_patch07_shard_benchmark_retry2" in benchmark_text
+    assert "runs/bacra_v14_2r_stitched_atlas_retry3" in retry3_text
+    assert "--verify-only" in retry3_text
+    assert "--require-pass" in retry3_text
+    assert "bacra_v14_2r_stitched_atlas_retry2" not in retry3_text
 
 
 def test_v14_2r_scientific_gate_failure_is_not_an_operational_error(tmp_path) -> None:

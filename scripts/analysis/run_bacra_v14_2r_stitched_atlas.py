@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+import contextlib
+from dataclasses import asdict, replace
+import fcntl
 import hashlib
+import io
 import json
 import math
 import os
@@ -76,6 +79,11 @@ from run_trajectory_canonical_teacher_v10 import load_environment, runtime_finge
 
 
 BETA_COLUMNS = tuple(f"beta{index}_rad" for index in range(1, 7))
+REGISTERED_RETRY_CHAINS = {
+    "R0": ("predictor", "bounded_ls"),
+    "R1": ("weighted_dls", "bounded_ls"),
+    "R2": ("weighted_dls", "bounded_ls", "slsqp"),
+}
 STAGE_DIRS = {
     "inventory": "00_inventory",
     "replacement_confirmation": "01_replacement_confirmation",
@@ -118,6 +126,16 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("V14.2R audit shards must be checkpoint-resumable")
     if int(audit_execution.get("heartbeat_every_completed_shards", 0)) != 1:
         raise ValueError("V14.2R audit shards require one-shard heartbeat cadence")
+    if int(audit_execution.get("progress_every_schedules", 0)) < 1:
+        raise ValueError("V14.2R audit shard progress cadence must be positive")
+    retry_chains = {
+        str(tier["tier_id"]): tuple(map(str, tier["solver_chain"]))
+        for tier in config["audit_v2"]["retry_tiers"]
+    }
+    if retry_chains != REGISTERED_RETRY_CHAINS:
+        raise ValueError(
+            "V14.2R retry solver chains must match the registered R0/R1/R2 contract"
+        )
     if list(config["diagnostic_patch_ids"]) != ["patch_00", "patch_03", "patch_07", "patch_09"]:
         raise ValueError("V14.2R diagnostic patches are registered")
     if list(config["confirmation_patch_ids"]) != ["patch_08", "patch_10", "patch_11", "patch_12"]:
@@ -191,11 +209,18 @@ def write_scientific_skip(stage: Path, reason: str) -> dict[str, Any]:
     return payload
 
 
-def _require(output_root: Path, stage_name: str) -> dict[str, Any]:
-    path = output_root / STAGE_DIRS[stage_name] / "gate.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"required upstream stage is not sealed: {path}")
-    return _read_json(path)
+def _require(
+    config: Mapping[str, Any], output_root: Path, stage_name: str
+) -> dict[str, Any]:
+    stage = output_root / STAGE_DIRS[stage_name]
+    result = _load_validated_stage_result(
+        stage, config=config, stage_name=stage_name
+    )
+    if result is None:
+        raise FileNotFoundError(
+            f"required upstream stage lacks a valid completion closure: {stage}"
+        )
+    return result
 
 
 def _validate_resume_fixed_point(
@@ -212,6 +237,8 @@ def _validate_resume_fixed_point(
         "config_sha256": str(fixed.get("config_sha256", ""))
         == sha256_file(Path(str(config["config_path"]))),
         "working_tree_clean": _tree_clean(),
+        "runtime_sha256": str(fixed.get("runtime_sha256", ""))
+        == _runtime_sha256(),
     }
     if not all(checks.values()):
         raise RuntimeError(
@@ -227,11 +254,63 @@ def _tree_clean() -> bool:
     return not subprocess.check_output(["git", "status", "--porcelain"], cwd=SOURCE_ROOT, text=True).strip()
 
 
+def _runtime_closure() -> dict[str, Any]:
+    runtime = dict(runtime_fingerprint())
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        np.__config__.show()
+    return {
+        "python": runtime.get("python"),
+        "executable": runtime.get("executable"),
+        "platform": runtime.get("platform"),
+        "packages": runtime.get("packages", {}),
+        "numpy_build_configuration": buffer.getvalue(),
+    }
+
+
+def _runtime_sha256() -> str:
+    return _payload_sha256(_runtime_closure())
+
+
+def _verify_upstream_artifact_manifest(manifest_path: Path) -> dict[str, Any]:
+    manifest_path = Path(manifest_path).resolve()
+    payload = _read_json(manifest_path)
+    records = tuple(payload.get("artifacts", ()))
+    if int(payload.get("artifact_count", -1)) != len(records):
+        raise RuntimeError(f"upstream artifact count mismatch: {manifest_path}")
+    root = manifest_path.parent.parent
+    verified: list[dict[str, Any]] = []
+    for record in records:
+        relative = Path(str(record["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"unsafe upstream artifact path: {relative}")
+        path = root / relative
+        expected_size = int(record.get("bytes", record.get("size_bytes", -1)))
+        expected_sha = str(record.get("sha256", ""))
+        if (
+            not path.is_file()
+            or path.stat().st_size != expected_size
+            or sha256_file(path) != expected_sha
+        ):
+            raise RuntimeError(f"upstream artifact closure mismatch: {path}")
+        verified.append(
+            {"path": relative.as_posix(), "bytes": expected_size, "sha256": expected_sha}
+        )
+    return {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": sha256_file(manifest_path),
+        "artifact_count": len(verified),
+        "artifact_closure_sha256": _payload_sha256({"artifacts": verified}),
+    }
+
+
 def _source_paths(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     sources = config["sources"]
     return {
         "plan": SOURCE_ROOT / str(sources["reviewed_plan"]),
         "performance_protocol": SOURCE_ROOT / str(sources["performance_protocol"]),
+        "scientific_closure_protocol": SOURCE_ROOT
+        / str(sources["scientific_closure_protocol"]),
         "legacy_config": SOURCE_ROOT / str(sources["legacy_config"]),
         "retry4": project_root / str(sources["retry4_root"]),
         "v14_2": project_root / str(sources["v14_2_root"]),
@@ -303,13 +382,60 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         raise FileExistsError(f"V14.2R inventory already sealed: {stage}")
     paths = _source_paths(config, project_root)
     required = [
-        paths["plan"], paths["performance_protocol"], paths["legacy_config"], paths["robot_config"],
+        paths["plan"], paths["performance_protocol"],
+        paths["scientific_closure_protocol"], paths["legacy_config"],
+        paths["robot_config"],
         paths["retry4"] / "07_summary/artifact_manifest.json",
         paths["v14_2"] / "08_summary/artifact_manifest.json",
     ]
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"V14.2R source inventory incomplete: {missing}")
+    upstream_closures = [
+        _verify_upstream_artifact_manifest(
+            paths["retry4"] / "07_summary/artifact_manifest.json"
+        ),
+        _verify_upstream_artifact_manifest(
+            paths["v14_2"] / "08_summary/artifact_manifest.json"
+        ),
+    ]
+    upstream_closure_sha256 = _payload_sha256(
+        {"upstream_closures": upstream_closures}
+    )
+    _write_json(
+        stage / "upstream_artifact_closure.json",
+        {
+            "schema_version": 1,
+            "upstream_closure_sha256": upstream_closure_sha256,
+            "manifests": upstream_closures,
+        },
+    )
+    reviewed_files = list(_audit_source_records())
+    reviewed_files.extend(
+        {
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in (
+            Path(str(config["config_path"])),
+            paths["plan"],
+            paths["performance_protocol"],
+            paths["scientific_closure_protocol"],
+        )
+    )
+    reviewed_files = sorted(reviewed_files, key=lambda record: str(record["path"]))
+    source_tree_mapping = {
+        "schema_version": 1,
+        "scientific_source_sha": _git_sha(),
+        "release_sha": None,
+        "release_mapping_status": "pending_filtered_publication",
+        "reviewed_files": reviewed_files,
+        "combined_tree_sha256": _payload_sha256(
+            {"reviewed_files": reviewed_files}
+        ),
+    }
+    _write_json(stage / "source_tree_mapping.json", source_tree_mapping)
     records = [
         {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
         for path in required
@@ -319,6 +445,12 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         "source_sha": _git_sha(),
         "working_tree_clean": _tree_clean(),
         "runtime": runtime_fingerprint(),
+        "runtime_closure": _runtime_closure(),
+        "runtime_sha256": _runtime_sha256(),
+        "upstream_closure_sha256": upstream_closure_sha256,
+        "reviewed_source_tree_sha256": source_tree_mapping[
+            "combined_tree_sha256"
+        ],
         "config_sha256": sha256_file(Path(config["config_path"])),
         "patch_workers": int(config["parallel"]["patch_workers"]),
         "numerical_threads_per_worker": int(
@@ -338,6 +470,8 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         {
             "clean_fixed_point": report["working_tree_clean"],
             "source_inventory_complete": not missing,
+            "upstream_artifact_closure_complete": bool(upstream_closures),
+            "source_tree_mapping_complete": bool(reviewed_files),
             "twelve_workers_registered": report["patch_workers"] == 12,
             "twelve_audit_shards_registered": report["audit_shard_workers_total"]
             == 12,
@@ -354,7 +488,7 @@ def stage_replacement_confirmation(
 ) -> dict[str, Any]:
     """Seal an unused patch_12 before any mechanism result is produced."""
 
-    _require(output_root, "inventory")
+    _require(config, output_root, "inventory")
     stage = output_root / STAGE_DIRS["replacement_confirmation"]
     if (stage / "gate.json").is_file():
         raise FileExistsError(f"replacement confirmation already sealed: {stage}")
@@ -494,7 +628,7 @@ def stage_replacement_confirmation(
 
 
 def stage_artifact_diagnostics(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    _require(output_root, "replacement_confirmation")
+    _require(config, output_root, "replacement_confirmation")
     stage = output_root / STAGE_DIRS["artifact_diagnostics"]
     paths = _source_paths(config, project_root)
     rows: list[dict[str, Any]] = []
@@ -776,13 +910,31 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
     cache: dict[str, Any] = {}
 
     def adapter(source: AtlasCandidate, target: AtlasTaskNode, tier: RetryTier) -> ContinuationOutcome:
+        expected_chain = REGISTERED_RETRY_CHAINS.get(str(tier.tier_id))
+        if expected_chain is None or tuple(tier.solver_chain) != expected_chain:
+            raise ValueError(
+                f"unregistered retry solver chain: {tier.tier_id}={tier.solver_chain}"
+            )
         if tier.tier_id not in cache:
-            base = make_predictor_corrector_continuation(
+            raw_base = make_predictor_corrector_continuation(
                 environment,
                 damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
                 max_corrector_iterations=tier.maximum_iterations,
                 residual_tolerance_mm=3.0,
             )
+            bounded_chain = expected_chain[:2]
+
+            def base(
+                local_source: AtlasCandidate, local_target: AtlasTaskNode
+            ) -> ContinuationOutcome:
+                outcome = raw_base(local_source, local_target)
+                return replace(
+                    outcome,
+                    status=(
+                        f"audit_solver_chain[{'>'.join(bounded_chain)}]::"
+                        f"{outcome.status}"
+                    ),
+                )
             if "slsqp" in tier.solver_chain:
                 bounded = base
 
@@ -809,7 +961,11 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
                     inside = bool(np.all(beta >= bounds[:, 0]) and np.all(beta <= bounds[:, 1]))
                     return ContinuationOutcome(
                         beta, residual, bool(result.success and residual <= 3.0 and inside), inside,
-                        int(getattr(result, "nit", 0)), f"slsqp:{result.status}",
+                        int(getattr(result, "nit", 0)),
+                        (
+                            f"audit_solver_chain[{'>'.join(expected_chain)}]::"
+                            f"slsqp:{result.status}"
+                        ),
                     )
 
                 base = robust
@@ -832,6 +988,9 @@ AUDIT_EXECUTION_COLUMNS = (
     "repeat_gap_deg",
     "residual_mm",
     "retry_tier",
+    "registered_solver_chain",
+    "executed_solver_chain",
+    "solver_chain_sha256",
     "classification",
     "failure_source_node",
     "failure_target_node",
@@ -839,22 +998,48 @@ AUDIT_EXECUTION_COLUMNS = (
 )
 
 
-def _audit_shards_per_patch(active_patch_jobs: int, *, total_workers: int) -> int:
-    if active_patch_jobs < 1 or total_workers < 1:
-        raise ValueError("active patch and audit worker counts must be positive")
-    return max(1, int(total_workers) // int(active_patch_jobs))
+class _AuditWorkerToken:
+    """One process slot held through an advisory file lock."""
+
+    def __init__(self, handle: Any, slot_id: int) -> None:
+        self._handle = handle
+        self.slot_id = int(slot_id)
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        self._handle.close()
+        self._released = True
 
 
-def _audit_shard_allocations(
-    active_patch_jobs: int, *, total_workers: int
-) -> tuple[int, ...]:
-    if not 1 <= active_patch_jobs <= total_workers:
-        raise ValueError("active patch jobs must fit inside the audit worker budget")
-    base, remainder = divmod(int(total_workers), int(active_patch_jobs))
-    return tuple(
-        base + (1 if index < remainder else 0)
-        for index in range(int(active_patch_jobs))
-    )
+class _AuditWorkerTokenPool:
+    """Cross-process, work-conserving limit for numerical audit workers."""
+
+    def __init__(self, directory: Path, *, capacity: int) -> None:
+        if int(capacity) < 1:
+            raise ValueError("audit token capacity must be positive")
+        self.directory = Path(directory)
+        self.capacity = int(capacity)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._paths = tuple(
+            self.directory / f"slot_{slot_id:02d}.lock"
+            for slot_id in range(self.capacity)
+        )
+        for path in self._paths:
+            path.open("a", encoding="utf-8").close()
+
+    def try_acquire(self) -> _AuditWorkerToken | None:
+        for slot_id, path in enumerate(self._paths):
+            handle = path.open("a+", encoding="utf-8")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                continue
+            return _AuditWorkerToken(handle, slot_id)
+        return None
 
 
 def _payload_sha256(value: Mapping[str, Any]) -> str:
@@ -945,6 +1130,8 @@ def _validate_audit_bundle(
     config_sha = sha256_file(Path(str(config["config_path"])))
     if str(manifest.get("config_sha256", "")) != config_sha:
         raise RuntimeError("audit bundle config hash does not match the executing config")
+    if str(manifest.get("runtime_sha256", "")) != _runtime_sha256():
+        raise RuntimeError("audit bundle runtime hash does not match the executing runtime")
     artifacts = tuple(manifest.get("artifacts", ()))
     for record in artifacts:
         path = phase_directory / str(record["path"])
@@ -960,7 +1147,11 @@ def _validate_audit_bundle(
         if sha256_file(path) != str(record["sha256"]):
             raise RuntimeError(f"audit source artifact hash mismatch: {path}")
     expected_input_sha = _payload_sha256(
-        {"artifacts": artifacts, "source_records": source_records}
+        {
+            "artifacts": artifacts,
+            "source_records": source_records,
+            "runtime_sha256": str(manifest.get("runtime_sha256", "")),
+        }
     )
     if str(manifest.get("input_sha256", "")) != expected_input_sha:
         raise RuntimeError("audit bundle input closure hash mismatch")
@@ -969,6 +1160,8 @@ def _validate_audit_bundle(
 def _run_audit_shard_worker(
     config: Mapping[str, Any], project_root: Path, phase_directory: Path, shard_id: int
 ) -> dict[str, Any]:
+    worker_started_at = time.time()
+    worker_cpu_started = time.process_time()
     manifest = _read_json(phase_directory / "input_manifest.json")
     _validate_audit_bundle(manifest, phase_directory, config)
     registry = pd.read_parquet(phase_directory / "schedule_registry.parquet")
@@ -989,6 +1182,37 @@ def _run_audit_shard_worker(
         environment, tasks, task_edges
     )
     retry = _registered_retry_adapter(environment, tasks, task_edges)
+    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
+    shard_directory.mkdir(parents=True, exist_ok=True)
+    progress_path = shard_directory / "progress.json"
+    progress_every = int(config["audit_execution"]["progress_every_schedules"])
+    last_reported = -progress_every
+
+    def report_progress(completed_schedule_count: int, total_schedule_count: int) -> None:
+        nonlocal last_reported
+        completed_schedule_count = int(completed_schedule_count)
+        total_schedule_count = int(total_schedule_count)
+        if (
+            completed_schedule_count != total_schedule_count
+            and completed_schedule_count - last_reported < progress_every
+        ):
+            return
+        _write_json(
+            progress_path,
+            {
+                "schema_version": 1,
+                "status": "running",
+                "phase_id": str(manifest["phase_id"]),
+                "shard_id": int(shard_id),
+                "completed_schedule_count": completed_schedule_count,
+                "total_schedule_count": total_schedule_count,
+                "started_at_unix_s": worker_started_at,
+                "updated_at_unix_s": time.time(),
+            },
+        )
+        last_reported = completed_schedule_count
+
+    report_progress(0, len(shard_registry))
     if len(shard_registry):
         executions = execute_audit_schedules(
             growth,
@@ -996,10 +1220,10 @@ def _run_audit_shard_worker(
             continuation,
             _audit_policy(config),
             retry_continuation=retry,
+            progress_callback=report_progress,
         )
     else:
         executions = pd.DataFrame(columns=AUDIT_EXECUTION_COLUMNS)
-    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
     _write_parquet(executions, shard_directory / "executions.parquet")
     report = build_shard_completion_report(
         shard_registry,
@@ -1015,7 +1239,28 @@ def _run_audit_shard_worker(
     report["executions_file_sha256"] = sha256_file(
         shard_directory / "executions.parquet"
     )
+    report["started_at_unix_s"] = worker_started_at
+    report["finished_at_unix_s"] = time.time()
+    report["wall_time_s"] = report["finished_at_unix_s"] - worker_started_at
+    report["cpu_time_s"] = time.process_time() - worker_cpu_started
     _write_json(shard_directory / "report.json", report)
+    _write_json(
+        progress_path,
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "phase_id": str(manifest["phase_id"]),
+            "shard_id": int(shard_id),
+            "completed_schedule_count": len(shard_registry),
+            "total_schedule_count": len(shard_registry),
+            "execution_count": len(executions),
+            "started_at_unix_s": worker_started_at,
+            "finished_at_unix_s": time.time(),
+            "wall_time_s": time.time() - worker_started_at,
+            "cpu_time_s": time.process_time() - worker_cpu_started,
+            "updated_at_unix_s": time.time(),
+        },
+    )
     return report
 
 
@@ -1031,6 +1276,7 @@ class _SubprocessAuditExecutor:
         task_edges: pd.DataFrame,
         patch_directory: Path,
         shard_count: int,
+        token_pool: _AuditWorkerTokenPool | None = None,
     ) -> None:
         self.config = config
         self.project_root = project_root
@@ -1038,6 +1284,7 @@ class _SubprocessAuditExecutor:
         self.task_edges = task_edges.copy()
         self.patch_directory = patch_directory
         self.shard_count = max(1, int(shard_count))
+        self.token_pool = token_pool
 
     def __call__(
         self,
@@ -1069,12 +1316,17 @@ class _SubprocessAuditExecutor:
         artifacts = _audit_bundle_artifacts(phase_directory)
         source_records = _audit_source_records()
         input_sha = _payload_sha256(
-            {"artifacts": artifacts, "source_records": source_records}
+            {
+                "artifacts": artifacts,
+                "source_records": source_records,
+                "runtime_sha256": _runtime_sha256(),
+            }
         )
         manifest = {
             "schema_version": 1,
             "source_sha": _git_sha(),
             "config_sha256": sha256_file(Path(str(self.config["config_path"]))),
+            "runtime_sha256": _runtime_sha256(),
             "input_sha256": input_sha,
             "phase_id": str(phase_id),
             "shard_count": self.shard_count,
@@ -1119,7 +1371,9 @@ class _SubprocessAuditExecutor:
         reused_shard_count = len(completed)
 
         started = time.time()
-        running: list[tuple[int, subprocess.Popen[str], Any]] = []
+        running: list[
+            tuple[int, subprocess.Popen[str], Any, _AuditWorkerToken | None]
+        ] = []
         environment = _thread_limited_environment()
 
         def heartbeat() -> None:
@@ -1127,7 +1381,9 @@ class _SubprocessAuditExecutor:
                 "phase_id": str(phase_id),
                 "completed_shards": len(completed),
                 "total_shards": self.shard_count,
-                "running_shards": [shard for shard, _process, _handle in running],
+                "running_shards": [
+                    shard for shard, _process, _handle, _token in running
+                ],
                 "pending_shards": list(missing),
                 "elapsed_s": time.time() - started,
                 "updated_at_unix_s": time.time(),
@@ -1138,6 +1394,9 @@ class _SubprocessAuditExecutor:
         heartbeat()
         while missing or running:
             while missing and len(running) < self.shard_count:
+                token = self.token_pool.try_acquire() if self.token_pool is not None else None
+                if self.token_pool is not None and token is None:
+                    break
                 shard_id = missing.pop(0)
                 shard_directory = phase_directory / f"shard_{shard_id:02d}"
                 shard_directory.mkdir(parents=True, exist_ok=True)
@@ -1152,31 +1411,43 @@ class _SubprocessAuditExecutor:
                     "--audit-shard-id",
                     str(shard_id),
                 ]
-                process = subprocess.Popen(
-                    command,
-                    cwd=SOURCE_ROOT,
-                    env=environment,
-                    stdout=subprocess.PIPE,
-                    stderr=handle,
-                    text=True,
-                )
-                running.append((shard_id, process, handle))
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=SOURCE_ROOT,
+                        env=environment,
+                        stdout=subprocess.PIPE,
+                        stderr=handle,
+                        text=True,
+                    )
+                except Exception:
+                    handle.close()
+                    if token is not None:
+                        token.release()
+                    raise
+                running.append((shard_id, process, handle, token))
             progressed = False
-            survivors: list[tuple[int, subprocess.Popen[str], Any]] = []
-            for shard_id, process, handle in running:
+            survivors: list[
+                tuple[int, subprocess.Popen[str], Any, _AuditWorkerToken | None]
+            ] = []
+            for shard_id, process, handle, token in running:
                 if process.poll() is None:
-                    survivors.append((shard_id, process, handle))
+                    survivors.append((shard_id, process, handle, token))
                     continue
                 stdout, _stderr = process.communicate()
                 handle.close()
+                if token is not None:
+                    token.release()
                 if process.returncode != 0:
-                    for _other_id, other, other_handle in running:
+                    for _other_id, other, other_handle, other_token in running:
                         if other.pid == process.pid:
                             continue
                         if other.poll() is None:
                             other.terminate()
                             other.wait(timeout=30)
                         other_handle.close()
+                        if other_token is not None:
+                            other_token.release()
                     raise RuntimeError(
                         f"audit shard failed phase={phase_id} shard={shard_id} "
                         f"returncode={process.returncode} stdout={stdout[-1000:]}"
@@ -1211,7 +1482,7 @@ class _SubprocessAuditExecutor:
             running = survivors
             if progressed:
                 heartbeat()
-            elif running:
+            elif running or missing:
                 time.sleep(0.25)
         merged = merge_validated_audit_shards(
             registry,
@@ -1275,6 +1546,7 @@ def _load_growth_checkpoint(
             str(manifest.get("source_sha", "")) == _git_sha(),
             str(manifest.get("config_sha256", ""))
             == sha256_file(Path(str(config["config_path"]))),
+            str(manifest.get("runtime_sha256", "")) == _runtime_sha256(),
             str(manifest.get("input_sha256", "")) == str(input_sha256),
             str(manifest.get("patch_id", "")) == str(patch_id),
             str(manifest.get("variant", "")) == str(variant),
@@ -1349,6 +1621,7 @@ def _write_growth_checkpoint(
             "schema_version": 1,
             "source_sha": _git_sha(),
             "config_sha256": sha256_file(Path(str(config["config_path"]))),
+            "runtime_sha256": _runtime_sha256(),
             "input_sha256": str(input_sha256),
             "patch_id": str(patch_id),
             "variant": str(variant),
@@ -1544,6 +1817,175 @@ def _strong_reference_primary(
     }
 
 
+def _patch_completion_artifacts(directory: Path) -> tuple[dict[str, Any], ...]:
+    operational_names = {
+        "completion_manifest.json",
+        "heartbeat.json",
+        "progress.json",
+        "worker.log",
+    }
+    paths = [
+        path
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.name not in operational_names
+    ]
+    return tuple(
+        {
+            "path": path.relative_to(directory).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in paths
+    )
+
+
+def _write_patch_completion_manifest(
+    directory: Path,
+    *,
+    config: Mapping[str, Any],
+    patch_id: str,
+    variant: str,
+    input_sha256: str,
+) -> dict[str, Any]:
+    artifacts = _patch_completion_artifacts(directory)
+    if "report.json" not in {str(record["path"]) for record in artifacts}:
+        raise RuntimeError("patch completion requires report.json")
+    manifest = {
+        "schema_version": 1,
+        "source_sha": _git_sha(),
+        "config_sha256": sha256_file(Path(str(config["config_path"]))),
+        "runtime_sha256": _runtime_sha256(),
+        "input_sha256": str(input_sha256),
+        "patch_id": str(patch_id),
+        "variant": str(variant),
+        "artifacts": artifacts,
+    }
+    _write_json(directory / "completion_manifest.json", manifest)
+    return manifest
+
+
+def _load_validated_patch_result(
+    directory: Path,
+    *,
+    config: Mapping[str, Any],
+    patch_id: str,
+    variant: str,
+    input_sha256: str,
+) -> dict[str, Any] | None:
+    manifest_path = directory / "completion_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = _read_json(manifest_path)
+        checks = (
+            int(manifest.get("schema_version", 0)) == 1,
+            str(manifest.get("source_sha", "")) == _git_sha(),
+            str(manifest.get("config_sha256", ""))
+            == sha256_file(Path(str(config["config_path"]))),
+            str(manifest.get("runtime_sha256", "")) == _runtime_sha256(),
+            str(manifest.get("patch_id", "")) == str(patch_id),
+            str(manifest.get("variant", "")) == str(variant),
+            str(manifest.get("input_sha256", "")) == str(input_sha256),
+        )
+        if not all(checks):
+            return None
+        artifacts = tuple(manifest.get("artifacts", ()))
+        if "report.json" not in {str(record.get("path", "")) for record in artifacts}:
+            return None
+        for record in artifacts:
+            relative = Path(str(record["path"]))
+            if relative.is_absolute() or ".." in relative.parts:
+                return None
+            path = directory / relative
+            if (
+                not path.is_file()
+                or path.stat().st_size != int(record["bytes"])
+                or sha256_file(path) != str(record["sha256"])
+            ):
+                return None
+        return _read_json(directory / "report.json")
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _stage_completion_artifacts(directory: Path) -> tuple[dict[str, Any], ...]:
+    completion = directory / "completion_manifest.json"
+    paths = [
+        path
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path != completion
+    ]
+    return tuple(
+        {
+            "path": path.relative_to(directory).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in paths
+    )
+
+
+def _write_stage_completion_manifest(
+    directory: Path,
+    *,
+    config: Mapping[str, Any],
+    stage_name: str,
+) -> dict[str, Any]:
+    artifacts = _stage_completion_artifacts(directory)
+    if "gate.json" not in {str(record["path"]) for record in artifacts}:
+        raise RuntimeError("stage completion requires gate.json")
+    manifest = {
+        "schema_version": 1,
+        "source_sha": _git_sha(),
+        "config_sha256": sha256_file(Path(str(config["config_path"]))),
+        "runtime_sha256": _runtime_sha256(),
+        "stage_name": str(stage_name),
+        "artifacts": artifacts,
+    }
+    _write_json(directory / "completion_manifest.json", manifest)
+    return manifest
+
+
+def _load_validated_stage_result(
+    directory: Path,
+    *,
+    config: Mapping[str, Any],
+    stage_name: str,
+) -> dict[str, Any] | None:
+    manifest_path = directory / "completion_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = _read_json(manifest_path)
+        checks = (
+            int(manifest.get("schema_version", 0)) == 1,
+            str(manifest.get("source_sha", "")) == _git_sha(),
+            str(manifest.get("config_sha256", ""))
+            == sha256_file(Path(str(config["config_path"]))),
+            str(manifest.get("runtime_sha256", "")) == _runtime_sha256(),
+            str(manifest.get("stage_name", "")) == str(stage_name),
+        )
+        if not all(checks):
+            return None
+        artifacts = tuple(manifest.get("artifacts", ()))
+        if "gate.json" not in {str(record.get("path", "")) for record in artifacts}:
+            return None
+        for record in artifacts:
+            relative = Path(str(record["path"]))
+            if relative.is_absolute() or ".." in relative.parts:
+                return None
+            path = directory / relative
+            if (
+                not path.is_file()
+                or path.stat().st_size != int(record["bytes"])
+                or sha256_file(path) != str(record["sha256"])
+            ):
+                return None
+        return _read_json(directory / "gate.json")
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
 def _execute_patch(
     config: Mapping[str, Any],
     project_root: Path,
@@ -1552,8 +1994,7 @@ def _execute_patch(
     variant: str,
     directory: Path,
 ) -> dict[str, Any]:
-    if (directory / "report.json").is_file():
-        return _read_json(directory / "report.json")
+    patch_started = time.time()
     directory.mkdir(parents=True, exist_ok=True)
     legacy_config = legacy.load_config(_source_paths(config, project_root)["legacy_config"])
     if patch_id == "patch_12":
@@ -1570,22 +2011,33 @@ def _execute_patch(
         assignments = pd.read_parquet(meso_input / "meso_assignments.parquet")
     else:
         tasks, _legacy_edges, candidate_frame, assignments = legacy._patch_inputs(legacy_config, project_root, patch_id)
+    if patch_id not in {"patch_12", "meso_512"}:
+        retry_patch = _source_paths(config, project_root)["retry4"] / "01_patch_ablations" / patch_id
+        task_edges = pd.read_parquet(retry_patch / "E3_dynamic_insertion_task_edges.parquet")
+    beam, root_count, seed, consensus, leave_one_out, refine_graph = _variant_spec(variant)
+    if refine_graph:
+        task_edges = _refine_task_graph(tasks, task_edges)
+    growth_input_sha = _growth_checkpoint_input_sha256(
+        tasks, task_edges, candidate_frame, assignments
+    )
+    existing = _load_validated_patch_result(
+        directory,
+        config=config,
+        patch_id=patch_id,
+        variant=variant,
+        input_sha256=growth_input_sha,
+    )
+    if existing is not None:
+        return existing
     candidates = legacy._candidates_from_frame(candidate_frame)
     environment = legacy._EndpointOnlyForwardAdapter(
         load_environment(project_root, _source_paths(config, project_root)["robot_config"])
     )
-    if patch_id not in {"patch_12", "meso_512"}:
-        retry_patch = _source_paths(config, project_root)["retry4"] / "01_patch_ablations" / patch_id
-        task_edges = pd.read_parquet(retry_patch / "E3_dynamic_insertion_task_edges.parquet")
-    nodes, continuation = legacy._segmented_continuation(environment, tasks, task_edges)
-    beam, root_count, seed, consensus, leave_one_out, refine_graph = _variant_spec(variant)
-    if refine_graph:
-        task_edges = _refine_task_graph(tasks, task_edges)
-        nodes, continuation = legacy._segmented_continuation(environment, tasks, task_edges)
-    growth_input_sha = _growth_checkpoint_input_sha256(
-        tasks, task_edges, candidate_frame, assignments
+    nodes, continuation = legacy._segmented_continuation(
+        environment, tasks, task_edges
     )
-    started = time.time()
+    input_ready = time.time()
+    growth_started = time.time()
     checkpoint = _load_growth_checkpoint(
         directory,
         tasks=tasks,
@@ -1632,6 +2084,16 @@ def _execute_patch(
     else:
         growth, root_report, growth_frames = checkpoint
         growth_checkpoint_resumed = True
+    growth_finished = time.time()
+    token_pool = (
+        _AuditWorkerTokenPool(
+            Path(str(config["_audit_token_pool"])),
+            capacity=int(config["_audit_token_count"]),
+        )
+        if config.get("_audit_token_pool")
+        else None
+    )
+    repair_started = time.time()
     repaired = repair_rooted_section_atlas(
         growth,
         continuation,
@@ -1646,13 +2108,16 @@ def _execute_patch(
             task_edges=task_edges,
             patch_directory=directory,
             shard_count=int(config.get("_audit_shards_per_patch", 1)),
+            token_pool=token_pool,
         ),
     )
+    repair_finished = time.time()
     strong_reference_required = bool(
         int(tasks["source_parent_node_id"].nunique()) <= 64
         and patch_id in set(map(str, config["diagnostic_patch_ids"]))
         and variant in {"baseline", "main_K1_R5"}
     )
+    strong_reference_started = time.time()
     strong_reference = (
         _strong_reference_primary(repaired, tasks, task_edges, config["search_stability"])
         if strong_reference_required
@@ -1662,18 +2127,19 @@ def _execute_patch(
             "reason": "strong_reference_registered_only_for_small_patches",
         }
     )
+    strong_reference_finished = time.time()
+    artifact_write_started = time.time()
     directory.mkdir(parents=True, exist_ok=True)
     for name, frame in growth_frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     for name, frame in repaired.frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     _write_json(directory / "strong_reference.json", strong_reference)
+    artifact_write_finished = time.time()
     hypothesis = growth_frames["section_hypotheses"]
     multiplicity = hypothesis.groupby(["chart_id", "task_node_id"]).size()
     alternative_ratio = float((multiplicity > 1).mean()) if len(multiplicity) else 0.0
     executions = repaired.frames["audit_v2_executions"]
-    repeat_values = pd.to_numeric(executions["repeat_gap_deg"], errors="coerce")
-    repeat_values = repeat_values[np.isfinite(repeat_values)]
     optimization = repaired.frames["primary_optimization"]
     schedule_classification = executions.groupby("schedule_id")["classification"].agg(
         lambda values: tuple(sorted(set(map(str, values))))
@@ -1715,6 +2181,7 @@ def _execute_patch(
         "selected_stitch_component": list(repaired.selected_stitch_component),
         "geometry_gate": repaired.geometry_gate,
         "solver_gate": repaired.solver_gate,
+        "repeat_gate": repaired.repeat_gate,
         "certificate_gate": repaired.certificate_gate,
         "induced_edge_count": repaired.induced_edge_count,
         "audited_edge_count": repaired.audited_edge_count,
@@ -1728,7 +2195,8 @@ def _execute_patch(
         "strong_reference_gate": bool(strong_reference.get("gate_pass", False)),
         "geometry_p95_deg": repaired.diagnostic.geometry_metrics["p95_deg"],
         "geometry_max_deg": repaired.diagnostic.geometry_metrics["max_deg"],
-        "repeat_p95_deg": float(np.percentile(repeat_values, 95)) if len(repeat_values) else None,
+        "repeat_p95_deg": repaired.diagnostic.repeat_metrics["p95_deg"],
+        "repeat_missing_count": repaired.diagnostic.repeat_metrics["missing_count"],
         "persistent_numerical_count": repaired.diagnostic.solver_metrics["persistent_numerical_count"],
         "first_pass_solver_failure_count": int(first_pass_failure_count),
         "first_pass_solver_failure_is_diagnostic_only": True,
@@ -1749,7 +2217,15 @@ def _execute_patch(
             float(optimization.get("beta_p95_deg_to_selected", pd.Series([0.0])).max())
             if len(optimization) else math.inf
         ),
-        "runtime_s": time.time() - started,
+        "runtime_s": time.time() - patch_started,
+        "phase_runtime_s": {
+            "input_load": input_ready - patch_started,
+            "root_growth_or_resume": growth_finished - growth_started,
+            "atlas_repair_and_audits": repair_finished - repair_started,
+            "strong_reference": strong_reference_finished
+            - strong_reference_started,
+            "artifact_write": artifact_write_finished - artifact_write_started,
+        },
         "growth_checkpoint_resumed": growth_checkpoint_resumed,
         **root_report,
     }
@@ -1759,6 +2235,7 @@ def _execute_patch(
         and report["largest_stitched_component_ratio"] >= float(mechanism["largest_stitched_component_min"])
         and report["geometry_gate"]
         and report["solver_gate"]
+        and report["repeat_gate"]
         and report["certificate_gate"]
         and abs(report["edge_completeness_ratio"] - 1.0) <= 1e-12
         and abs(report["cycle_coverage_ratio"] - 1.0) <= 1e-12
@@ -1768,36 +2245,36 @@ def _execute_patch(
         and report["root_budget_saturated"]
     )
     _write_json(directory / "report.json", report)
+    _write_patch_completion_manifest(
+        directory,
+        config=config,
+        patch_id=patch_id,
+        variant=variant,
+        input_sha256=growth_input_sha,
+    )
     return report
 
 
 def _run_patch_jobs(
     config: Mapping[str, Any], output_root: Path, stage_name: str, jobs: Sequence[tuple[str, str]]
 ) -> None:
-    pending = [
-        (patch_id, variant)
-        for patch_id, variant in jobs
-        if not (
-            output_root
-            / STAGE_DIRS[stage_name]
-            / patch_id
-            / variant
-            / "report.json"
-        ).is_file()
-    ]
+    # A coordinator must recompute the physical input digest before accepting
+    # a completion manifest.  Launching the lightweight coordinator for every
+    # registered job avoids trusting report/manifest presence in the parent.
+    pending = list(jobs)
     if not pending:
         return
     environment = _thread_limited_environment()
     patch_worker_limit = int(config["parallel"]["patch_workers"])
     total_audit_workers = int(config["audit_execution"]["total_shard_workers"])
+    token_pool_directory = (
+        output_root / STAGE_DIRS[stage_name] / "_audit_worker_tokens"
+    )
     while pending:
         batch = pending[:patch_worker_limit]
         del pending[: len(batch)]
-        allocations = _audit_shard_allocations(
-            len(batch), total_workers=total_audit_workers
-        )
         running: list[tuple[str, str, subprocess.Popen[str], Any]] = []
-        for (patch_id, variant), audit_shards in zip(batch, allocations, strict=True):
+        for patch_id, variant in batch:
             directory = output_root / STAGE_DIRS[stage_name] / patch_id / variant
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("a", encoding="utf-8")
@@ -1808,7 +2285,9 @@ def _run_patch_jobs(
                 "--stage", stage_name,
                 "--patch-id", patch_id,
                 "--variant", variant,
-                "--audit-shards-per-patch", str(audit_shards),
+                "--audit-shards-per-patch", str(total_audit_workers),
+                "--audit-token-pool", str(token_pool_directory),
+                "--audit-token-count", str(total_audit_workers),
             ]
             process = subprocess.Popen(
                 command, cwd=SOURCE_ROOT, env=environment,
@@ -1846,7 +2325,7 @@ def _run_patch_jobs(
 
 
 def stage_rooted_baseline(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    _require(output_root, "artifact_diagnostics")
+    _require(config, output_root, "artifact_diagnostics")
     stage = output_root / STAGE_DIRS["rooted_baseline"]
     if config.get("_patch_id"):
         report = _execute_patch(config, project_root, output_root, str(config["_patch_id"]), str(config["_variant"]), stage / str(config["_patch_id"]) / str(config["_variant"]))
@@ -1859,7 +2338,7 @@ def stage_rooted_baseline(config: Mapping[str, Any], project_root: Path, output_
 
 
 def stage_registered_retry(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    baseline = _require(output_root, "rooted_baseline")
+    baseline = _require(config, output_root, "rooted_baseline")
     stage = output_root / STAGE_DIRS["registered_retry"]
     rows = baseline["patch_reports"]
     classifications = []
@@ -1879,7 +2358,7 @@ def stage_registered_retry(config: Mapping[str, Any], project_root: Path, output
 
 
 def stage_patch07_local_audit(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    _require(output_root, "registered_retry")
+    _require(config, output_root, "registered_retry")
     stage = output_root / STAGE_DIRS["patch07_local_audit"]
     base = output_root / STAGE_DIRS["rooted_baseline"] / "patch_07/baseline"
     schedules = pd.read_parquet(base / "audit_v2_schedules.parquet")
@@ -1887,6 +2366,7 @@ def stage_patch07_local_audit(config: Mapping[str, Any], project_root: Path, out
     failures = executions[
         (~executions["solver_success"].astype(bool))
         | pd.to_numeric(executions["geometry_gap_deg"], errors="coerce").gt(float(config["audit_v2"]["geometry_max_deg"]))
+        | pd.to_numeric(executions["repeat_gap_deg"], errors="coerce").gt(float(config["audit_v2"]["repeat_p95_max_deg"]))
     ].copy()
     localized = failures.merge(
         schedules[["schedule_id", "audit_kind", "path_node_ids", "unique_entity_id"]],
@@ -1901,6 +2381,7 @@ def stage_patch07_local_audit(config: Mapping[str, Any], project_root: Path, out
             audit_kind=("audit_kind", "first"),
             any_solver_success=("solver_success", "any"),
             maximum_geometry_gap_deg=("geometry_gap_deg", "max"),
+            maximum_repeat_gap_deg=("repeat_gap_deg", "max"),
             path_node_ids=("path_node_ids", "first"),
         )
         .sort_values("unique_entity_id", kind="stable")
@@ -2035,7 +2516,10 @@ def _frame_stability(
     common = sorted(left_nodes & right_nodes)
     union = left_nodes | right_nodes
     gaps = np.asarray([
-        beta_rms_deg(left.loc[node, BETA_COLUMNS].to_numpy(float), right.loc[node, BETA_COLUMNS].to_numpy(float))
+        beta_rms_deg(
+            left.loc[node, list(BETA_COLUMNS)].to_numpy(float),
+            right.loc[node, list(BETA_COLUMNS)].to_numpy(float),
+        )
         for node in common
     ])
     policy = config["search_stability"]
@@ -2064,7 +2548,7 @@ def _frame_stability(
 
 
 def stage_search_stability(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    _require(output_root, "patch07_local_audit")
+    _require(config, output_root, "patch07_local_audit")
     stage = output_root / STAGE_DIRS["search_stability"]
     if config.get("_patch_id"):
         report = _execute_patch(config, project_root, output_root, str(config["_patch_id"]), str(config["_variant"]), stage / str(config["_patch_id"]) / str(config["_variant"]))
@@ -2136,8 +2620,8 @@ def stage_search_stability(config: Mapping[str, Any], project_root: Path, output
 
 
 def stage_mechanism_gate(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    retry = _require(output_root, "registered_retry")
-    stability = _require(output_root, "search_stability")
+    retry = _require(config, output_root, "registered_retry")
+    stability = _require(config, output_root, "search_stability")
     stage = output_root / STAGE_DIRS["mechanism_gate"]
     selected_variant = str(stability.get("selected_variant", "baseline"))
     if selected_variant == "baseline":
@@ -2169,7 +2653,7 @@ def stage_mechanism_gate(config: Mapping[str, Any], project_root: Path, output_r
 
 
 def stage_reach_round7(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    _require(output_root, "inventory")
+    _require(config, output_root, "inventory")
     stage = output_root / STAGE_DIRS["reach_round7"]
     if (stage / "gate.json").is_file():
         raise FileExistsError(f"Reach Round 7 already sealed: {stage}")
@@ -2314,7 +2798,7 @@ def stage_reach_round7(config: Mapping[str, Any], project_root: Path, output_roo
 
 
 def stage_confirmation(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    mechanism = _require(output_root, "mechanism_gate")
+    mechanism = _require(config, output_root, "mechanism_gate")
     stage = output_root / STAGE_DIRS["confirmation"]
     if not mechanism.get("gate_pass", False):
         return write_scientific_skip(stage, "four_patch_mechanism_gate_failed")
@@ -2370,7 +2854,7 @@ def stage_meso_bridge(
 ) -> dict[str, Any]:
     """Bridge 64-cell evidence to 5k with a sealed connected 512-cell domain."""
 
-    confirmation = _require(output_root, "confirmation")
+    confirmation = _require(config, output_root, "confirmation")
     stage = output_root / STAGE_DIRS["meso_bridge"]
     if not confirmation.get("gate_pass", False):
         return write_scientific_skip(stage, "fresh_confirmation_gate_failed")
@@ -2631,20 +3115,37 @@ def stage_summary(config: Mapping[str, Any], project_root: Path, output_root: Pa
         if path.is_file() and not path.is_relative_to(stage)
     ]
     _write_json(stage / "artifact_manifest.json", {"schema_version": 1, "artifact_count": len(artifacts), "artifacts": artifacts})
+    scientific_gate_pass = bool(
+        gates.get("mechanism_gate", {}).get("gate_pass", False)
+        and gates.get("reach_round7", {}).get("gate_pass", False)
+        and gates.get("confirmation", {}).get("gate_pass", False)
+        and gates.get("meso_bridge", {}).get("gate_pass", False)
+    )
+    deployment_authorized = bool(
+        gates.get("confirmation", {}).get("gate_pass", False)
+        and gates.get("meso_bridge", {}).get("gate_pass", False)
+    )
     report = {
         "stage_gates": gates,
         "mechanism_gate": bool(gates.get("mechanism_gate", {}).get("gate_pass", False)),
         "reach_round7_gate": bool(gates.get("reach_round7", {}).get("gate_pass", False)),
         "confirmation_gate": bool(gates.get("confirmation", {}).get("gate_pass", False)),
         "meso_bridge_gate": bool(gates.get("meso_bridge", {}).get("gate_pass", False)),
-        "v14_3_authorized": bool(
-            gates.get("confirmation", {}).get("gate_pass", False)
-            and gates.get("meso_bridge", {}).get("gate_pass", False)
-        ),
+        "operational_completion": True,
+        "artifact_manifest_complete": bool(artifacts),
+        "scientific_gate_pass": scientific_gate_pass,
+        "deployment_authorized": deployment_authorized,
+        "v14_3_authorized": deployment_authorized,
         "formal_200k_generation_authorized": False,
     }
     _write_json(stage / "summary_report.json", report)
-    return _gate(stage / "gate.json", {"manifest_nonempty": bool(artifacts)}, **report)
+    payload = {
+        "gate_pass": scientific_gate_pass,
+        "gate_semantics": "scientific",
+        **report,
+    }
+    _write_json(stage / "gate.json", payload)
+    return payload
 
 
 STAGE_RUNNERS = {
@@ -2671,6 +3172,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--patch-id")
     parser.add_argument("--variant")
     parser.add_argument("--audit-shards-per-patch", type=int)
+    parser.add_argument("--audit-token-pool")
+    parser.add_argument("--audit-token-count", type=int)
     parser.add_argument("--audit-shard-bundle")
     parser.add_argument("--audit-shard-id", type=int)
     return parser
@@ -2702,11 +3205,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if int(config["_audit_shards_per_patch"]) < 1:
         raise SystemExit("--audit-shards-per-patch must be positive")
+    config["_audit_token_pool"] = args.audit_token_pool
+    config["_audit_token_count"] = (
+        int(args.audit_token_count)
+        if args.audit_token_count is not None
+        else int(config["audit_execution"]["total_shard_workers"])
+    )
+    if int(config["_audit_token_count"]) < 1:
+        raise SystemExit("--audit-token-count must be positive")
     output_root = Path(args.output_root).resolve() if args.output_root else project_root / str(config["output_root"])
     output_root.mkdir(parents=True, exist_ok=True)
     if args.stage != "inventory":
         _validate_resume_fixed_point(config, output_root)
+    top_level_stage = args.patch_id is None
+    stage_directory = output_root / STAGE_DIRS[args.stage]
+    if top_level_stage:
+        completed = _load_validated_stage_result(
+            stage_directory, config=config, stage_name=args.stage
+        )
+        if completed is not None:
+            print(json.dumps(_strict(completed), ensure_ascii=False, sort_keys=True))
+            return 0
+        if (stage_directory / "completion_manifest.json").exists() or (
+            stage_directory / "gate.json"
+        ).exists():
+            raise RuntimeError(
+                f"stage has an invalid or incomplete completion closure: {stage_directory}"
+            )
     result = STAGE_RUNNERS[args.stage](config, project_root, output_root)
+    if top_level_stage:
+        _write_stage_completion_manifest(
+            stage_directory, config=config, stage_name=args.stage
+        )
     print(json.dumps(_strict(result), ensure_ascii=False, sort_keys=True))
     return 0
 

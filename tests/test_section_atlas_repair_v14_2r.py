@@ -101,8 +101,97 @@ def test_missing_solver_execution_is_not_a_geometry_failure_but_blocks_certifica
 
     assert audit.geometry_gate is True
     assert audit.solver_gate is False
+    assert audit.repeat_gate is True
     assert audit.certificate_gate is False
     assert audit.geometry_metrics["missing_count"] == 1
+
+
+def test_repeat_only_failure_blocks_chart_and_certificate() -> None:
+    growth = _growth((0.0,))
+    audit = diagnose_rooted_section_artifacts(
+        growth,
+        schedules=[
+            {
+                "schedule_id": "edge_0_1",
+                "unique_entity_id": "edge:0:1",
+                "chart_id": "chart_000",
+                "audit_kind": "edge",
+                "path_node_ids": [0, 1],
+                "primary_usage": True,
+            }
+        ],
+        executions=[
+            {
+                "schedule_id": "edge_0_1",
+                "direction": direction,
+                "repeat_index": repeat_index,
+                "solver_success": True,
+                "residual_mm": 0.0,
+                "geometry_gap_deg": 0.0,
+                "repeat_gap_deg": 0.3,
+                "classification": "connected",
+            }
+            for direction in ("forward", "reverse")
+            for repeat_index in range(3)
+        ],
+        policy=AuditV2Policy(repeats_per_direction=3),
+    )
+
+    assert audit.geometry_gate is True
+    assert audit.solver_gate is True
+    assert audit.repeat_gate is False
+    assert audit.certificate_gate is False
+    assert audit.chart_gate_by_id["chart_000"] is False
+    assert audit.repeat_metrics["p95_deg"] == 0.3
+
+
+def test_repeat_only_failure_triggers_fragment_reaudit() -> None:
+    growth = _growth((0.0,))
+    phases: list[str] = []
+
+    def executor(
+        local_growth,
+        schedules,
+        continuation,
+        audit_policy,
+        retry_continuation,
+        phase_id,
+    ):
+        phases.append(phase_id)
+        rows = execute_audit_schedules(
+            local_growth,
+            schedules,
+            continuation,
+            audit_policy,
+            retry_continuation=retry_continuation,
+        )
+        if phase_id == "chart_initial":
+            failed_schedules = set(
+                schedules.loc[schedules["audit_kind"].eq("edge"), "schedule_id"]
+                .astype(str)
+                .head(2)
+            )
+            rows.loc[
+                rows["schedule_id"].astype(str).isin(failed_schedules),
+                "repeat_gap_deg",
+            ] = 0.3
+        return rows
+
+    repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_repeat_failure",
+        method="S4",
+        policy=AtlasRepairPolicy(
+            audit=AuditV2Policy(repeats_per_direction=3),
+            minimum_chart_cells=2,
+        ),
+        schedule_executor=executor,
+    )
+
+    assert phases[0] == "chart_initial"
+    assert "fragment_reaudit" in phases
+    assert phases[-1] == "primary_certificate"
 
 
 def test_two_nonstitchable_full_charts_choose_one_static_singleton_primary() -> None:
@@ -406,6 +495,13 @@ def test_repeat_audit_uses_registered_nonzero_source_perturbations() -> None:
     executions = repaired.frames["audit_v2_executions"]
     assert executions.loc[executions["repeat_index"].eq(0), "repeat_perturbation_l2_rad"].eq(0.0).all()
     assert executions.loc[executions["repeat_index"].gt(0), "repeat_perturbation_l2_rad"].gt(0.0).all()
+    assert set(executions["registered_solver_chain"]) == {
+        "predictor>bounded_ls"
+    }
+    executed = executions["executed_solver_chain"].astype(str)
+    assert set(executed) <= {"", "predictor>bounded_ls"}
+    assert (executed == "predictor>bounded_ls").any()
+    assert executions["solver_chain_sha256"].astype(str).str.len().eq(64).all()
 
 
 def test_phase_executor_preserves_serial_audit_semantics() -> None:

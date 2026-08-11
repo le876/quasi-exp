@@ -5,7 +5,7 @@ import pytest
 
 from quasi_exp.model.quasi_static import QuasiStaticModel
 from quasi_exp.opt import tension_labeler
-from tests.test_segmented_tension_solver import _toy_cfg, _toy_inputs
+from .test_segmented_tension_solver import _toy_cfg, _toy_inputs
 
 
 def test_segmented_canonical_labeler_does_not_call_pso(monkeypatch: pytest.MonkeyPatch) -> None:

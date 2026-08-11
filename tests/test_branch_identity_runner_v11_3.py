@@ -63,7 +63,7 @@ def test_candidate_graph_builds_at_least_eight_distinct_corrected_nodes() -> Non
     import numpy as np
 
     from quasi_exp.teacher.canonical import TeacherPolicy, TeacherVariant
-    from test_branch_identity_v11_3 import LinearForwardEnvironment
+    from .test_branch_identity_v11_3 import LinearForwardEnvironment
 
     runner = _runner_module()
     count = 6

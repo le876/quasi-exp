@@ -36,7 +36,11 @@ def test_patch_benchmark_separates_performance_from_scientific_gate(
     config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
     _write_json(
         tmp_path / "00_inventory/source_fixed_point.json",
-        {"source_sha": "source-a", "config_sha256": config_sha},
+        {
+            "source_sha": "source-a",
+            "config_sha256": config_sha,
+            "runtime_sha256": "runtime-a",
+        },
     )
     _write_json(
         tmp_path / "03_rooted_baseline/patch_07/baseline/report.json",
@@ -47,12 +51,38 @@ def test_patch_benchmark_separates_performance_from_scientific_gate(
             "gate_pass": False,
         },
     )
+    report_path = tmp_path / "03_rooted_baseline/patch_07/baseline/report.json"
+    _write_json(
+        tmp_path
+        / "03_rooted_baseline/patch_07/baseline/completion_manifest.json",
+        {
+            "source_sha": "source-a",
+            "config_sha256": config_sha,
+            "runtime_sha256": "runtime-a",
+            "artifacts": [
+                {
+                    "path": "report.json",
+                    "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                }
+            ],
+        },
+    )
     for phase in ("chart_initial", "primary_certificate"):
         _write_json(
             tmp_path
             / f"03_rooted_baseline/patch_07/baseline/_audit_checkpoints/{phase}/gate.json",
             {"gate_pass": True, "shard_count": 12},
         )
+        for shard_id in range(12):
+            _write_json(
+                tmp_path
+                / f"03_rooted_baseline/patch_07/baseline/_audit_checkpoints/{phase}/shard_{shard_id:02d}/progress.json",
+                {
+                    "status": "complete",
+                    "started_at_unix_s": 100.0 + shard_id * 0.01,
+                    "finished_at_unix_s": 200.0 + shard_id * 0.01,
+                },
+            )
 
     report = module.build_report(
         output_root=tmp_path,
@@ -64,6 +94,8 @@ def test_patch_benchmark_separates_performance_from_scientific_gate(
     assert report["runtime_per_parent_s"] == 100.0
     assert report["scientific_patch_gate"] is False
     assert report["scientific_patch_gate_is_not_a_performance_prerequisite"] is True
+    assert report["maximum_observed_audit_concurrency"] == 12
+    assert report["checks"]["twelve_audit_workers_observed"] is True
 
 
 def test_patch_benchmark_fails_when_a_required_phase_is_absent(
@@ -79,7 +111,11 @@ def test_patch_benchmark_fails_when_a_required_phase_is_absent(
     config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
     _write_json(
         tmp_path / "00_inventory/source_fixed_point.json",
-        {"source_sha": "source-a", "config_sha256": config_sha},
+        {
+            "source_sha": "source-a",
+            "config_sha256": config_sha,
+            "runtime_sha256": "runtime-a",
+        },
     )
     _write_json(
         tmp_path / "03_rooted_baseline/patch_07/baseline/report.json",
@@ -88,6 +124,22 @@ def test_patch_benchmark_fails_when_a_required_phase_is_absent(
             "variant": "baseline",
             "runtime_s": 100.0,
             "gate_pass": True,
+        },
+    )
+    report_path = tmp_path / "03_rooted_baseline/patch_07/baseline/report.json"
+    _write_json(
+        tmp_path
+        / "03_rooted_baseline/patch_07/baseline/completion_manifest.json",
+        {
+            "source_sha": "source-a",
+            "config_sha256": config_sha,
+            "runtime_sha256": "runtime-a",
+            "artifacts": [
+                {
+                    "path": "report.json",
+                    "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                }
+            ],
         },
     )
     _write_json(

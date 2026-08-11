@@ -43,11 +43,27 @@ def _tree_clean() -> bool:
     ).strip()
 
 
+def _maximum_interval_overlap(rows: list[dict[str, Any]]) -> int:
+    events: list[tuple[float, int]] = []
+    for row in rows:
+        start = float(row.get("started_at_unix_s", 0.0))
+        finish = float(row.get("finished_at_unix_s", 0.0))
+        if start > 0.0 and finish >= start:
+            events.extend(((start, 1), (finish, -1)))
+    active = 0
+    maximum = 0
+    for _timestamp, delta in sorted(events):
+        active += delta
+        maximum = max(maximum, active)
+    return maximum
+
+
 def build_report(
     *, output_root: Path, config_path: Path, runtime_per_parent_max_s: float | None
 ) -> dict[str, Any]:
     patch_directory = output_root / "03_rooted_baseline/patch_07/baseline"
     patch_report = _read_json(patch_directory / "report.json")
+    patch_completion = _read_json(patch_directory / "completion_manifest.json")
     fixed = _read_json(output_root / "00_inventory/source_fixed_point.json")
     checkpoint_root = patch_directory / "_audit_checkpoints"
     phase_gates = {
@@ -55,6 +71,17 @@ def build_report(
         for path in sorted(checkpoint_root.glob("*/gate.json"))
     }
     required_phases = {"chart_initial", "primary_certificate"}
+    phase_progress = {
+        phase: [
+            _read_json(path)
+            for path in sorted((checkpoint_root / phase).glob("shard_*/progress.json"))
+        ]
+        for phase in required_phases
+    }
+    maximum_audit_concurrency = max(
+        (_maximum_interval_overlap(rows) for rows in phase_progress.values()),
+        default=0,
+    )
     parent_count = 64
     runtime_s = float(patch_report["runtime_s"])
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -73,6 +100,23 @@ def build_report(
         "source_sha": str(fixed.get("source_sha", "")) == _git_sha(),
         "config_sha256": str(fixed.get("config_sha256", ""))
         == _sha256(config_path),
+        "runtime_closure_registered": bool(str(fixed.get("runtime_sha256", ""))),
+        "patch_completion_source": str(patch_completion.get("source_sha", ""))
+        == _git_sha(),
+        "patch_completion_config": str(
+            patch_completion.get("config_sha256", "")
+        )
+        == _sha256(config_path),
+        "patch_completion_runtime": str(
+            patch_completion.get("runtime_sha256", "")
+        )
+        == str(fixed.get("runtime_sha256", "")),
+        "patch_report_hash": any(
+            str(record.get("path", "")) == "report.json"
+            and str(record.get("sha256", ""))
+            == _sha256(patch_directory / "report.json")
+            for record in patch_completion.get("artifacts", ())
+        ),
         "patch_identity": str(patch_report.get("patch_id", "")) == "patch_07",
         "baseline_identity": str(patch_report.get("variant", "")) == "baseline",
         "required_audit_phases": required_phases <= set(phase_gates),
@@ -80,6 +124,12 @@ def build_report(
         and all(bool(gate.get("gate_pass", False)) for gate in phase_gates.values()),
         "twelve_shards_per_phase": bool(phase_gates)
         and all(int(gate.get("shard_count", 0)) == total_shards == 12 for gate in phase_gates.values()),
+        "twelve_audit_workers_observed": all(
+            len(rows) == total_shards
+            and all(str(row.get("status", "")) == "complete" for row in rows)
+            and _maximum_interval_overlap(rows) == total_shards == 12
+            for rows in phase_progress.values()
+        ),
         "runtime_per_parent": runtime_s / parent_count
         <= runtime_limit,
     }
@@ -96,6 +146,8 @@ def build_report(
         "runtime_per_parent_s": runtime_s / parent_count,
         "runtime_per_parent_max_s": runtime_limit,
         "phase_gates": phase_gates,
+        "phase_progress": phase_progress,
+        "maximum_observed_audit_concurrency": maximum_audit_concurrency,
         "scientific_patch_gate": bool(patch_report.get("gate_pass", False)),
         "scientific_patch_gate_is_not_a_performance_prerequisite": True,
         "patch_report_path": str(patch_directory / "report.json"),

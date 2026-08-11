@@ -1,11 +1,12 @@
 schema_version: 1
 experiment_id: bacra_v14_2r_stitched_atlas
-output_root: runs/bacra_v14_2r_stitched_atlas
+output_root: runs/bacra_v14_2r_stitched_atlas_retry4
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
-  performance_protocol: docs/21-BACRA-V14.2R性能修复与retry2协议.md
+  performance_protocol: docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
+  scientific_closure_protocol: docs/23-BACRA-V14.2R科学Gate与closure修复协议.md
   legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
   v14_2_root: runs/bacra_v14_2_section_first_atlas
@@ -19,6 +20,7 @@ audit_execution:
   total_shard_workers: 12
   checkpoint_resume: true
   heartbeat_every_completed_shards: 1
+  progress_every_schedules: 256
   patch_benchmark_runtime_per_parent_max_s: 120.0
 
 diagnostic_patch_ids: [patch_00, patch_03, patch_07, patch_09]

@@ -417,6 +417,7 @@ def repair_rooted_section_atlas(
     retry_continuation: Callable[..., ContinuationOutcome] | None = None,
     schedule_executor: Callable[..., pd.DataFrame] | None = None,
     screening_first: bool = False,
+    canonical_root_priority: Sequence[CandidateKey] = (),
 ) -> RepairedSectionAtlas:
     """Freshly audit, qualify, stitch, and select one deployable primary atlas."""
 
@@ -483,17 +484,25 @@ def repair_rooted_section_atlas(
         >= active.minimum_chart_spread_mm
         and initial.chart_gate_by_id.get(chart_id, False)
     )
-    qualified = _remove_dominated_charts(chart_by_id, qualified, active)
+    root_priority = tuple(
+        dict.fromkeys((int(key[0]), str(key[1])) for key in canonical_root_priority)
+    )
+    qualified = _remove_dominated_charts(
+        chart_by_id, qualified, active, canonical_root_priority=root_priority
+    )
     stitch_rows, stitch_edges = _qualify_stitches(
         chart_by_id, qualified, active, working_growth.task_nodes, continuation
     )
     components = _chart_components(qualified, stitch_edges)
-    selected_component = _select_component(components, chart_by_id)
+    selected_component = _select_component(
+        components, chart_by_id, canonical_root_priority=root_priority
+    )
     primary_chart, primary_beta, primary_optimization = _materialize_primary(
         selected_component,
         chart_by_id,
         working_growth.task_nodes,
         stitch_edges,
+        canonical_root_priority=root_priority,
     )
     pre_abstention_nodes = set(primary_chart)
     all_nodes = {node.node_id for node in working_growth.task_nodes}
@@ -1279,7 +1288,18 @@ def _remove_dominated_charts(
     charts: Mapping[str, RootedSectionChart],
     qualified: Sequence[str],
     policy: AtlasRepairPolicy,
+    *,
+    canonical_root_priority: Sequence[CandidateKey] = (),
 ) -> tuple[str, ...]:
+    rank_by_root = {
+        (int(key[0]), str(key[1])): index
+        for index, key in enumerate(canonical_root_priority)
+    }
+
+    def stable_rank(chart_id: str) -> tuple[int, CandidateKey]:
+        root_key = charts[chart_id].root_key
+        return rank_by_root.get(root_key, len(rank_by_root)), root_key
+
     retained = set(qualified)
     for left_id in sorted(qualified):
         if left_id not in retained:
@@ -1303,7 +1323,7 @@ def _remove_dominated_charts(
                 and float(np.percentile(gaps, 95)) <= policy.stitch_p95_max_deg + 1e-12
                 and float(np.max(gaps)) <= policy.stitch_max_deg + 1e-12
             ):
-                if len(left_nodes) < len(right_nodes) or left_id > right_id:
+                if len(left_nodes) < len(right_nodes) or stable_rank(left_id) > stable_rank(right_id):
                     retained.remove(left_id)
                     break
     return tuple(sorted(retained))
@@ -1633,16 +1653,31 @@ def _chart_components(
 
 
 def _select_component(
-    components: Sequence[tuple[str, ...]], charts: Mapping[str, RootedSectionChart]
+    components: Sequence[tuple[str, ...]],
+    charts: Mapping[str, RootedSectionChart],
+    *,
+    canonical_root_priority: Sequence[CandidateKey] = (),
 ) -> tuple[str, ...]:
     if not components:
         return ()
+    rank_by_root = {
+        (int(key[0]), str(key[1])): index
+        for index, key in enumerate(canonical_root_priority)
+    }
+
+    def component_signature(component: Sequence[str]) -> tuple[CandidateKey, ...]:
+        return tuple(sorted(charts[chart].root_key for chart in component))
+
     return min(
         components,
         key=lambda component: (
             -len(set().union(*(set(charts[chart].selected_by_node) for chart in component))),
             len(component),
-            component,
+            min(
+                (rank_by_root.get(charts[chart].root_key, len(rank_by_root)) for chart in component),
+                default=len(rank_by_root),
+            ),
+            component_signature(component),
         ),
     )
 
@@ -1652,11 +1687,22 @@ def _materialize_primary(
     charts: Mapping[str, RootedSectionChart],
     task_nodes: Sequence[AtlasTaskNode],
     stitch_edges: Sequence[tuple[str, str]],
+    *,
+    canonical_root_priority: Sequence[CandidateKey] = (),
 ) -> tuple[dict[int, str], dict[int, np.ndarray], pd.DataFrame]:
     if not component:
         return {}, {}, pd.DataFrame()
+    rank_by_root = {
+        (int(key[0]), str(key[1])): index
+        for index, key in enumerate(canonical_root_priority)
+    }
     ranked = sorted(
-        component, key=lambda chart_id: (-len(charts[chart_id].selected_by_node), chart_id)
+        component,
+        key=lambda chart_id: (
+            -len(charts[chart_id].selected_by_node),
+            rank_by_root.get(charts[chart_id].root_key, len(rank_by_root)),
+            charts[chart_id].root_key,
+        ),
     )
     available: dict[int, tuple[str, ...]] = {
         node: tuple(chart for chart in ranked if node in charts[chart].selected_by_node)

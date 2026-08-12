@@ -106,6 +106,40 @@ def test_missing_solver_execution_is_not_a_geometry_failure_but_blocks_certifica
     assert audit.geometry_metrics["missing_count"] == 1
 
 
+def test_canonical_root_priority_is_invariant_to_chart_order() -> None:
+    first = _growth((0.0, 8.0))
+    second = build_section_first_atlas(
+        first.task_nodes,
+        tuple(
+            chart.selected_by_node[0].candidate
+            for chart in reversed(first.charts)
+        ),
+        _affine,
+        root_keys=tuple(chart.root_key for chart in reversed(first.charts)),
+        policy=RootedSectionPolicy(root_count=2, beam_width=2, maximum_growth_waves=16),
+    )
+    anchor = first.charts[0].root_key
+    left = repair_rooted_section_atlas(
+        first,
+        _affine,
+        patch_id="left",
+        method="anchor",
+        canonical_root_priority=(anchor,),
+    )
+    right = repair_rooted_section_atlas(
+        second,
+        _affine,
+        patch_id="right",
+        method="anchor",
+        canonical_root_priority=(anchor,),
+    )
+    comparison = compare_stitched_primary_atlases(left, right)
+
+    assert left.growth.charts[int(left.selected_stitch_component[0].split("_")[-1])].root_key == anchor
+    assert right.growth.charts[int(right.selected_stitch_component[0].split("_")[-1])].root_key == anchor
+    assert comparison.gate_pass is True
+
+
 def test_repeat_only_failure_blocks_chart_and_certificate() -> None:
     growth = _growth((0.0,))
     audit = diagnose_rooted_section_artifacts(

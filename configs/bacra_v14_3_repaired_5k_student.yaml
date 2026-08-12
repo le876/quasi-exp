@@ -5,8 +5,8 @@ robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
-  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry4
-  v14_2r_config: configs/bacra_v14_2r_stitched_atlas.yaml
+  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry5
+  v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry5.yaml
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
   retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4

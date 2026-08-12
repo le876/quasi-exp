@@ -765,6 +765,13 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
     environment = _environment(project_root, config)
     _nodes, continuation = _segmented_continuation(environment, tasks, edges)
     pilot = config["pilot"]
+    registered_roots = pd.read_parquet(
+        output_root / STAGE_DIRS["pilot_registry"] / "root_registry.parquet"
+    ).sort_values("root_index", kind="stable")
+    canonical_root_priority = tuple(
+        (int(row.task_node_id), str(row.candidate_id))
+        for row in registered_roots.itertuples(index=False)
+    )
     policy = AtlasRepairPolicy(
         audit=v142r._audit_policy(v142r.load_config(_sources(config, project_root)["v14_2r_config"])),
         minimum_chart_cells=int(pilot["minimum_chart_cells"]),
@@ -796,6 +803,7 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
         "policy": policy,
         "retry_continuation": v142r._registered_retry_adapter(environment, tasks, edges),
         "schedule_executor": audit_executor,
+        "canonical_root_priority": canonical_root_priority,
     }
     repaired = repair_rooted_section_atlas(
         growth,
@@ -873,6 +881,7 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
             retry_continuation=v142r._registered_retry_adapter(environment, tasks, refined_edges),
             schedule_executor=refined_executor,
             screening_first=False,
+            canonical_root_priority=canonical_root_priority,
         )
         if refined.certificate_gate and refined.coverage_ratio >= repaired.coverage_ratio:
             repaired = refined

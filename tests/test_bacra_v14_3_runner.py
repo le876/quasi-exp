@@ -24,6 +24,7 @@ def test_v14_3_freezes_unique_supervision_budget_without_padding() -> None:
     config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
 
     assert config["parallel"]["patch_workers"] == 12
+    assert config["sources"]["v14_2r_root"].endswith("retry5")
     assert config["pilot"]["parent_cell_count"] == 5000
     assert config["pilot"]["task_probe_count"] == 25000
     assert config["pilot"]["root_count"] == 32

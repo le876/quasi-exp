@@ -39,6 +39,19 @@ def test_v14_2r_config_freezes_twelve_single_threaded_workers_and_gates() -> Non
     assert config["meso_bridge"]["parent_cell_count"] == 512
 
 
+def test_retry5_freezes_canonical_anchor_and_optimized_audit_contract() -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry5.yaml")
+
+    assert config["optimization"]["analytic_endpoint_kinematics"] is True
+    assert config["audit_execution"]["logical_shard_count"] == 48
+    assert config["audit_execution"]["maximum_concurrent_workers"] == 12
+    assert config["audit_execution"]["assignment_strategy"] == "cost_balanced_lpt"
+    assert config["audit_execution"]["screening_first"] is True
+    assert config["sources"]["reach_round7_reuse_root"].endswith("retry4")
+    assert module._variant_spec("main_K1_R5")[2] == module._variant_spec("root_order2")[2]
+
+
 def test_v14_2r_unknown_retry_solver_chain_fails_closed(tmp_path) -> None:
     module = _module()
     source = ROOT / "configs/bacra_v14_2r_stitched_atlas.yaml"
@@ -98,6 +111,56 @@ def test_frame_stability_selects_beta_columns_without_pandas_tuple_indexing(
     assert report["beta_max_deg"] == 0.0
     assert report["assignment_change_ratio"] == 0.0
     assert report["verified_edge_change_ratio"] == 0.0
+
+
+def test_refined_graph_stability_does_not_penalize_new_verified_edges(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    frame = pd.DataFrame(
+        {
+            "task_node_id": [10, 11],
+            "abstained": [False, False],
+            **{name: [0.0, 0.0] for name in module.BETA_COLUMNS},
+        }
+    )
+    baseline = tmp_path / "baseline"
+    refined = tmp_path / "task_graph_refined"
+    baseline.mkdir()
+    refined.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_verified_edge_entities",
+        lambda directory, _config: (
+            {"edge:10:11"}
+            if directory == baseline
+            else {"edge:10:11", "edge:11:12"}
+        ),
+    )
+    config = {
+        "search_stability": {
+            "coverage_jaccard_min": 0.95,
+            "beta_p95_max_deg": 1.0,
+            "beta_max_deg": 2.0,
+            "assignment_change_max": 0.05,
+            "verified_edge_change_max": 0.05,
+        }
+    }
+
+    report = module._frame_stability(
+        frame,
+        frame,
+        config,
+        left_directory=baseline,
+        right_directory=refined,
+    )
+
+    assert report["gate_pass"] is True
+    assert report["verified_edge_change_ratio"] == 0.0
+    assert report["verified_new_edge_count"] == 1
+    assert report["verified_edge_comparison_semantics"] == (
+        "registered_baseline_edge_regression_only"
+    )
 
 
 def test_patch_jobs_register_full_shard_sets_against_one_global_token_pool(

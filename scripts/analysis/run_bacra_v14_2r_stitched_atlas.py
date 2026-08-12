@@ -34,6 +34,7 @@ from scipy.spatial import cKDTree
 
 from quasi_exp.teacher.canonical import beta_rms_deg
 from quasi_exp.teacher.audit_shards import (
+    add_schedule_waypoint_estimates,
     build_audit_shard_registry,
     build_shard_completion_report,
     merge_validated_audit_shards,
@@ -44,6 +45,9 @@ from quasi_exp.teacher.canonical_atlas import (
     AtlasTaskNode,
     ContinuationOutcome,
     make_predictor_corrector_continuation,
+)
+from quasi_exp.teacher.optimized_continuation import (
+    make_optimized_predictor_corrector_continuation,
 )
 from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 from quasi_exp.teacher.section_atlas_repair import (
@@ -916,7 +920,12 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
                 f"unregistered retry solver chain: {tier.tier_id}={tier.solver_chain}"
             )
         if tier.tier_id not in cache:
-            raw_base = make_predictor_corrector_continuation(
+            continuation_factory = (
+                make_optimized_predictor_corrector_continuation
+                if hasattr(environment, "fk_and_jacobian")
+                else make_predictor_corrector_continuation
+            )
+            raw_base = continuation_factory(
                 environment,
                 damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
                 max_corrector_iterations=tier.maximum_iterations,
@@ -1105,12 +1114,18 @@ def _audit_bundle_artifacts(phase_directory: Path) -> tuple[dict[str, Any], ...]
     )
 
 
-def _audit_source_records() -> tuple[dict[str, Any], ...]:
+def _audit_source_records(
+    extra_paths: Sequence[Path] = (),
+) -> tuple[dict[str, Any], ...]:
     paths = (
         Path(__file__).resolve(),
+        SOURCE_ROOT / "src/quasi_exp/model/endpoint_kinematics.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/audit_shards.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/optimized_continuation.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/optimized_forward.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/section_atlas_repair.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/section_first_atlas.py",
+        *tuple(Path(path).resolve() for path in extra_paths),
     )
     return tuple(
         {
@@ -1277,6 +1292,9 @@ class _SubprocessAuditExecutor:
         patch_directory: Path,
         shard_count: int,
         token_pool: _AuditWorkerTokenPool | None = None,
+        maximum_concurrent_workers: int | None = None,
+        assignment_strategy: str = "hash",
+        worker_runner_path: Path | None = None,
     ) -> None:
         self.config = config
         self.project_root = project_root
@@ -1285,6 +1303,19 @@ class _SubprocessAuditExecutor:
         self.patch_directory = patch_directory
         self.shard_count = max(1, int(shard_count))
         self.token_pool = token_pool
+        self.maximum_concurrent_workers = max(
+            1,
+            min(
+                self.shard_count,
+                int(maximum_concurrent_workers or self.shard_count),
+            ),
+        )
+        self.assignment_strategy = str(assignment_strategy)
+        self.worker_runner_path = (
+            Path(__file__).resolve()
+            if worker_runner_path is None
+            else Path(worker_runner_path).resolve()
+        )
 
     def __call__(
         self,
@@ -1301,10 +1332,16 @@ class _SubprocessAuditExecutor:
         phase_directory = self.patch_directory / "_audit_checkpoints" / str(phase_id)
         phase_directory.mkdir(parents=True, exist_ok=True)
         frames = growth.frames()
+        registered_schedules = schedules
+        if self.assignment_strategy == "cost_balanced_lpt":
+            registered_schedules = add_schedule_waypoint_estimates(
+                schedules, self.tasks, maximum_step_mm=5.0
+            )
         registry = build_audit_shard_registry(
-            schedules,
+            registered_schedules,
             shard_count=self.shard_count,
             repeats_per_direction=policy.repeats_per_direction,
+            assignment_strategy=self.assignment_strategy,
         )
         _write_parquet(self.tasks, phase_directory / "task_nodes.parquet")
         _write_parquet(self.task_edges, phase_directory / "task_edges.parquet")
@@ -1314,7 +1351,7 @@ class _SubprocessAuditExecutor:
         _write_parquet(frames["selected_edges"], phase_directory / "selected_edges.parquet")
         _write_parquet(registry, phase_directory / "schedule_registry.parquet")
         artifacts = _audit_bundle_artifacts(phase_directory)
-        source_records = _audit_source_records()
+        source_records = _audit_source_records((self.worker_runner_path,))
         input_sha = _payload_sha256(
             {
                 "artifacts": artifacts,
@@ -1332,6 +1369,25 @@ class _SubprocessAuditExecutor:
             "shard_count": self.shard_count,
             "schedule_count": len(registry),
             "repeats_per_direction": policy.repeats_per_direction,
+            "audit_policy": {
+                "geometry_p95_max_deg": policy.geometry_p95_max_deg,
+                "geometry_max_deg": policy.geometry_max_deg,
+                "repeat_p95_max_deg": policy.repeat_p95_max_deg,
+                "continuation_residual_max_mm": policy.continuation_residual_max_mm,
+                "repeats_per_direction": policy.repeats_per_direction,
+                "repeat_perturbation_rad": policy.repeat_perturbation_rad,
+                "retry_tiers": [
+                    {
+                        "tier_id": tier.tier_id,
+                        "maximum_step_mm": tier.maximum_step_mm,
+                        "maximum_iterations": tier.maximum_iterations,
+                        "solver_chain": list(tier.solver_chain),
+                    }
+                    for tier in policy.retry_tiers
+                ],
+            },
+            "assignment_strategy": self.assignment_strategy,
+            "maximum_concurrent_workers": self.maximum_concurrent_workers,
             "artifacts": artifacts,
             "source_records": source_records,
         }
@@ -1393,7 +1449,7 @@ class _SubprocessAuditExecutor:
 
         heartbeat()
         while missing or running:
-            while missing and len(running) < self.shard_count:
+            while missing and len(running) < self.maximum_concurrent_workers:
                 token = self.token_pool.try_acquire() if self.token_pool is not None else None
                 if self.token_pool is not None and token is None:
                     break
@@ -1403,7 +1459,7 @@ class _SubprocessAuditExecutor:
                 handle = (shard_directory / "worker.log").open("w", encoding="utf-8")
                 command = [
                     sys.executable,
-                    str(Path(__file__).resolve()),
+                    str(self.worker_runner_path),
                     "--config",
                     str(self.config["config_path"]),
                     "--audit-shard-bundle",
@@ -1501,6 +1557,8 @@ class _SubprocessAuditExecutor:
             schedule_count=len(registry),
             execution_count=len(merged),
             shard_count=self.shard_count,
+            maximum_concurrent_workers=self.maximum_concurrent_workers,
+            assignment_strategy=self.assignment_strategy,
             input_sha256=input_sha,
             executions_sha256=sha256_file(phase_directory / "executions.parquet"),
             resumed_shard_count=reused_shard_count,

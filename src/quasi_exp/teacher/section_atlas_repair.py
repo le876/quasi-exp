@@ -416,39 +416,58 @@ def repair_rooted_section_atlas(
     policy: AtlasRepairPolicy | None = None,
     retry_continuation: Callable[..., ContinuationOutcome] | None = None,
     schedule_executor: Callable[..., pd.DataFrame] | None = None,
+    screening_first: bool = False,
 ) -> RepairedSectionAtlas:
     """Freshly audit, qualify, stitch, and select one deployable primary atlas."""
 
     active = AtlasRepairPolicy() if policy is None else policy
     schedules = _build_schedules(growth, patch_id=patch_id, method=method)
+    chart_audit_policy = active.audit
+    if screening_first:
+        schedules = schedules[
+            schedules["audit_kind"].isin(("edge", "fundamental_cycle"))
+        ].reset_index(drop=True)
+        chart_audit_policy = AuditV2Policy(
+            geometry_p95_max_deg=active.audit.geometry_p95_max_deg,
+            geometry_max_deg=active.audit.geometry_max_deg,
+            repeat_p95_max_deg=active.audit.repeat_p95_max_deg,
+            continuation_residual_max_mm=active.audit.continuation_residual_max_mm,
+            repeats_per_direction=1,
+            repeat_perturbation_rad=active.audit.repeat_perturbation_rad,
+            retry_tiers=active.audit.retry_tiers,
+        )
     executions = _execute_phase(
-        growth, schedules, continuation, active.audit,
+        growth, schedules, continuation, chart_audit_policy,
         retry_continuation=retry_continuation,
         schedule_executor=schedule_executor,
-        phase_id="chart_initial",
+        phase_id="chart_screening" if screening_first else "chart_initial",
     )
     initial = diagnose_rooted_section_artifacts(
         growth,
         schedules=schedules,
         executions=executions,
-        policy=active.audit,
+        policy=chart_audit_policy,
     )
     working_growth = _split_failed_chart_fragments(
         growth, schedules, executions, initial, active
     )
     if working_growth is not growth:
         schedules = _build_schedules(working_growth, patch_id=patch_id, method=f"{method}_fragment")
+        if screening_first:
+            schedules = schedules[
+                schedules["audit_kind"].isin(("edge", "fundamental_cycle"))
+            ].reset_index(drop=True)
         executions = _execute_phase(
-            working_growth, schedules, continuation, active.audit,
+            working_growth, schedules, continuation, chart_audit_policy,
             retry_continuation=retry_continuation,
             schedule_executor=schedule_executor,
-            phase_id="fragment_reaudit",
+            phase_id="fragment_screening" if screening_first else "fragment_reaudit",
         )
         initial = diagnose_rooted_section_artifacts(
             working_growth,
             schedules=schedules,
             executions=executions,
-            policy=active.audit,
+            policy=chart_audit_policy,
         )
     chart_by_id = {chart.chart_id: chart for chart in working_growth.charts}
     node_by_id = {node.node_id: node for node in working_growth.task_nodes}
@@ -709,7 +728,8 @@ def execute_audit_schedules(
 ) -> pd.DataFrame:
     chart_by_id = {chart.chart_id: chart for chart in growth.charts}
     node_by_id = {node.node_id: node for node in growth.task_nodes}
-    adapter = continuation if retry_continuation is None else retry_continuation
+    raw_adapter = continuation if retry_continuation is None else retry_continuation
+    adapter = _bind_retry_adapter(raw_adapter)
     rows: list[dict[str, Any]] = []
     schedule_records = schedules.to_dict(orient="records")
     total_schedule_count = len(schedule_records)
@@ -906,12 +926,11 @@ def _outcome_solver_chain(outcome: ContinuationOutcome) -> tuple[str, ...]:
     return tuple(chains)
 
 
-def _invoke_adapter(
+def _bind_retry_adapter(
     adapter: Callable[..., ContinuationOutcome],
-    source: AtlasCandidate,
-    target: AtlasTaskNode,
-    tier: RetryTier,
-) -> ContinuationOutcome:
+) -> Callable[[AtlasCandidate, AtlasTaskNode, RetryTier], ContinuationOutcome]:
+    """Resolve the legacy two/three-argument seam once, outside hot loops."""
+
     try:
         signature = inspect.signature(adapter)
         accepts_tier = len(signature.parameters) >= 3 or any(
@@ -920,7 +939,24 @@ def _invoke_adapter(
         )
     except (TypeError, ValueError):
         accepts_tier = False
-    outcome = adapter(source, target, tier) if accepts_tier else adapter(source, target)
+
+    if accepts_tier:
+        def bound(source: AtlasCandidate, target: AtlasTaskNode, tier: RetryTier) -> ContinuationOutcome:
+            return adapter(source, target, tier)
+    else:
+        def bound(source: AtlasCandidate, target: AtlasTaskNode, tier: RetryTier) -> ContinuationOutcome:
+            del tier
+            return adapter(source, target)
+    return bound
+
+
+def _invoke_adapter(
+    adapter: Callable[[AtlasCandidate, AtlasTaskNode, RetryTier], ContinuationOutcome],
+    source: AtlasCandidate,
+    target: AtlasTaskNode,
+    tier: RetryTier,
+) -> ContinuationOutcome:
+    outcome = adapter(source, target, tier)
     if not isinstance(outcome, ContinuationOutcome):
         raise TypeError("continuation adapter must return ContinuationOutcome")
     return outcome

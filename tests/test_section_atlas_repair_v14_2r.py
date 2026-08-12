@@ -560,3 +560,49 @@ def test_phase_executor_preserves_serial_audit_semantics() -> None:
         right[columns].reset_index(drop=True)
     )
     assert serial.certificate_gate == delegated.certificate_gate
+
+
+def test_screening_is_lighter_but_primary_certificate_remains_full_and_fresh() -> None:
+    phases: list[tuple[str, int, int, set[str]]] = []
+
+    def executor(
+        local_growth,
+        schedules,
+        continuation,
+        audit_policy,
+        retry_continuation,
+        phase_id,
+    ):
+        phases.append(
+            (
+                phase_id,
+                len(schedules),
+                audit_policy.repeats_per_direction,
+                set(schedules["audit_kind"].astype(str)),
+            )
+        )
+        return execute_audit_schedules(
+            local_growth,
+            schedules,
+            continuation,
+            audit_policy,
+            retry_continuation=retry_continuation,
+        )
+
+    repaired = repair_rooted_section_atlas(
+        _growth((0.0,)),
+        _affine,
+        patch_id="patch_screen",
+        method="screened",
+        policy=AtlasRepairPolicy(audit=AuditV2Policy(repeats_per_direction=3)),
+        schedule_executor=executor,
+        screening_first=True,
+    )
+
+    assert repaired.certificate_gate is True
+    assert phases[0][0] == "chart_screening"
+    assert phases[0][2] == 1
+    assert phases[0][3] <= {"edge", "fundamental_cycle"}
+    assert phases[-1][0] == "primary_certificate"
+    assert phases[-1][2] == 3
+    assert "root_path" in phases[-1][3]

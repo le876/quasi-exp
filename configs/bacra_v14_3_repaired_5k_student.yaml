@@ -1,11 +1,11 @@
 schema_version: 1
-experiment_id: bacra_v14_3_repaired_5k_student
-output_root: runs/bacra_v14_3_repaired_5k_student
+experiment_id: bacra_v14_3_repaired_5k_student_optimized_v1
+output_root: runs/bacra_v14_3_repaired_5k_student_optimized_v1
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
-  v14_2r_root: runs/bacra_v14_2r_stitched_atlas
+  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry4
   v14_2r_config: configs/bacra_v14_2r_stitched_atlas.yaml
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
@@ -16,6 +16,15 @@ sources:
 parallel:
   patch_workers: 12
   numerical_threads_per_worker: 1
+
+audit_execution:
+  logical_shard_count: 48
+  maximum_concurrent_workers: 12
+  assignment_strategy: cost_balanced_lpt
+  progress_every_schedules: 64
+  checkpoint_resume: true
+  screening_first: true
+  screening_fallback_to_full_audit: true
 
 pilot:
   parent_cell_count: 5000
@@ -41,6 +50,12 @@ pilot:
   require_all_x_tertiles: true
   bootstrap_replicates: 2000
   bootstrap_seed: 20260883
+  local_refinement:
+    enabled: true
+    maximum_rounds: 1
+    neighbor_count: 2
+    trigger_requires_valid_certificate: true
+    trigger_requires_coverage_failure: true
 
 audit_v2:
   geometry_p95_max_deg: 0.5
@@ -67,9 +82,12 @@ dataset:
   multiparent_count: 2
   multiparent_beta_gap_max_deg: 0.5
   continuation_residual_max_mm: 3.0
+  wave_size: 4096
+  logical_shard_count: 48
+  maximum_attempt_rows: 100000
 
 student:
-  variants: [global_mlp, router_experts, mlp_dls_1, mlp_dls_2, sklearn_mlp, lgbm, knn]
+  variants: [global_mlp, router_experts, selected_mlp_dls_1, selected_mlp_dls_2, knn_diagnostic]
   hidden_units: [128, 128, 64]
   router_hidden_units: [128, 64]
   seeds: [20260881, 20260882, 20260883]
@@ -98,6 +116,19 @@ stateful_trigger:
   between_history_min_deg: 1.0
   require_multiple_solver_budgets: true
   require_static_failure_and_stateful_repair: true
+
+reach_round8:
+  seed_a: 20260865
+  seed_b: 20260866
+  sobol_power: 19
+  frontier_cell_budget: 128
+  frontier_starts_per_cell: 8
+  weighted_jaccard_min: 0.95
+  new_volume_ratio_max: 0.01
+  frontier_new_volume_ratio_max: 0.005
+  boundary_change_ratio_max: 0.02
+  lower_upper_measure_gap_max: 0.05
+  required_consecutive_rounds: 2
 
 formal_gate:
   reach_required: true

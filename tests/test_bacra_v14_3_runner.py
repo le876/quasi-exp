@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import json
+
+import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +34,13 @@ def test_v14_3_freezes_unique_supervision_budget_without_padding() -> None:
     assert config["pilot"]["bootstrap_replicates"] == 2000
     assert config["formal_gate"]["labelable_measure_min"] == 0.80
     assert config["student"]["random_set_max_is_diagnostic_only"] is True
+    assert config["audit_execution"]["logical_shard_count"] == 48
+    assert config["audit_execution"]["maximum_concurrent_workers"] == 12
+    assert config["audit_execution"]["assignment_strategy"] == "cost_balanced_lpt"
+    assert config["dataset"]["wave_size"] == 4096
+    assert config["dataset"]["logical_shard_count"] == 48
+    assert config["dataset"]["maximum_attempt_rows"] == 100000
+    assert config["reach_round8"]["seed_a"] != config["reach_round8"]["seed_b"]
 
 
 def test_v14_3_stage_order_keeps_student_before_formal_admission() -> None:
@@ -44,6 +54,7 @@ def test_v14_3_stage_order_keeps_student_before_formal_admission() -> None:
         "fixed_budget_dataset",
         "students",
         "representation_decision",
+        "reach_update",
         "formal_admission",
         "summary",
     )
@@ -56,6 +67,50 @@ def test_router_feature_contract_is_xyz_only() -> None:
     assert "primary_chart_id" not in module.ROUTER_FEATURE_COLUMNS
 
 
+def test_student_variants_exclude_low_value_default_baselines() -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
+    variants = set(config["student"]["variants"])
+    assert "sklearn_mlp" not in variants
+    assert "lgbm" not in variants
+    assert "knn_diagnostic" in variants
+
+
+def test_reach_round8_is_conditional_and_round9_is_absent() -> None:
+    module = _module()
+    assert "reach_update" in module.STAGE_ORDER
+    assert all("round9" not in stage for stage in module.STAGE_ORDER)
+
+
+def test_local_refinement_only_adds_edges_in_registered_region() -> None:
+    module = _module()
+    tasks = pd.DataFrame(
+        {
+            "task_node_id": [0, 1, 2, 3],
+            "x_m": [0.0, 0.001, 0.002, 0.003],
+            "y_m": [0.0] * 4,
+            "z_m": [0.0] * 4,
+        }
+    )
+    edges = pd.DataFrame(
+        {
+            "left_node_id": [0],
+            "right_node_id": [1],
+            "adjacency": ["registered"],
+        }
+    )
+    refined = module._add_local_refinement_edges(
+        tasks, edges, [2], neighbor_count=2
+    )
+    observed = {
+        tuple(sorted((int(row.left_node_id), int(row.right_node_id))))
+        for row in refined.itertuples(index=False)
+    }
+    assert (0, 1) in observed
+    assert len(observed) > 1
+    assert len(refined) >= len(edges)
+
+
 def test_v14_3_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
     module = _module()
     config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
@@ -63,3 +118,17 @@ def test_v14_3_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
 
     assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
     assert paths["plan"].is_file()
+
+
+def test_stage_dependency_digest_changes_when_upstream_completion_changes(tmp_path: Path) -> None:
+    module = _module()
+    inventory = tmp_path / module.STAGE_DIRS["inventory"]
+    inventory.mkdir(parents=True)
+    completion = inventory / "completion_manifest.json"
+    completion.write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+    first = module._upstream_completion_sha256(tmp_path, "pilot_registry")
+    completion.write_text(json.dumps({"version": 2}), encoding="utf-8")
+    second = module._upstream_completion_sha256(tmp_path, "pilot_registry")
+
+    assert first != second

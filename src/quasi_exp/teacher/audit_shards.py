@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 import numpy as np
@@ -20,6 +21,75 @@ import pandas as pd
 
 _EXECUTION_KEY = ("schedule_id", "direction", "repeat_index")
 _DIRECTIONS = ("forward", "reverse")
+
+
+def add_schedule_waypoint_estimates(
+    schedules: pd.DataFrame,
+    task_nodes: pd.DataFrame,
+    *,
+    maximum_step_mm: float,
+) -> pd.DataFrame:
+    """Return schedules with deterministic geometric waypoint-count priors."""
+
+    if maximum_step_mm <= 0.0:
+        raise ValueError("maximum_step_mm must be positive")
+    required = {"task_node_id", "x_m", "y_m", "z_m"}
+    missing = required - set(task_nodes)
+    if missing:
+        raise ValueError(f"task nodes lack waypoint-estimation columns: {sorted(missing)}")
+    xyz_by_node = {
+        int(row.task_node_id): np.asarray([row.x_m, row.y_m, row.z_m], dtype=float)
+        for row in task_nodes.itertuples(index=False)
+    }
+
+    def estimate(path: Any) -> int:
+        if not isinstance(path, (list, tuple, np.ndarray)) or len(path) < 2:
+            return 1
+        total = 0
+        for left, right in zip(path[:-1], path[1:], strict=True):
+            if int(left) not in xyz_by_node or int(right) not in xyz_by_node:
+                raise ValueError(f"schedule path references unknown task node: {left}->{right}")
+            distance_mm = float(
+                np.linalg.norm(xyz_by_node[int(right)] - xyz_by_node[int(left)]) * 1000.0
+            )
+            total += max(1, int(math.ceil(distance_mm / float(maximum_step_mm))))
+        return max(1, total)
+
+    result = schedules.copy()
+    paths = result.get("path_node_ids", pd.Series([()] * len(result), index=result.index))
+    result["estimated_waypoint_count"] = paths.map(estimate).astype(int)
+    return result
+
+
+@dataclass(frozen=True)
+class AuditCostModel:
+    """Deterministic static cost prior for assigning immutable schedules."""
+
+    direction_count: int = 2
+    repeats_per_direction: int = 3
+    audit_kind_weights: Mapping[str, float] = field(
+        default_factory=lambda: {
+            "edge": 1.0,
+            "root_path": 1.15,
+            "fundamental_cycle": 1.25,
+            "multipath_tree": 1.15,
+            "multipath_chord": 1.0,
+        }
+    )
+
+    def estimate(self, row: Mapping[str, Any]) -> tuple[int, int, float]:
+        path = row.get("path_node_ids", ())
+        path_edge_count = max(1, len(path) - 1) if isinstance(path, (list, tuple, np.ndarray)) else 1
+        waypoint_count = int(row.get("estimated_waypoint_count", path_edge_count))
+        waypoint_count = max(path_edge_count, waypoint_count)
+        kind_weight = float(self.audit_kind_weights.get(str(row.get("audit_kind", "")), 1.0))
+        cost = (
+            int(self.direction_count)
+            * int(self.repeats_per_direction)
+            * waypoint_count
+            * kind_weight
+        )
+        return path_edge_count, waypoint_count, float(cost)
 
 
 def _strict(value: Any) -> Any:
@@ -56,6 +126,8 @@ def build_audit_shard_registry(
     *,
     shard_count: int,
     repeats_per_direction: int,
+    assignment_strategy: str = "hash",
+    cost_model: AuditCostModel | None = None,
 ) -> pd.DataFrame:
     """Assign every registered schedule to exactly one stable subprocess shard."""
 
@@ -67,10 +139,42 @@ def build_audit_shard_registry(
         raise ValueError("audit schedule_id must be unique before sharding")
     registry = schedules.copy()
     registry["schedule_id"] = registry["schedule_id"].astype(str)
-    registry["shard_id"] = registry["schedule_id"].map(
-        lambda value: int(hashlib.sha256(value.encode("utf-8")).hexdigest()[:16], 16)
-        % int(shard_count)
-    )
+    strategy = str(assignment_strategy).strip().lower()
+    if strategy not in {"hash", "cost_balanced_lpt"}:
+        raise ValueError(f"unknown audit shard assignment strategy: {assignment_strategy}")
+    if strategy == "hash":
+        registry["estimated_path_edge_count"] = registry.get(
+            "path_node_ids", pd.Series([()] * len(registry), index=registry.index)
+        ).map(lambda path: max(1, len(path) - 1) if isinstance(path, (list, tuple, np.ndarray)) else 1)
+        registry["estimated_waypoint_count"] = registry["estimated_path_edge_count"]
+        registry["estimated_cost"] = (
+            registry["estimated_waypoint_count"].astype(float)
+            * 2.0
+            * float(repeats_per_direction)
+        )
+        registry["shard_id"] = registry["schedule_id"].map(
+            lambda value: int(hashlib.sha256(value.encode("utf-8")).hexdigest()[:16], 16)
+            % int(shard_count)
+        )
+    else:
+        model = cost_model or AuditCostModel(repeats_per_direction=int(repeats_per_direction))
+        estimates = [model.estimate(row) for row in registry.to_dict(orient="records")]
+        registry["estimated_path_edge_count"] = [value[0] for value in estimates]
+        registry["estimated_waypoint_count"] = [value[1] for value in estimates]
+        registry["estimated_cost"] = [value[2] for value in estimates]
+        loads = [0.0] * int(shard_count)
+        assignment: dict[str, int] = {}
+        ranked = sorted(
+            registry.to_dict(orient="records"),
+            key=lambda row: (-float(row["estimated_cost"]), str(row["schedule_id"])),
+        )
+        for row in ranked:
+            shard_id = min(range(int(shard_count)), key=lambda value: (loads[value], value))
+            schedule_id = str(row["schedule_id"])
+            assignment[schedule_id] = shard_id
+            loads[shard_id] += float(row["estimated_cost"])
+        registry["shard_id"] = registry["schedule_id"].map(assignment).astype(int)
+    registry["assignment_strategy"] = strategy
     registry["registered_shard_count"] = int(shard_count)
     registry["expected_execution_count"] = 2 * int(repeats_per_direction)
     return registry.sort_values("schedule_id", kind="stable").reset_index(drop=True)

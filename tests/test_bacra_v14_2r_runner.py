@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -39,9 +40,9 @@ def test_v14_2r_config_freezes_twelve_single_threaded_workers_and_gates() -> Non
     assert config["meso_bridge"]["parent_cell_count"] == 512
 
 
-def test_retry5_freezes_canonical_anchor_and_optimized_audit_contract() -> None:
+def test_retry6_freezes_canonical_anchor_and_optimized_audit_contract() -> None:
     module = _module()
-    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry5.yaml")
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry6.yaml")
 
     assert config["optimization"]["analytic_endpoint_kinematics"] is True
     assert config["audit_execution"]["logical_shard_count"] == 48
@@ -50,6 +51,45 @@ def test_retry5_freezes_canonical_anchor_and_optimized_audit_contract() -> None:
     assert config["audit_execution"]["screening_first"] is True
     assert config["sources"]["reach_round7_reuse_root"].endswith("retry4")
     assert module._variant_spec("main_K1_R5")[2] == module._variant_spec("root_order2")[2]
+
+
+def test_patch_report_frame_serializes_heterogeneous_canonical_anchor_key(
+    tmp_path,
+) -> None:
+    module = _module()
+    reports = [
+        {
+            "patch_id": "patch_00",
+            "canonical_anchor_key": [240, "teacher_n000048_c008"],
+            "selected_stitch_component": ["chart_000"],
+            "phase_runtime_s": {"root_growth_or_resume": 1.25},
+            "gate_pass": True,
+        },
+        {
+            "patch_id": "patch_03",
+            "canonical_anchor_key": [8490, "teacher_n000448_c013"],
+            "selected_stitch_component": ["chart_001", "chart_003"],
+            "phase_runtime_s": {"root_growth_or_resume": 2.5},
+            "gate_pass": True,
+        },
+    ]
+
+    frame = module._report_records_frame(reports)
+    target = tmp_path / "baseline_patch_reports.parquet"
+    module._write_parquet(frame, target)
+    restored = pd.read_parquet(target)
+
+    assert json.loads(restored.loc[0, "canonical_anchor_key"]) == [
+        240,
+        "teacher_n000048_c008",
+    ]
+    assert json.loads(restored.loc[1, "selected_stitch_component"]) == [
+        "chart_001",
+        "chart_003",
+    ]
+    assert json.loads(restored.loc[0, "phase_runtime_s"]) == {
+        "root_growth_or_resume": 1.25
+    }
 
 
 def test_v14_2r_unknown_retry_solver_chain_fails_closed(tmp_path) -> None:

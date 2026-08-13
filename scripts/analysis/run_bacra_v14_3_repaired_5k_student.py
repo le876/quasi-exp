@@ -618,7 +618,9 @@ def stage_root_charts(config: Mapping[str, Any], project_root: Path, output_root
         return {"gate_pass": True, "worker_report": report}
     _run_root_jobs(config, project_root, output_root)
     reports = [_read_json(stage / f"root_{index:03d}/report.json") for index in range(32)]
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "root_chart_reports.parquet")
+    _write_parquet(
+        v142r._report_records_frame(reports), stage / "root_chart_reports.parquet"
+    )
     return _gate(stage / "gate.json", {
         "all_roots_completed": len(reports) == 32,
         "at_least_one_qualifiable_root": any(bool(row["gate_pass"]) for row in reports),
@@ -2147,7 +2149,10 @@ STAGE_RUNNERS = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=str(SOURCE_ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml"))
+    parser.add_argument(
+        "--config",
+        default=str(SOURCE_ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml"),
+    )
     parser.add_argument("--output-root")
     parser.add_argument("--stage", choices=STAGE_ORDER)
     parser.add_argument("--validate-stage", choices=STAGE_ORDER)

@@ -201,6 +201,39 @@ def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     temporary.replace(path)
 
 
+def _report_records_frame(records: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Return a stable, flat Parquet representation of JSON patch reports.
+
+    Patch reports intentionally keep structured JSON evidence.  Pandas exposes
+    those values as ``object`` columns, and PyArrow cannot infer a list element
+    type for heterogeneous scientific keys such as
+    ``[task_node_id, candidate_id]``.  The JSON files remain authoritative;
+    the aggregate Parquet table stores every structured value as canonical JSON
+    text so that its schema is deterministic across patches and PyArrow builds.
+    """
+
+    frame = pd.DataFrame.from_records(records)
+    for column in frame.columns:
+        if frame[column].map(
+            lambda value: isinstance(
+                value, (Mapping, list, tuple, set, frozenset, np.ndarray)
+            )
+        ).any():
+            frame[column] = frame[column].map(
+                lambda value: json.dumps(
+                    _strict(value),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if isinstance(
+                    value, (Mapping, list, tuple, set, frozenset, np.ndarray)
+                )
+                else value
+            )
+    return frame
+
+
 def _gate(path: Path, checks: Mapping[str, bool], **evidence: Any) -> dict[str, Any]:
     payload = {
         "gate_pass": bool(checks and all(bool(value) for value in checks.values())),
@@ -2464,7 +2497,9 @@ def stage_rooted_baseline(config: Mapping[str, Any], project_root: Path, output_
     patches = tuple(map(str, config["diagnostic_patch_ids"]))
     _run_patch_jobs(config, output_root, "rooted_baseline", [(patch, "baseline") for patch in patches])
     reports = [_read_json(stage / patch / "baseline/report.json") for patch in patches]
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "baseline_patch_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports), stage / "baseline_patch_reports.parquet"
+    )
     return _gate(stage / "gate.json", {"four_patch_baseline_complete": len(reports) == 4}, patch_reports=reports)
 
 
@@ -2800,7 +2835,10 @@ def stage_mechanism_gate(config: Mapping[str, Any], project_root: Path, output_r
         row["search_stability_gate"] = bool(stable_by_patch.get(row["patch_id"], False))
         row["final_gate_pass"] = bool(row["gate_pass"] and row["search_stability_gate"])
     passing = sum(bool(row["final_gate_pass"]) for row in reports)
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "four_patch_mechanism_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports),
+        stage / "four_patch_mechanism_reports.parquet",
+    )
     return _gate(
         stage / "gate.json",
         {
@@ -3026,7 +3064,9 @@ def stage_confirmation(config: Mapping[str, Any], project_root: Path, output_roo
             report = _read_json(stage / patch / selected_variant / "report.json")
         reports.append(report)
     frame = pd.DataFrame.from_records(reports)
-    _write_parquet(frame, stage / "confirmation_patch_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports), stage / "confirmation_patch_reports.parquet"
+    )
     development = frame[frame["patch_split"].eq("development")]
     confirmation = frame[frame["patch_split"].eq("confirmation")]
     gate = config["confirmation_gate"]

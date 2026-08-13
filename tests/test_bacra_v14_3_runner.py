@@ -21,10 +21,12 @@ def _module():
 
 def test_v14_3_freezes_unique_supervision_budget_without_padding() -> None:
     module = _module()
-    config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
+    config = module.load_config(
+        ROOT / "configs/bacra_v14_3_repaired_5k_student_v2.yaml"
+    )
 
     assert config["parallel"]["patch_workers"] == 12
-    assert config["sources"]["v14_2r_root"].endswith("retry5")
+    assert config["sources"]["v14_2r_root"].endswith("retry6")
     assert config["pilot"]["parent_cell_count"] == 5000
     assert config["pilot"]["task_probe_count"] == 25000
     assert config["pilot"]["root_count"] == 32
@@ -70,7 +72,9 @@ def test_router_feature_contract_is_xyz_only() -> None:
 
 def test_student_variants_exclude_low_value_default_baselines() -> None:
     module = _module()
-    config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
+    config = module.load_config(
+        ROOT / "configs/bacra_v14_3_repaired_5k_student_v2.yaml"
+    )
     variants = set(config["student"]["variants"])
     assert "sklearn_mlp" not in variants
     assert "lgbm" not in variants
@@ -114,7 +118,9 @@ def test_local_refinement_only_adds_edges_in_registered_region() -> None:
 
 def test_v14_3_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
     module = _module()
-    config = module.load_config(ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml")
+    config = module.load_config(
+        ROOT / "configs/bacra_v14_3_repaired_5k_student_v2.yaml"
+    )
     paths = module._sources(config, Path("/mnt/ML_projects/quasi_exp"))
 
     assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"

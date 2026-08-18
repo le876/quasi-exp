@@ -29,6 +29,16 @@ import numpy as np
 import pandas as pd
 
 from .canonical import beta_rms_deg
+from .canonical_gauge import (
+    AnchorComponentSelection,
+    CanonicalAnchorPolicy,
+    select_anchor_locked_component,
+)
+from .holonomy_diagnostics import (
+    physical_audit_direction,
+    physical_audit_entity_id,
+    physical_repeat_perturbation,
+)
 from .canonical_atlas import AtlasCandidate, AtlasTaskNode, ContinuationAdapter, ContinuationOutcome
 from .section_first_atlas import (
     RootedSectionChart,
@@ -168,6 +178,12 @@ class RepairedSectionAtlas:
     retained_cycle_rank: int
     audited_fundamental_cycle_count: int
     cycle_coverage_ratio: float
+    canonical_anchor_root_key: CandidateKey | None
+    canonical_anchor_qualified: bool
+    canonical_anchor_component_selected: bool
+    canonical_anchor_component_coverage: float
+    canonical_anchor_fallback_reason: str | None
+    selected_anchor_rank: int | None
     frames: Mapping[str, pd.DataFrame]
 
 
@@ -177,7 +193,7 @@ class PrimaryAtlasStability:
     coverage_jaccard: float
     beta_p95_deg: float
     beta_max_deg: float
-    assignment_change_ratio: float
+    beta_disagreement_ratio_gt_1deg: float
     compared_node_count: int
 
 
@@ -315,6 +331,46 @@ def diagnose_rooted_section_artifacts(
     active = AuditV2Policy() if policy is None else policy
     schedule_frame = _records_frame(schedules)
     execution_frame = _records_frame(executions)
+    if schedule_frame.empty:
+        geometry = {
+            "sample_count": 0,
+            "missing_count": 0,
+            "p95_deg": math.nan,
+            "max_deg": math.nan,
+            "gate_pass": True,
+        }
+        solver = {
+            "execution_count": 0,
+            "success_count": 0,
+            "missing_count": 0,
+            "recoverable_numerical_count": 0,
+            "persistent_numerical_count": 0,
+            "geometric_branch_disagreement_count": 0,
+            "geometric_branch_disagreement_execution_count": 0,
+            "geometric_branch_disagreement_unique_entity_count": 0,
+            "local_feasibility_failure_count": 0,
+            "gate_pass": False,
+        }
+        repeat = {
+            "sample_count": 0,
+            "missing_count": 0,
+            "p95_deg": math.nan,
+            "gate_pass": True,
+        }
+        return RootedArtifactDiagnostic(
+            geometry_gate=True,
+            solver_gate=False,
+            repeat_gate=True,
+            certificate_gate=False,
+            geometry_metrics=geometry,
+            solver_metrics=solver,
+            repeat_metrics=repeat,
+            chart_gate_by_id={},
+            chart_metrics_by_id={},
+            schedules=schedule_frame,
+            executions=execution_frame,
+            failure_reasons=("empty_schedule_set", "solver_gate_failed"),
+        )
     required_schedule_columns = {
         "schedule_id", "unique_entity_id", "chart_id", "audit_kind",
         "path_node_ids", "primary_usage",
@@ -418,6 +474,7 @@ def repair_rooted_section_atlas(
     schedule_executor: Callable[..., pd.DataFrame] | None = None,
     screening_first: bool = False,
     canonical_root_priority: Sequence[CandidateKey] = (),
+    canonical_anchor_policy: CanonicalAnchorPolicy | None = None,
 ) -> RepairedSectionAtlas:
     """Freshly audit, qualify, stitch, and select one deployable primary atlas."""
 
@@ -494,9 +551,50 @@ def repair_rooted_section_atlas(
         chart_by_id, qualified, active, working_growth.task_nodes, continuation
     )
     components = _chart_components(qualified, stitch_edges)
-    selected_component = _select_component(
-        components, chart_by_id, canonical_root_priority=root_priority
-    )
+    if canonical_anchor_policy is not None:
+        anchor_selection = select_anchor_locked_component(
+            components,
+            chart_by_id,
+            working_growth.task_nodes,
+            canonical_anchor_policy,
+        )
+        selected_component = anchor_selection.component
+    else:
+        selected_component = _select_component(
+            components, chart_by_id, canonical_root_priority=root_priority
+        )
+        selected_roots = {
+            chart_by_id[chart_id].root_key for chart_id in selected_component
+        }
+        selected_anchor = next(
+            (key for key in root_priority if key in selected_roots), None
+        )
+        anchor_selection = AnchorComponentSelection(
+            component=selected_component,
+            anchor_root_key=selected_anchor,
+            anchor_rank=(
+                root_priority.index(selected_anchor)
+                if selected_anchor is not None
+                else None
+            ),
+            anchor_qualified=selected_anchor is not None,
+            anchor_component_selected=selected_anchor is not None,
+            component_coverage=(
+                len(
+                    set().union(
+                        *(
+                            set(chart_by_id[chart_id].selected_by_node)
+                            for chart_id in selected_component
+                        )
+                    )
+                )
+                / max(1, len(working_growth.task_nodes))
+                if selected_component
+                else 0.0
+            ),
+            coherent_measure=0.0,
+            fallback_reason=None,
+        )
     primary_chart, primary_beta, primary_optimization = _materialize_primary(
         selected_component,
         chart_by_id,
@@ -564,6 +662,11 @@ def repair_rooted_section_atlas(
         and all(chart_id in qualified for chart_id in selected_component)
         and abs(edge_completeness - 1.0) <= 1e-12
         and abs(cycle_coverage - 1.0) <= 1e-12
+        and (
+            canonical_anchor_policy is None
+            or not canonical_anchor_policy.require_anchor_selected
+            or anchor_selection.anchor_component_selected
+        )
     )
     assignment_rows = [
         {
@@ -644,6 +747,12 @@ def repair_rooted_section_atlas(
         retained_cycle_rank=int(retained_cycle_rank),
         audited_fundamental_cycle_count=audited_cycles,
         cycle_coverage_ratio=float(cycle_coverage),
+        canonical_anchor_root_key=anchor_selection.anchor_root_key,
+        canonical_anchor_qualified=anchor_selection.anchor_qualified,
+        canonical_anchor_component_selected=anchor_selection.anchor_component_selected,
+        canonical_anchor_component_coverage=anchor_selection.component_coverage,
+        canonical_anchor_fallback_reason=anchor_selection.fallback_reason,
+        selected_anchor_rank=anchor_selection.anchor_rank,
         frames=frames,
     )
 
@@ -706,24 +815,45 @@ def _build_schedules(growth: SectionGrowthResult, *, patch_id: str, method: str)
             if entity in seen:
                 continue
             seen.add(entity)
-            unique_entity = f"{chart.chart_id}:{kind}:{','.join(map(str, signature_path))}"
-            digest = hashlib.sha256(unique_entity.encode("utf-8")).hexdigest()[:16]
+            physical_entity = physical_audit_entity_id(patch_id, kind, path)
+            schedule_identity = (
+                f"{method}:{chart.chart_id}:{kind}:"
+                f"{','.join(map(str, signature_path))}"
+            )
+            digest = hashlib.sha256(schedule_identity.encode("utf-8")).hexdigest()[:16]
             rows.append(
                 {
                     "patch_id": str(patch_id),
                     "method": str(method),
                     "schedule_id": f"schedule_{digest}",
-                    "unique_entity_id": unique_entity,
+                    "unique_entity_id": physical_entity,
+                    "physical_entity_id": physical_entity,
                     "chart_id": chart.chart_id,
                     "audit_kind": kind,
                     "path_node_ids": list(path),
                     "unordered_signature": list(signature_path),
-                    "task_cell_ids": list(dict.fromkeys(path)),
+                    "path_task_node_ids": list(dict.fromkeys(path)),
                     "measure_weight": float(len(set(path))),
                     "primary_usage": True,
                 }
             )
-    return pd.DataFrame.from_records(rows)
+    return pd.DataFrame.from_records(
+        rows,
+        columns=(
+            "patch_id",
+            "method",
+            "schedule_id",
+            "unique_entity_id",
+            "physical_entity_id",
+            "chart_id",
+            "audit_kind",
+            "path_node_ids",
+            "unordered_signature",
+            "path_task_node_ids",
+            "measure_weight",
+            "primary_usage",
+        ),
+    )
 
 
 def execute_audit_schedules(
@@ -747,10 +877,21 @@ def execute_audit_schedules(
         selected = {node: item.candidate for node, item in chart.selected_by_node.items()}
         base_path = tuple(int(value) for value in schedule["path_node_ids"])
         for direction, path in (("forward", base_path), ("reverse", tuple(reversed(base_path)))):
+            physical_entity = str(
+                schedule.get(
+                    "physical_entity_id",
+                    schedule.get("unique_entity_id", schedule["schedule_id"]),
+                )
+            )
+            physical_direction = physical_audit_direction(
+                base_path,
+                direction,
+                cycle="cycle" in str(schedule["audit_kind"]),
+            )
             endpoints: list[np.ndarray] = []
             for repeat_index in range(policy.repeats_per_direction):
-                perturbation = _repeat_perturbation(
-                    str(schedule["schedule_id"]), direction, repeat_index,
+                perturbation = physical_repeat_perturbation(
+                    physical_entity, physical_direction, repeat_index,
                     policy.repeat_perturbation_rad,
                 )
                 trace = _retry_trace(
@@ -765,8 +906,13 @@ def execute_audit_schedules(
                         "schedule_id": schedule["schedule_id"],
                         "chart_id": schedule["chart_id"],
                         "direction": direction,
+                        "physical_entity_id": physical_entity,
+                        "physical_direction": physical_direction,
                         "repeat_index": repeat_index,
                         "repeat_perturbation_l2_rad": float(np.linalg.norm(perturbation)),
+                        "repeat_perturbation_sha256": hashlib.sha256(
+                            np.asarray(perturbation, dtype=np.float64).tobytes()
+                        ).hexdigest(),
                         "solver_success": trace["solver_success"],
                         "geometry_gap_deg": trace["geometry_gap_deg"],
                         "repeat_gap_deg": math.nan,
@@ -837,6 +983,8 @@ def _retry_trace(
         return _failed_trace("local_feasibility_failure")
     last_failed_edge: tuple[int, int] | None = None
     last_executed_chain: tuple[str, ...] = ()
+    best_geometric_trace: dict[str, Any] | None = None
+    saw_geometric_disagreement = False
     for tier in policy.retry_tiers:
         source = selected[path[0]]
         current = AtlasCandidate(
@@ -877,10 +1025,7 @@ def _retry_trace(
         if failed:
             continue
         gap = beta_rms_deg(current.beta_rad, selected[path[-1]].beta_rad)
-        classification = "geometric_branch_disagreement" if gap > policy.geometry_max_deg else (
-            "recoverable_numerical" if tier.tier_id != policy.retry_tiers[0].tier_id else "verified"
-        )
-        return {
+        trace = {
             "solver_success": True,
             "geometry_gap_deg": gap,
             "residual_mm": last_residual,
@@ -892,11 +1037,33 @@ def _retry_trace(
                     "utf-8"
                 )
             ).hexdigest(),
-            "classification": classification,
+            "classification": "verified",
             "endpoint_beta": current.beta_rad,
             "failure_source_node": None,
             "failure_target_node": None,
         }
+        if gap > policy.geometry_max_deg + 1e-12:
+            saw_geometric_disagreement = True
+            trace["classification"] = "geometric_branch_disagreement"
+            if (
+                best_geometric_trace is None
+                or float(trace["geometry_gap_deg"])
+                < float(best_geometric_trace["geometry_gap_deg"])
+            ):
+                best_geometric_trace = trace
+            # A numerically successful solve on the wrong redundant fibre is
+            # not a terminal success.  Continue through the registered kernels
+            # without ever seeding from the stored target beta.
+            continue
+        if tier.tier_id != policy.retry_tiers[0].tier_id:
+            trace["classification"] = (
+                "recoverable_geometric"
+                if saw_geometric_disagreement
+                else "recoverable_numerical"
+            )
+        return trace
+    if best_geometric_trace is not None:
+        return best_geometric_trace
     last_tier = policy.retry_tiers[-1] if policy.retry_tiers else None
     return _failed_trace(
         "persistent_numerical",
@@ -1047,6 +1214,15 @@ def _solver_metrics(rows: pd.DataFrame, policy: AuditV2Policy) -> dict[str, Any]
     complete = success & np.isfinite(residual.to_numpy(dtype=float)) & (residual <= policy.continuation_residual_max_mm + 1e-12)
     classifications = rows.get("classification", pd.Series(index=rows.index, dtype=str)).fillna("").astype(str)
     missing = int((~complete).sum())
+    geometric = classifications == "geometric_branch_disagreement"
+    entity_column = (
+        "physical_entity_id" if "physical_entity_id" in rows else "schedule_id"
+    )
+    geometric_entities = (
+        rows.loc[geometric, entity_column].astype(str).nunique()
+        if entity_column in rows
+        else int(geometric.sum())
+    )
     return {
         "execution_count": int(len(rows)),
         "success_count": int(complete.sum()),
@@ -1054,6 +1230,8 @@ def _solver_metrics(rows: pd.DataFrame, policy: AuditV2Policy) -> dict[str, Any]
         "recoverable_numerical_count": int((classifications == "recoverable_numerical").sum()),
         "persistent_numerical_count": int((classifications == "persistent_numerical").sum()),
         "geometric_branch_disagreement_count": int((classifications == "geometric_branch_disagreement").sum()),
+        "geometric_branch_disagreement_execution_count": int(geometric.sum()),
+        "geometric_branch_disagreement_unique_entity_count": int(geometric_entities),
         "local_feasibility_failure_count": int((classifications == "local_feasibility_failure").sum()),
         "gate_pass": bool(len(rows) > 0 and missing == 0),
     }
@@ -1104,7 +1282,9 @@ def _split_failed_chart_fragments(
     if all(diagnostic.chart_gate_by_id.get(chart.chart_id, False) for chart in growth.charts):
         return growth
     payload = executions.drop(columns=["chart_id"], errors="ignore")
-    merged = schedules[["schedule_id", "chart_id", "path_node_ids"]].merge(
+    merged = schedules[
+        ["schedule_id", "chart_id", "audit_kind", "path_node_ids"]
+    ].merge(
         payload, on="schedule_id", how="left"
     )
     success = merged.get("solver_success", pd.Series(False, index=merged.index)).fillna(False).astype(bool)
@@ -1130,9 +1310,8 @@ def _split_failed_chart_fragments(
                 tuple(sorted((int(failure_source), int(failure_target))))
             )
             continue
-        for left, right in zip(path, path[1:]):
-            if left != right:
-                bad_edges_by_chart[str(row.chart_id)].add(tuple(sorted((left, right))))
+        if str(row.audit_kind) == "edge" and len(path) == 2 and path[0] != path[1]:
+            bad_edges_by_chart[str(row.chart_id)].add(tuple(sorted(path)))
     node_by_id = {node.node_id: node for node in growth.task_nodes}
     output: list[RootedSectionChart] = []
     changed = False
@@ -1301,10 +1480,13 @@ def _remove_dominated_charts(
         return rank_by_root.get(root_key, len(rank_by_root)), root_key
 
     retained = set(qualified)
+    protected_roots = set(rank_by_root)
     for left_id in sorted(qualified):
         if left_id not in retained:
             continue
         left_nodes = set(charts[left_id].selected_by_node)
+        if charts[left_id].root_key in protected_roots:
+            continue
         for right_id in sorted(qualified):
             if left_id == right_id or right_id not in retained:
                 continue

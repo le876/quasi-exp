@@ -110,6 +110,9 @@ class SectionGrowthEvent:
     endpoint_gap_deg: float | None = None
     candidate_count: int = 0
     retained_count: int = 0
+    pre_pruning_proposal_count: int = 0
+    pre_pruning_cluster_count: int = 0
+    post_pruning_hypothesis_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -629,6 +632,9 @@ def _grow_chart(
                     tuple(sorted(parent_representatives)),
                     maximum_parent_gap,
                     len(proposals),
+                    len(retained),
+                    len(proposals),
+                    len(clustered),
                     len(retained),
                 )
             )

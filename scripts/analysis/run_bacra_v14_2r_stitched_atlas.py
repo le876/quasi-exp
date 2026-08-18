@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import random
+import resource
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,11 @@ from scipy.sparse import lil_matrix
 from scipy.spatial import cKDTree
 
 from quasi_exp.teacher.canonical import beta_rms_deg
+from quasi_exp.teacher.canonical_gauge import (
+    CanonicalAnchorPolicy,
+    GaugeCorrectorPolicy,
+    gauge_locked_predictor_corrector,
+)
 from quasi_exp.teacher.audit_shards import (
     add_schedule_waypoint_estimates,
     build_audit_shard_registry,
@@ -48,6 +54,7 @@ from quasi_exp.teacher.canonical_atlas import (
     make_predictor_corrector_continuation,
 )
 from quasi_exp.teacher.optimized_continuation import (
+    make_iterative_weighted_dls_continuation,
     make_optimized_predictor_corrector_continuation,
 )
 from quasi_exp.teacher.optimized_forward import optimized_forward
@@ -159,10 +166,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("V14.2R retry tier order is registered")
     if int(config["audit_v2"]["repeats_per_direction"]) != 3:
         raise ValueError("V14.2R requires three source-only repeats per direction")
-    if int(config["mechanism_gate"]["minimum_passing_patches"]) != 3:
-        raise ValueError("V14.2R four-patch Gate requires 3/4")
-    if int(config["reach_round7"]["seed_a"]) == int(config["reach_round7"]["seed_b"]):
-        raise ValueError("Reach Round 7 replicas require independent scramble seeds")
+    expected_passing_patches = (
+        4 if str(config.get("protocol_version", "retry6")) == "retry7" else 3
+    )
+    if int(config["mechanism_gate"]["minimum_passing_patches"]) != expected_passing_patches:
+        raise ValueError(
+            f"V14.2R {config.get('protocol_version', 'retry6')} four-patch Gate "
+            f"requires {expected_passing_patches}/4"
+        )
+    reach_key = "reach_round8" if config.get("protocol_version") == "retry7" else "reach_round7"
+    if int(config[reach_key]["seed_a"]) == int(config[reach_key]["seed_b"]):
+        raise ValueError(f"{reach_key} replicas require independent scramble seeds")
     return config
 
 
@@ -197,7 +211,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
-    frame.to_parquet(temporary, index=False)
+    frame.to_parquet(temporary, index=False, compression="zstd")
     temporary.replace(path)
 
 
@@ -946,13 +960,20 @@ def _root_candidates_with_enrichment(
         "root_candidate_count_after_enrichment": len(roots),
         "requested_root_count": int(desired),
         "selected_root_count": len(selected),
-        "root_budget_saturated": len(selected) >= desired,
+        "root_budget_filled": len(selected) >= desired,
         "canonical_anchor_key": list(root_keys[0]) if root_keys else None,
         "canonical_anchor_retained": bool(root_keys and root_keys[0] in {item.key for item in selected}),
     }
 
 
-def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges: pd.DataFrame):
+def _registered_retry_adapter(
+    environment: Any,
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+    *,
+    gauge_policy: GaugeCorrectorPolicy | None = None,
+    anchor_beta_rad: np.ndarray | None = None,
+):
     nodes = atlas_nodes_from_frames(tasks, task_edges)
     node_by_id = {node.node_id: node for node in nodes}
     cell_by_node = {
@@ -968,27 +989,76 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
                 f"unregistered retry solver chain: {tier.tier_id}={tier.solver_chain}"
             )
         if tier.tier_id not in cache:
-            continuation_factory = (
-                make_optimized_predictor_corrector_continuation
-                if hasattr(environment, "fk_and_jacobian")
-                else make_predictor_corrector_continuation
-            )
-            raw_base = continuation_factory(
-                environment,
-                damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
-                max_corrector_iterations=tier.maximum_iterations,
-                residual_tolerance_mm=3.0,
-            )
-            bounded_chain = expected_chain[:2]
+            if gauge_policy is not None and tier.tier_id == "R0":
+                registered_raw = gauge_locked_predictor_corrector(
+                    environment,
+                    policy=replace(
+                        gauge_policy,
+                        cartesian_step_mm=float(tier.maximum_step_mm),
+                        maximum_iterations=int(tier.maximum_iterations),
+                    ),
+                    anchor_beta_rad=anchor_beta_rad,
+                )
+            else:
+                continuation_factory = (
+                    make_optimized_predictor_corrector_continuation
+                    if hasattr(environment, "fk_and_jacobian")
+                    else make_predictor_corrector_continuation
+                )
+                bounded_raw = continuation_factory(
+                    environment,
+                    damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
+                    max_corrector_iterations=tier.maximum_iterations,
+                    residual_tolerance_mm=3.0,
+                )
+                if tier.tier_id in {"R1", "R2"} and hasattr(
+                    environment, "fk_and_jacobian"
+                ):
+                    dls_raw = make_iterative_weighted_dls_continuation(
+                        environment,
+                        damping={"R1": 2e-3, "R2": 5e-3}[tier.tier_id],
+                        max_corrector_iterations=tier.maximum_iterations,
+                        residual_tolerance_mm=3.0,
+                    )
+
+                    def registered_raw(
+                        local_source: AtlasCandidate,
+                        local_target: AtlasTaskNode,
+                    ) -> ContinuationOutcome:
+                        dls = dls_raw(local_source, local_target)
+                        if dls.success:
+                            return replace(
+                                dls,
+                                status=(
+                                    "audit_solver_chain[weighted_dls]::"
+                                    f"{dls.status}"
+                                ),
+                            )
+                        bounded = bounded_raw(local_source, local_target)
+                        return replace(
+                            bounded,
+                            status=(
+                                "audit_solver_chain[weighted_dls>bounded_ls]::"
+                                f"{bounded.status}"
+                            ),
+                            corrector_iterations=(
+                                dls.corrector_iterations
+                                + bounded.corrector_iterations
+                            ),
+                        )
+                else:
+                    registered_raw = bounded_raw
 
             def base(
                 local_source: AtlasCandidate, local_target: AtlasTaskNode
             ) -> ContinuationOutcome:
-                outcome = raw_base(local_source, local_target)
+                outcome = registered_raw(local_source, local_target)
+                if outcome.status.startswith("audit_solver_chain["):
+                    return outcome
                 return replace(
                     outcome,
                     status=(
-                        f"audit_solver_chain[{'>'.join(bounded_chain)}]::"
+                        f"audit_solver_chain[{'>'.join(expected_chain[:2])}]::"
                         f"{outcome.status}"
                     ),
                 )
@@ -1214,6 +1284,8 @@ def _validate_audit_bundle(
             "artifacts": artifacts,
             "source_records": source_records,
             "runtime_sha256": str(manifest.get("runtime_sha256", "")),
+            "gauge_policy": manifest.get("gauge_policy"),
+            "anchor_beta_rad": manifest.get("anchor_beta_rad"),
         }
     )
     if str(manifest.get("input_sha256", "")) != expected_input_sha:
@@ -1246,10 +1318,48 @@ def _run_audit_shard_worker(
         if bool(config.get("optimization", {}).get("analytic_endpoint_kinematics", False))
         else legacy._EndpointOnlyForwardAdapter(reference_environment)
     )
-    _nodes, continuation = legacy._segmented_continuation(
-        environment, tasks, task_edges
+    gauge_payload = manifest.get("gauge_policy")
+    gauge_policy = (
+        GaugeCorrectorPolicy(**gauge_payload)
+        if isinstance(gauge_payload, Mapping)
+        else None
     )
-    retry = _registered_retry_adapter(environment, tasks, task_edges)
+    anchor_payload = manifest.get("anchor_beta_rad")
+    anchor_beta = (
+        np.asarray(anchor_payload, dtype=float).reshape(6)
+        if anchor_payload is not None
+        else None
+    )
+    if gauge_policy is None:
+        _nodes, continuation = legacy._segmented_continuation(
+            environment, tasks, task_edges
+        )
+    else:
+        node_by_id = {node.node_id: node for node in nodes}
+        cell_by_node = {
+            int(row.task_node_id): (
+                int(row.cell_level_mm), int(row.cell_ix),
+                int(row.cell_iy), int(row.cell_iz),
+            )
+            for row in tasks.itertuples(index=False)
+        }
+        continuation = make_segmented_continuation(
+            gauge_locked_predictor_corrector(
+                environment,
+                policy=gauge_policy,
+                anchor_beta_rad=anchor_beta,
+            ),
+            node_by_id,
+            cell_by_node,
+            step_max_mm=float(gauge_policy.cartesian_step_mm),
+        )
+    retry = _registered_retry_adapter(
+        environment,
+        tasks,
+        task_edges,
+        gauge_policy=gauge_policy,
+        anchor_beta_rad=anchor_beta,
+    )
     shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
     shard_directory.mkdir(parents=True, exist_ok=True)
     progress_path = shard_directory / "progress.json"
@@ -1418,6 +1528,8 @@ class _SubprocessAuditExecutor:
                 "artifacts": artifacts,
                 "source_records": source_records,
                 "runtime_sha256": _runtime_sha256(),
+                "gauge_policy": self.config.get("_active_gauge_policy"),
+                "anchor_beta_rad": self.config.get("_active_anchor_beta_rad"),
             }
         )
         manifest = {
@@ -1449,6 +1561,8 @@ class _SubprocessAuditExecutor:
             },
             "assignment_strategy": self.assignment_strategy,
             "maximum_concurrent_workers": self.maximum_concurrent_workers,
+            "gauge_policy": self.config.get("_active_gauge_policy"),
+            "anchor_beta_rad": self.config.get("_active_anchor_beta_rad"),
             "artifacts": artifacts,
             "source_records": source_records,
         }
@@ -1757,6 +1871,15 @@ def _variant_spec(name: str) -> tuple[int, int, int, bool, bool, bool]:
     specs = {
         "baseline": (4, 8, 20260871, False, False, False),
         "main_K1_R5": (1, 5, 20260871, False, False, False),
+        "K4_R5": (4, 5, 20260871, False, False, False),
+        "K1_R8": (1, 8, 20260871, False, False, False),
+        "K4_R8": (4, 8, 20260871, False, False, False),
+        "gauge_main_K1_R5": (1, 5, 20260871, False, False, False),
+        "gauge_K1_R8": (1, 8, 20260871, False, False, False),
+        "gauge_root_dropout": (1, 5, 20260871, False, True, False),
+        "gauge_meso_root_dropout": (1, 8, 20260871, False, True, False),
+        "gauge_root_order2": (1, 5, 20260871, False, False, False),
+        "gauge_task_graph_refined": (1, 5, 20260871, False, False, True),
         "root_dropout": (1, 5, 20260871, False, True, False),
         "root_order2": (1, 5, 20260871, False, False, False),
         "consensus_patch07": (1, 5, 20260871, True, False, False),
@@ -1766,6 +1889,47 @@ def _variant_spec(name: str) -> tuple[int, int, int, bool, bool, bool]:
     if name not in specs:
         raise ValueError(f"unknown V14.2R variant: {name}")
     return specs[name]
+
+
+def _apply_registered_root_variant(
+    root_keys: Sequence[tuple[int, str]],
+    *,
+    requested_root_count: int,
+    leave_one_out: bool,
+    reorder_nonanchors: bool,
+) -> tuple[tuple[tuple[int, str], ...], dict[str, Any]]:
+    """Apply root perturbations without ever changing the frozen anchor."""
+
+    selected = tuple(root_keys[: int(requested_root_count)])
+    metadata: dict[str, Any] = {
+        "selected_root_count": len(selected),
+        "root_budget_requested_count": int(requested_root_count),
+        "root_budget_filled": len(selected) >= int(requested_root_count),
+    }
+    if leave_one_out and selected:
+        anchor, nonanchors = selected[0], list(selected[1:])
+        if nonanchors:
+            nonanchors.pop()
+        selected = (anchor, *nonanchors)
+        metadata.update(
+            {
+                "leave_one_root_out": True,
+                "selected_root_count": len(selected),
+                "root_budget_requested_count": max(1, int(requested_root_count) - 1),
+                "root_budget_filled": len(selected)
+                >= max(1, int(requested_root_count) - 1),
+            }
+        )
+    if reorder_nonanchors and selected:
+        selected = (selected[0], *tuple(reversed(selected[1:])))
+        metadata.update(
+            {
+                "same_root_set_reordered": True,
+                "canonical_anchor_position_frozen": True,
+            }
+        )
+    metadata["canonical_anchor_retained"] = bool(selected and selected[0] == root_keys[0])
+    return selected, metadata
 
 
 def _refine_task_graph(tasks: pd.DataFrame, task_edges: pd.DataFrame) -> pd.DataFrame:
@@ -1790,6 +1954,68 @@ def _refine_task_graph(tasks: pd.DataFrame, task_edges: pd.DataFrame) -> pd.Data
     if not additions:
         return task_edges.copy()
     return pd.concat([task_edges, pd.DataFrame.from_records(additions)], ignore_index=True)
+
+
+def _pre_pruning_hypothesis_metrics(
+    growth_events: pd.DataFrame,
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Project proposal multiplicity before beam pruning onto physical nodes."""
+
+    columns = (
+        "chart_id",
+        "node_id",
+        "wave",
+        "reason",
+        "pre_pruning_proposal_count",
+        "pre_pruning_cluster_count",
+        "post_pruning_hypothesis_count",
+    )
+    if growth_events.empty:
+        return pd.DataFrame(columns=columns), {
+            "pre_pruning_proposal_count": 0,
+            "pre_pruning_cluster_count": 0,
+            "post_pruning_hypothesis_count": 0,
+            "alternative_hypothesis_node_count": 0,
+            "alternative_hypothesis_node_centrality_max": 0.0,
+        }
+    frame = growth_events.copy()
+    for name in columns[4:]:
+        if name not in frame:
+            frame[name] = 0
+    frame = frame.loc[:, list(columns)].copy()
+    degree: dict[int, int] = {
+        int(node_id): 0 for node_id in tasks["task_node_id"].astype(int)
+    }
+    for row in task_edges.itertuples(index=False):
+        left, right = int(row.left_node_id), int(row.right_node_id)
+        degree[left] = degree.get(left, 0) + 1
+        degree[right] = degree.get(right, 0) + 1
+    denominator = max(1, len(degree) - 1)
+    frame["alternative_hypothesis_node_centrality"] = frame["node_id"].map(
+        lambda node: degree.get(int(node), 0) / denominator
+    )
+    alternative = frame[frame["pre_pruning_cluster_count"].astype(int) > 1]
+    return frame, {
+        "pre_pruning_proposal_count": int(
+            frame["pre_pruning_proposal_count"].astype(int).sum()
+        ),
+        "pre_pruning_cluster_count": int(
+            frame["pre_pruning_cluster_count"].astype(int).sum()
+        ),
+        "post_pruning_hypothesis_count": int(
+            frame["post_pruning_hypothesis_count"].astype(int).sum()
+        ),
+        "alternative_hypothesis_node_count": int(
+            alternative["node_id"].astype(int).nunique()
+        ),
+        "alternative_hypothesis_node_centrality_max": (
+            float(alternative["alternative_hypothesis_node_centrality"].max())
+            if len(alternative)
+            else 0.0
+        ),
+    }
 
 
 def _strong_reference_primary(
@@ -2105,6 +2331,36 @@ def _load_validated_stage_result(
         return None
 
 
+def _selected_gauge_policy(
+    config: Mapping[str, Any], output_root: Path, variant: str
+) -> GaugeCorrectorPolicy | None:
+    if not str(variant).startswith("gauge_"):
+        return None
+    selection_path = output_root / "04_gauge_kernel_selection/selected_kernel.json"
+    if not selection_path.is_file():
+        raise FileNotFoundError(
+            f"gauge patch execution requires a sealed selected kernel: {selection_path}"
+        )
+    selected = _read_json(selection_path)
+    if not bool(selected.get("gate_pass", False)):
+        raise RuntimeError("selected gauge kernel did not pass the registered guard set")
+    if str(selected.get("kernel_id", "")) == "C0_baseline":
+        return None
+    return GaugeCorrectorPolicy(
+        mode=str(selected["mode"]),
+        gauge_gain=float(selected["gauge_gain"]),
+        maximum_gauge_step_deg=float(selected["maximum_gauge_step_deg"]),
+        anchor_weight=float(selected.get("anchor_weight", 0.0)),
+        cartesian_step_mm=float(selected["cartesian_step_mm"]),
+        maximum_iterations=int(selected["maximum_iterations"]),
+        damping=float(selected.get("damping", 1.0e-3)),
+        beta_weights=tuple(map(float, config["rooted_section"]["beta_weights"])),
+        residual_tolerance_mm=float(
+            config["audit_v2"]["continuation_residual_max_mm"]
+        ),
+    )
+
+
 def _execute_patch(
     config: Mapping[str, Any],
     project_root: Path,
@@ -2114,10 +2370,22 @@ def _execute_patch(
     directory: Path,
 ) -> dict[str, Any]:
     patch_started = time.time()
+    patch_cpu_started = time.process_time()
     directory.mkdir(parents=True, exist_ok=True)
     legacy_config = legacy.load_config(_source_paths(config, project_root)["legacy_config"])
     if patch_id == "patch_12":
         replacement = output_root / STAGE_DIRS["replacement_confirmation"]
+        if not (replacement / "patch12_task_nodes.parquet").is_file():
+            retry6_root = config.get("sources", {}).get("retry6_root")
+            if retry6_root is None:
+                raise FileNotFoundError(
+                    "patch_12 requires a sealed replacement-confirmation input"
+                )
+            replacement = (
+                project_root
+                / str(retry6_root)
+                / "01_replacement_confirmation"
+            )
         tasks = pd.read_parquet(replacement / "patch12_task_nodes.parquet").drop(columns=["patch_id"])
         task_edges = pd.read_parquet(replacement / "patch12_task_edges.parquet").drop(columns=["patch_id"])
         candidate_frame = pd.read_parquet(replacement / "patch12_candidate_clusters.parquet").drop(columns=["patch_id"])
@@ -2157,9 +2425,50 @@ def _execute_patch(
         if bool(config.get("optimization", {}).get("analytic_endpoint_kinematics", False))
         else legacy._EndpointOnlyForwardAdapter(reference_environment)
     )
-    nodes, continuation = legacy._segmented_continuation(
-        environment, tasks, task_edges
+    gauge_policy = _selected_gauge_policy(config, output_root, variant)
+    preview_roots = legacy._root_keys(
+        tasks, assignments, candidates, max(1, max(8, root_count))
     )
+    candidate_by_key = {candidate.key: candidate for candidate in candidates}
+    anchor_beta_rad = (
+        candidate_by_key[preview_roots[0]].beta_rad
+        if preview_roots and preview_roots[0] in candidate_by_key
+        else None
+    )
+    if isinstance(config, dict):
+        config["_active_gauge_policy"] = (
+            asdict(gauge_policy) if gauge_policy is not None else None
+        )
+        config["_active_anchor_beta_rad"] = (
+            anchor_beta_rad.tolist() if anchor_beta_rad is not None else None
+        )
+    if gauge_policy is None:
+        nodes, continuation = legacy._segmented_continuation(
+            environment, tasks, task_edges
+        )
+    else:
+        nodes = atlas_nodes_from_frames(tasks, task_edges)
+        node_by_id = {node.node_id: node for node in nodes}
+        cell_by_node = {
+            int(row.task_node_id): (
+                int(row.cell_level_mm),
+                int(row.cell_ix),
+                int(row.cell_iy),
+                int(row.cell_iz),
+            )
+            for row in tasks.itertuples(index=False)
+        }
+        raw_gauge = gauge_locked_predictor_corrector(
+            environment,
+            policy=gauge_policy,
+            anchor_beta_rad=anchor_beta_rad,
+        )
+        continuation = make_segmented_continuation(
+            raw_gauge,
+            node_by_id,
+            cell_by_node,
+            step_max_mm=float(gauge_policy.cartesian_step_mm),
+        )
     input_ready = time.time()
     growth_started = time.time()
     checkpoint = _load_growth_checkpoint(
@@ -2172,17 +2481,31 @@ def _execute_patch(
         variant=variant,
     )
     if checkpoint is None:
-        initial_roots = legacy._root_keys(tasks, assignments, candidates, max(1, root_count))
-        candidates, root_keys, root_report = _root_candidates_with_enrichment(
-            environment, tasks, candidates, initial_roots, root_count, seed
+        retry7 = str(config.get("protocol_version", "retry6")) == "retry7"
+        registry_root_count = max(8, root_count) if retry7 else root_count
+        initial_roots = legacy._root_keys(
+            tasks, assignments, candidates, max(1, registry_root_count)
         )
-        if leave_one_out and root_keys:
-            root_keys = root_keys[:-1]
-            root_report["leave_one_root_out"] = True
-            root_report["canonical_anchor_retained"] = True
-        if variant == "root_order2":
-            root_keys = tuple(reversed(root_keys))
-            root_report["same_root_set_reordered"] = True
+        candidates, root_keys, root_report = _root_candidates_with_enrichment(
+            environment,
+            tasks,
+            candidates,
+            initial_roots,
+            registry_root_count,
+            seed,
+        )
+        if retry7:
+            root_report["frozen_root_registry_count"] = len(root_keys)
+            root_report["frozen_root_registry"] = [list(key) for key in root_keys]
+            root_keys = root_keys[:root_count]
+            root_report["nested_root_prefix_contract"] = "R5_is_frozen_R8_prefix"
+        root_keys, root_variant_report = _apply_registered_root_variant(
+            root_keys,
+            requested_root_count=root_count,
+            leave_one_out=leave_one_out,
+            reorder_nonanchors=variant in {"root_order2", "gauge_root_order2"},
+        )
+        root_report.update(root_variant_report)
         if not root_keys:
             raise RuntimeError(f"no usable roots for {patch_id}/{variant}")
         growth = build_section_first_atlas(
@@ -2222,11 +2545,55 @@ def _execute_patch(
         else None
     )
     repair_started = time.time()
+    anchor_payload = root_report.get("canonical_anchor_key")
+    anchor_key = (
+        (int(anchor_payload[0]), str(anchor_payload[1]))
+        if isinstance(anchor_payload, (list, tuple)) and len(anchor_payload) == 2
+        else None
+    )
+    root_priority = tuple(
+        dict.fromkeys(
+            ([anchor_key] if anchor_key is not None else [])
+            + [chart.root_key for chart in growth.charts]
+        )
+    )
+    anchor_config = config.get("canonical_anchor", {})
+    anchor_policy = (
+        CanonicalAnchorPolicy(
+            ordered_anchor_root_keys=root_priority,
+            minimum_component_coverage=float(
+                anchor_config.get(
+                    "minimum_component_coverage",
+                    config["mechanism_gate"]["primary_label_coverage_min"],
+                )
+            ),
+            minimum_coherent_measure=float(
+                anchor_config.get(
+                    "minimum_coherent_measure",
+                    config["mechanism_gate"]["largest_stitched_component_min"],
+                )
+            ),
+            allow_stitchable_extensions=bool(
+                anchor_config.get("allow_stitchable_extensions", True)
+            ),
+            require_anchor_selected=bool(
+                anchor_config.get("require_anchor_selected", True)
+            ),
+        )
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else None
+    )
     repair_arguments = {
         "patch_id": patch_id,
         "method": variant,
         "policy": _repair_policy(config),
-        "retry_continuation": _registered_retry_adapter(environment, tasks, task_edges),
+        "retry_continuation": _registered_retry_adapter(
+            environment,
+            tasks,
+            task_edges,
+            gauge_policy=gauge_policy,
+            anchor_beta_rad=anchor_beta_rad,
+        ),
         "schedule_executor": _SubprocessAuditExecutor(
             config=config,
             project_root=project_root,
@@ -2241,8 +2608,14 @@ def _execute_patch(
             assignment_strategy=str(
                 config["audit_execution"].get("assignment_strategy", "hash")
             ),
+            worker_runner_path=(
+                Path(str(config["_runner_path"]))
+                if config.get("_runner_path")
+                else None
+            ),
         ),
-        "canonical_root_priority": tuple(initial_roots),
+        "canonical_root_priority": root_priority,
+        "canonical_anchor_policy": anchor_policy,
     }
     screening_first = bool(
         config["audit_execution"].get("screening_first", False)
@@ -2270,7 +2643,7 @@ def _execute_patch(
     strong_reference_required = bool(
         int(tasks["source_parent_node_id"].nunique()) <= 64
         and patch_id in set(map(str, config["diagnostic_patch_ids"]))
-        and variant in {"baseline", "main_K1_R5"}
+        and variant in {"baseline", "main_K1_R5", "gauge_main_K1_R5"}
     )
     strong_reference_started = time.time()
     strong_reference = (
@@ -2285,8 +2658,14 @@ def _execute_patch(
     strong_reference_finished = time.time()
     artifact_write_started = time.time()
     directory.mkdir(parents=True, exist_ok=True)
+    pre_pruning_frame, pre_pruning_metrics = _pre_pruning_hypothesis_metrics(
+        growth_frames["growth_events"], tasks, task_edges
+    )
     for name, frame in growth_frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
+    _write_parquet(
+        pre_pruning_frame, directory / "pre_pruning_hypotheses.parquet"
+    )
     for name, frame in repaired.frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     _write_json(directory / "strong_reference.json", strong_reference)
@@ -2303,6 +2682,12 @@ def _execute_patch(
         any(value in {"recoverable_numerical", "persistent_numerical"} for value in values)
         for values in schedule_classification
     )
+    retry_tier_counts = {
+        str(key): int(value)
+        for key, value in executions["retry_tier"].value_counts().items()
+    }
+    executed_chains = executions["executed_solver_chain"].astype(str)
+    artifact_paths = [path for path in directory.rglob("*") if path.is_file()]
     parent_by_task = tasks.set_index("task_node_id")["source_parent_node_id"].astype(int).to_dict()
     primary_nodes_by_chart: dict[str, list[int]] = {}
     for node_id, chart_id in repaired.primary_chart_by_node.items():
@@ -2334,6 +2719,16 @@ def _execute_patch(
         "abstention_ratio": len(repaired.abstained_node_ids) / max(1, len(growth.task_nodes)),
         "qualified_chart_count": len(repaired.qualified_chart_ids),
         "selected_stitch_component": list(repaired.selected_stitch_component),
+        "canonical_anchor_root_key": (
+            list(repaired.canonical_anchor_root_key)
+            if repaired.canonical_anchor_root_key is not None
+            else None
+        ),
+        "canonical_anchor_qualified": repaired.canonical_anchor_qualified,
+        "canonical_anchor_component_selected": repaired.canonical_anchor_component_selected,
+        "canonical_anchor_component_coverage": repaired.canonical_anchor_component_coverage,
+        "canonical_anchor_fallback_reason": repaired.canonical_anchor_fallback_reason,
+        "selected_anchor_rank": repaired.selected_anchor_rank,
         "geometry_gate": repaired.geometry_gate,
         "solver_gate": repaired.solver_gate,
         "repeat_gate": repaired.repeat_gate,
@@ -2356,7 +2751,10 @@ def _execute_patch(
         "first_pass_solver_failure_count": int(first_pass_failure_count),
         "first_pass_solver_failure_is_diagnostic_only": True,
         "geometric_branch_disagreement_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_count"],
+        "geometric_branch_disagreement_execution_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_execution_count"],
+        "geometric_branch_disagreement_unique_entity_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_unique_entity_count"],
         "alternative_hypothesis_ratio": alternative_ratio,
+        **pre_pruning_metrics,
         "tiny_chart_parent_threshold": tiny_parent_threshold,
         "tiny_primary_measure_ratio": tiny_nodes / max(1, len(repaired.primary_chart_by_node)),
         "primary_parent_count_by_chart": parent_count_by_chart,
@@ -2373,6 +2771,21 @@ def _execute_patch(
             if len(optimization) else math.inf
         ),
         "runtime_s": time.time() - patch_started,
+        "cpu_time_s": time.process_time() - patch_cpu_started,
+        "peak_rss_mb": float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        / 1024.0,
+        "continuation_execution_count": len(executions),
+        "retry_tier_counts": retry_tier_counts,
+        "bounded_ls_execution_count": int(
+            executed_chains.str.contains("bounded_ls", regex=False).sum()
+        ),
+        "slsqp_execution_count": int(
+            executed_chains.str.contains("slsqp", regex=False).sum()
+        ),
+        "artifact_file_count_before_completion": len(artifact_paths),
+        "artifact_total_bytes_before_completion": int(
+            sum(path.stat().st_size for path in artifact_paths)
+        ),
         "phase_runtime_s": {
             "input_load": input_ready - patch_started,
             "root_growth_or_resume": growth_finished - growth_started,
@@ -2381,6 +2794,11 @@ def _execute_patch(
             - strong_reference_started,
             "artifact_write": artifact_write_finished - artifact_write_started,
         },
+        "kinematics_counters": (
+            environment.performance_counters()
+            if hasattr(environment, "performance_counters")
+            else {"fk_row_count": None, "jacobian_row_count": None}
+        ),
         "growth_checkpoint_resumed": growth_checkpoint_resumed,
         "screening_first": screening_first,
         "screening_fallback_used": screening_fallback_used,
@@ -2399,7 +2817,11 @@ def _execute_patch(
         and report["strong_reference_gate"]
         and (report["repeat_p95_deg"] is not None and report["repeat_p95_deg"] <= float(mechanism["repeat_p95_max_deg"]))
         and report["persistent_numerical_count"] <= int(mechanism["unresolved_critical_edges_max"])
-        and report["root_budget_saturated"]
+        and report["root_budget_filled"]
+        and (
+            str(config.get("protocol_version", "retry6")) != "retry7"
+            or report["canonical_anchor_component_selected"]
+        )
     )
     _write_json(directory / "report.json", report)
     _write_patch_completion_manifest(
@@ -2413,7 +2835,12 @@ def _execute_patch(
 
 
 def _run_patch_jobs(
-    config: Mapping[str, Any], output_root: Path, stage_name: str, jobs: Sequence[tuple[str, str]]
+    config: Mapping[str, Any],
+    output_root: Path,
+    stage_name: str,
+    jobs: Sequence[tuple[str, str]],
+    *,
+    runner_path: Path | None = None,
 ) -> None:
     # A coordinator must recompute the physical input digest before accepting
     # a completion manifest.  Launching the lightweight coordinator for every
@@ -2434,6 +2861,11 @@ def _run_patch_jobs(
     token_pool_directory = (
         output_root / STAGE_DIRS[stage_name] / "_audit_worker_tokens"
     )
+    effective_runner = (
+        Path(str(config["_runner_path"])).resolve()
+        if runner_path is None and config.get("_runner_path")
+        else (Path(__file__).resolve() if runner_path is None else runner_path)
+    )
     while pending:
         batch = pending[:patch_worker_limit]
         del pending[: len(batch)]
@@ -2443,7 +2875,8 @@ def _run_patch_jobs(
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("a", encoding="utf-8")
             command = [
-                sys.executable, str(Path(__file__).resolve()),
+                sys.executable,
+                str(effective_runner),
                 "--config", str(config["config_path"]),
                 "--output-root", str(output_root),
                 "--stage", stage_name,
@@ -2693,7 +3126,7 @@ def _frame_stability(
         "coverage_jaccard": len(common) / max(1, len(union)),
         "beta_p95_deg": float(np.percentile(gaps, 95)) if len(gaps) else math.inf,
         "beta_max_deg": float(np.max(gaps)) if len(gaps) else math.inf,
-        "assignment_change_ratio": float(np.mean(gaps > 1.0)) if len(gaps) else 1.0,
+        "beta_disagreement_ratio_gt_1deg": float(np.mean(gaps > 1.0)) if len(gaps) else 1.0,
         "compared_node_count": len(common),
     }
     if left_directory is not None and right_directory is not None:
@@ -2721,7 +3154,7 @@ def _frame_stability(
         report["coverage_jaccard"] >= float(policy["coverage_jaccard_min"])
         and report["beta_p95_deg"] <= float(policy["beta_p95_max_deg"])
         and report["beta_max_deg"] <= float(policy["beta_max_deg"])
-        and report["assignment_change_ratio"] <= float(policy["assignment_change_max"])
+        and report["beta_disagreement_ratio_gt_1deg"] <= float(policy["assignment_change_max"])
         and report["verified_edge_change_ratio"] <= float(policy["verified_edge_change_max"])
     )
     return report
@@ -3075,7 +3508,7 @@ def stage_confirmation(config: Mapping[str, Any], project_root: Path, output_roo
         "confirmation_pass": int(confirmation["gate_pass"].sum()) >= int(gate["confirmation_pass_min"]),
         "median_largest_component": float(frame.loc[frame["gate_pass"], "largest_stitched_component_ratio"].median()) >= float(gate["largest_component_median_min"]),
         "retained_certificates": bool(frame.loc[frame["gate_pass"], "certificate_gate"].all()),
-        "root_budget_saturated": bool(frame["root_budget_saturated"].all()),
+        "root_budget_filled": bool(frame["root_budget_filled"].all()),
         "strong_reference_validated": bool(frame["strong_reference_gate"].all()),
         "tiny_charts_do_not_dominate": bool(
             frame["tiny_primary_measure_ratio"].le(float(gate["tiny_chart_ratio_max"])).all()
@@ -3127,9 +3560,20 @@ def stage_meso_bridge(
         task_edges = pd.read_parquet(legacy_paths["original_atlas_edges"])
         candidates = pd.read_parquet(legacy_paths["original_candidate_clusters"])
         historical = pd.read_parquet(legacy_paths["assignments"])
-        replacement = pd.read_parquet(
-            output_root / STAGE_DIRS["replacement_confirmation"] / "patch12_assignments.parquet"
+        replacement_path = (
+            output_root
+            / STAGE_DIRS["replacement_confirmation"]
+            / "patch12_assignments.parquet"
         )
+        if not replacement_path.is_file() and config.get("sources", {}).get(
+            "retry6_root"
+        ):
+            replacement_path = (
+                project_root
+                / str(config["sources"]["retry6_root"])
+                / "01_replacement_confirmation/patch12_assignments.parquet"
+            )
+        replacement = pd.read_parquet(replacement_path)
         excluded = set(historical["parent_node_id"].astype(int)) | set(
             replacement["parent_node_id"].astype(int)
         )
@@ -3265,14 +3709,24 @@ def stage_meso_bridge(
             },
         )
 
+    meso_main = (
+        "gauge_K1_R8"
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else "baseline"
+    )
+    meso_dropout = (
+        "gauge_meso_root_dropout"
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else "meso_root_dropout"
+    )
     _run_patch_jobs(
         config,
         output_root,
         "meso_bridge",
-        [("meso_512", "baseline"), ("meso_512", "meso_root_dropout")],
+        [("meso_512", meso_main), ("meso_512", meso_dropout)],
     )
-    baseline_dir = stage / "meso_512/baseline"
-    dropout_dir = stage / "meso_512/meso_root_dropout"
+    baseline_dir = stage / "meso_512" / meso_main
+    dropout_dir = stage / "meso_512" / meso_dropout
     baseline_report = _read_json(baseline_dir / "report.json")
     dropout_report = _read_json(dropout_dir / "report.json")
     stability = _frame_stability(

@@ -184,6 +184,24 @@ def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     }
 
 
+def _upstream_stage_paths(
+    config: Mapping[str, Any], upstream_root: Path
+) -> dict[str, Path]:
+    if str(config.get("upstream_protocol_version", "retry6")) == "retry7":
+        return {
+            "confirmation": upstream_root / "08_twelve_patch_confirmation/gate.json",
+            "reach": upstream_root / "07_reach_round8/gate.json",
+            "meso": upstream_root / "09_meso_bridge/gate.json",
+            "manifest": upstream_root / "10_summary/retry7_artifact_manifest.json",
+        }
+    return {
+        "confirmation": upstream_root / "09_twelve_patch_confirmation/gate.json",
+        "reach": upstream_root / "08_reach_round7/gate.json",
+        "meso": upstream_root / "10_meso_bridge/gate.json",
+        "manifest": upstream_root / "11_summary/artifact_manifest.json",
+    }
+
+
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     v142r._write_json(path, value)
 
@@ -398,10 +416,11 @@ def _run_v143_audit_shard_worker(
 def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["inventory"]
     sources = _sources(config, project_root)
-    confirmation = sources["v14_2r"] / "09_twelve_patch_confirmation/gate.json"
-    reach = sources["v14_2r"] / "08_reach_round7/gate.json"
-    meso = sources["v14_2r"] / "10_meso_bridge/gate.json"
-    upstream_manifest = sources["v14_2r"] / "11_summary/artifact_manifest.json"
+    upstream = _upstream_stage_paths(config, sources["v14_2r"])
+    confirmation = upstream["confirmation"]
+    reach = upstream["reach"]
+    meso = upstream["meso"]
+    upstream_manifest = upstream["manifest"]
     required = [
         sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
         sources["historical_final8_teacher"], sources["historical_final8_catalog"],
@@ -571,8 +590,16 @@ def _execute_root(config: Mapping[str, Any], project_root: Path, output_root: Pa
     return report
 
 
-def _run_root_jobs(config: Mapping[str, Any], project_root: Path, output_root: Path) -> None:
-    pending = list(range(int(config["pilot"]["root_count"])))
+def _run_root_jobs(
+    config: Mapping[str, Any],
+    project_root: Path,
+    output_root: Path,
+    *,
+    start_index: int = 0,
+    stop_index: int | None = None,
+) -> None:
+    stop = int(config["pilot"]["root_count"]) if stop_index is None else int(stop_index)
+    pending = list(range(int(start_index), stop))
     running: list[tuple[int, subprocess.Popen[str], Any]] = []
     failures = []
     environment = os.environ.copy()
@@ -616,15 +643,80 @@ def stage_root_charts(config: Mapping[str, Any], project_root: Path, output_root
     if config.get("_root_index") is not None:
         report = _execute_root(config, project_root, output_root, int(config["_root_index"]))
         return {"gate_pass": True, "worker_report": report}
-    _run_root_jobs(config, project_root, output_root)
-    reports = [_read_json(stage / f"root_{index:03d}/report.json") for index in range(32)]
+    budgets = tuple(
+        map(
+            int,
+            config["pilot"].get(
+                "root_expansion_budgets", [int(config["pilot"]["root_count"])]
+            ),
+        )
+    )
+    if not budgets or budgets[-1] != int(config["pilot"]["root_count"]):
+        raise RuntimeError("root expansion budgets must end at the frozen maximum")
+    previous_budget = 0
+    previous_coverage = 0.0
+    expansion_rows = []
+    executed_root_count = budgets[-1]
+    for budget in budgets:
+        _run_root_jobs(
+            config,
+            project_root,
+            output_root,
+            start_index=previous_budget,
+            stop_index=budget,
+        )
+        covered: set[int] = set()
+        for index in range(budget):
+            primary = pd.read_parquet(
+                stage / f"root_{index:03d}/primary_section.parquet"
+            )
+            covered.update(
+                map(
+                    int,
+                    primary.loc[
+                        ~primary["abstained"].astype(bool), "task_node_id"
+                    ],
+                )
+            )
+        coverage = len(covered) / max(1, int(config["pilot"]["task_probe_count"]))
+        gain = coverage - previous_coverage
+        expansion_rows.append(
+            {
+                "root_budget": budget,
+                "coverage_union_ratio": coverage,
+                "incremental_coverage_ratio": gain,
+            }
+        )
+        stop_threshold = float(
+            config["pilot"].get("root_expansion_measure_gain_stop", -1.0)
+        )
+        if (
+            previous_budget > 0
+            and gain < stop_threshold
+            and coverage >= float(config["pilot"]["labelable_measure_min"])
+        ):
+            executed_root_count = budget
+            break
+        previous_budget = budget
+        previous_coverage = coverage
+    reports = [
+        _read_json(stage / f"root_{index:03d}/report.json")
+        for index in range(executed_root_count)
+    ]
+    _write_parquet(
+        pd.DataFrame.from_records(expansion_rows),
+        stage / "root_expansion_history.parquet",
+    )
     _write_parquet(
         v142r._report_records_frame(reports), stage / "root_chart_reports.parquet"
     )
     return _gate(stage / "gate.json", {
-        "all_roots_completed": len(reports) == 32,
+        "registered_root_expansion_completed": len(reports) == executed_root_count,
         "at_least_one_qualifiable_root": any(bool(row["gate_pass"]) for row in reports),
-    }, root_reports=reports, qualifiable_root_count=sum(bool(row["gate_pass"]) for row in reports),
+    }, root_reports=reports, executed_root_count=executed_root_count,
+       maximum_root_count=int(config["pilot"]["root_count"]),
+       root_expansion_history=expansion_rows,
+       qualifiable_root_count=sum(bool(row["gate_pass"]) for row in reports),
        bad_roots_are_removed_by_chart_qualification=True)
 
 
@@ -634,7 +726,8 @@ def _combined_growth(config: Mapping[str, Any], output_root: Path):
     edges = pd.read_parquet(registry_stage / "pilot_task_edges.parquet")
     nodes = legacy.atlas_nodes_from_frames(tasks, edges)
     hypothesis_parts, edge_parts = [], []
-    for index in range(32):
+    root_gate = _read_json(output_root / STAGE_DIRS["root_charts"] / "gate.json")
+    for index in range(int(root_gate["executed_root_count"])):
         directory = output_root / STAGE_DIRS["root_charts"] / f"root_{index:03d}"
         hypothesis_parts.append(pd.read_parquet(directory / "section_hypotheses.parquet"))
         edge_parts.append(pd.read_parquet(directory / "selected_edges.parquet"))
@@ -1897,7 +1990,20 @@ def stage_reach_update(
     dataset = _require(output_root, "fixed_budget_dataset", config)
     students = _require(output_root, "students", config)
     stage = output_root / STAGE_DIRS["reach_update"]
-    round7_path = _sources(config, project_root)["v14_2r"] / "08_reach_round7/gate.json"
+    upstream_root = _sources(config, project_root)["v14_2r"]
+    if str(config.get("upstream_protocol_version", "retry6")) == "retry7":
+        round8 = _read_json(
+            _upstream_stage_paths(config, upstream_root)["reach"]
+        )
+        return _gate(
+            stage / "gate.json",
+            {"reach_converged": bool(round8.get("gate_pass", False))},
+            reach_source="retry7_round8",
+            round8_executed_upstream=True,
+            round9_forbidden=True,
+            upstream_reach_gate=round8,
+        )
+    round7_path = upstream_root / "08_reach_round7/gate.json"
     round7 = _read_json(round7_path)
     formal = config["formal_gate"]
     nonreach_checks = {
@@ -1936,7 +2042,7 @@ def stage_reach_update(
         )
 
     reach = config["reach_round8"]
-    v142 = _sources(config, project_root)["v14_2r"]
+    v142 = upstream_root
     round7_a = pd.read_parquet(v142 / "08_reach_round7/replica_a_slab_round7.parquet")
     round7_b = pd.read_parquet(v142 / "08_reach_round7/replica_b_slab_round7.parquet")
     round7_report = _read_json(v142 / "08_reach_round7/reach_round7_report.json")

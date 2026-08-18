@@ -149,7 +149,7 @@ def test_frame_stability_selects_beta_columns_without_pandas_tuple_indexing(
     assert report["coverage_jaccard"] == 1.0
     assert report["beta_p95_deg"] == 0.0
     assert report["beta_max_deg"] == 0.0
-    assert report["assignment_change_ratio"] == 0.0
+    assert report["beta_disagreement_ratio_gt_1deg"] == 0.0
     assert report["verified_edge_change_ratio"] == 0.0
 
 

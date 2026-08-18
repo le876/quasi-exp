@@ -82,4 +82,95 @@ def make_optimized_predictor_corrector_continuation(
     return continuation
 
 
-__all__ = ["make_optimized_predictor_corrector_continuation"]
+def make_iterative_weighted_dls_continuation(
+    environment: OptimizedForwardEnvironment,
+    *,
+    damping: float = 2.0e-3,
+    beta_weights: Sequence[float] = (4.0, 4.0, 2.0, 2.0, 1.0, 1.0),
+    max_corrector_iterations: int = 200,
+    residual_tolerance_mm: float = 3.0,
+) -> ContinuationAdapter:
+    """Target-blind bounded iterative weighted-DLS corrector.
+
+    This is intentionally a distinct numerical kernel from SciPy bounded
+    least-squares so the registered R1/R2 chain is executable rather than a
+    descriptive label.
+    """
+
+    bounds = np.asarray(environment.bounds, dtype=float).reshape(6, 2)
+    weights = np.asarray(beta_weights, dtype=float).reshape(6)
+
+    def continuation(
+        source: AtlasCandidate, target: AtlasTaskNode
+    ) -> ContinuationOutcome:
+        beta = source.beta_rad.copy()
+        try:
+            for iteration in range(1, int(max_corrector_iterations) + 1):
+                xyz, jacobian = environment.fk_and_jacobian(beta)
+                error = target.xyz_m - xyz[0]
+                residual_mm = float(np.linalg.norm(error) * 1000.0)
+                if residual_mm <= float(residual_tolerance_mm):
+                    return ContinuationOutcome(
+                        beta,
+                        residual_mm,
+                        True,
+                        True,
+                        iteration - 1,
+                        "weighted_dls_converged",
+                    )
+                step = weighted_damped_pinv(
+                    jacobian[0], damping=float(damping), weights=weights
+                ) @ error
+                accepted = False
+                for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
+                    candidate = beta + scale * step
+                    if not np.all(
+                        (candidate >= bounds[:, 0] - 1.0e-12)
+                        & (candidate <= bounds[:, 1] + 1.0e-12)
+                    ):
+                        continue
+                    candidate_residual = float(
+                        np.linalg.norm(environment.fk(candidate)[0] - target.xyz_m)
+                        * 1000.0
+                    )
+                    if candidate_residual < residual_mm - 1.0e-12:
+                        beta = candidate
+                        accepted = True
+                        break
+                if not accepted:
+                    return ContinuationOutcome(
+                        beta,
+                        residual_mm,
+                        False,
+                        True,
+                        iteration,
+                        "weighted_dls_line_search_stalled",
+                    )
+            residual_mm = float(
+                np.linalg.norm(environment.fk(beta)[0] - target.xyz_m) * 1000.0
+            )
+            return ContinuationOutcome(
+                beta,
+                residual_mm,
+                residual_mm <= float(residual_tolerance_mm),
+                True,
+                int(max_corrector_iterations),
+                "weighted_dls_iteration_limit",
+            )
+        except Exception as error:
+            return ContinuationOutcome(
+                source.beta_rad,
+                1.0e300,
+                False,
+                False,
+                0,
+                f"weighted_dls_exception:{type(error).__name__}",
+            )
+
+    return continuation
+
+
+__all__ = [
+    "make_iterative_weighted_dls_continuation",
+    "make_optimized_predictor_corrector_continuation",
+]

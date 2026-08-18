@@ -64,6 +64,23 @@ def test_v14_3_stage_order_keeps_student_before_formal_admission() -> None:
     assert set(module.STAGE_RUNNERS) == set(module.STAGE_ORDER)
 
 
+def test_v14_3_retry7_uses_progressive_roots_and_retry7_stage_contract() -> None:
+    module = _module()
+    config = module.load_config(
+        ROOT / "configs/bacra_v14_3_repaired_5k_student_retry7.yaml"
+    )
+    upstream = module._upstream_stage_paths(config, Path("/runs/retry7"))
+
+    assert config["upstream_protocol_version"] == "retry7"
+    assert config["pilot"]["root_expansion_budgets"] == [8, 16, 24, 32]
+    assert config["pilot"]["root_expansion_measure_gain_stop"] == 0.01
+    assert upstream["confirmation"] == Path(
+        "/runs/retry7/08_twelve_patch_confirmation/gate.json"
+    )
+    assert upstream["reach"] == Path("/runs/retry7/07_reach_round8/gate.json")
+    assert upstream["meso"] == Path("/runs/retry7/09_meso_bridge/gate.json")
+
+
 def test_router_feature_contract_is_xyz_only() -> None:
     module = _module()
     assert module.ROUTER_FEATURE_COLUMNS == ("x_m", "y_m", "z_m")

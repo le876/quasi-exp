@@ -12,6 +12,7 @@ from quasi_exp.teacher.canonical_atlas import (
     make_predictor_corrector_continuation,
 )
 from quasi_exp.teacher.optimized_continuation import (
+    make_iterative_weighted_dls_continuation,
     make_optimized_predictor_corrector_continuation,
 )
 from quasi_exp.teacher.optimized_forward import optimized_forward
@@ -73,6 +74,52 @@ def test_evaluate_returns_fk_and_jacobian_in_one_batch() -> None:
     assert np.isfinite(evaluation.jacobian_m).all()
 
 
+def test_optimized_environment_counts_fk_and_jacobian_rows() -> None:
+    lengths, endpoint = _inputs()
+    reference = ForwardEnvironment(
+        lengths,
+        endpoint,
+        theta_sign=-1.0,
+        beta_bounds_rad=np.tile(np.asarray([-0.2, 0.2]), (6, 1)),
+    )
+    environment = optimized_forward(reference)
+
+    environment.fk(np.zeros((3, 6)))
+    environment.fk_and_jacobian(np.zeros(6))
+
+    assert environment.performance_counters() == {
+        "fk_row_count": 4,
+        "jacobian_row_count": 1,
+        "kinematics_cache_hit_count": 0,
+        "kinematics_cache_miss_count": 1,
+        "kinematics_cache_entry_count": 1,
+    }
+
+
+def test_optimized_forward_cache_reuses_only_pure_kinematics() -> None:
+    lengths, endpoint = _inputs()
+    reference = ForwardEnvironment(
+        lengths,
+        endpoint,
+        theta_sign=-1.0,
+        beta_bounds_rad=np.tile(np.asarray([-0.2, 0.2]), (6, 1)),
+    )
+    environment = optimized_forward(reference)
+    beta = np.zeros(6, dtype=float)
+
+    first_xyz, first_jacobian = environment.fk_and_jacobian(beta)
+    second_xyz, second_jacobian = environment.fk_and_jacobian(beta.copy())
+    fk_xyz = environment.fk(beta.copy())
+
+    np.testing.assert_array_equal(first_xyz, second_xyz)
+    np.testing.assert_array_equal(first_jacobian, second_jacobian)
+    np.testing.assert_array_equal(first_xyz, fk_xyz)
+    counters = environment.performance_counters()
+    assert counters["kinematics_cache_miss_count"] == 1
+    assert counters["kinematics_cache_hit_count"] == 2
+    assert counters["kinematics_cache_entry_count"] == 1
+
+
 def test_explicit_jacobian_preserves_continuation_classification() -> None:
     lengths, endpoint = _inputs()
     reference = ForwardEnvironment(
@@ -109,3 +156,30 @@ def test_explicit_jacobian_preserves_continuation_classification() -> None:
         rtol=0.0,
         atol=3.0e-3,
     )
+
+
+def test_iterative_weighted_dls_is_a_distinct_registered_kernel() -> None:
+    lengths, endpoint = _inputs()
+    reference = ForwardEnvironment(
+        lengths,
+        endpoint,
+        theta_sign=-1.0,
+        beta_bounds_rad=np.tile(np.asarray([-0.2, 0.2]), (6, 1)),
+    )
+    environment = optimized_forward(reference)
+    source = AtlasCandidate(
+        node_id=0,
+        candidate_id="source",
+        beta_rad=np.zeros(6),
+        residual_mm=0.0,
+        min_margin_deg=5.0,
+        normalized_min_margin=0.5,
+    )
+    target_beta = np.asarray([0.006, -0.005, 0.004, -0.003, 0.002, -0.001])
+    target = AtlasTaskNode(1, environment.fk(target_beta)[0], (0,))
+
+    outcome = make_iterative_weighted_dls_continuation(environment)(source, target)
+
+    assert outcome.success is True
+    assert outcome.residual_mm <= 3.0
+    assert outcome.status == "weighted_dls_converged"

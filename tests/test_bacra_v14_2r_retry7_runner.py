@@ -27,13 +27,15 @@ def test_retry7_config_freezes_anchor_gauge_and_four_of_four_gate() -> None:
     )
 
     assert config["protocol_version"] == "retry7"
-    assert config["protocol_revision"] == "local_abstention_retry1"
+    assert config["protocol_revision"] == "local_abstention_retry2"
     assert config["reuse_sealed_stages"] == [
         "lineage_audit",
         "kr_ablation",
         "holonomy_diagnostics",
+        "gauge_kernel_selection",
     ]
-    assert config["reuse_pre_abstention_gauge_traces"] is True
+    assert config["reuse_pre_abstention_gauge_traces"] is False
+    assert config["reuse_patch07_numerical_artifacts"] is True
     assert config["parallel"] == {
         "patch_workers": 12,
         "numerical_threads_per_worker": 1,
@@ -262,3 +264,33 @@ def test_patch_runner_accepts_guarded_local_abstention_policy(
 
     assert policy is not None
     assert policy.mode == "predictor_proximal"
+
+
+def test_fresh_full_certificate_does_not_force_unnecessary_abstention() -> None:
+    module = _module()
+    reports = {
+        name: {
+            "gate_pass": True,
+            "certificate_gate": True,
+            "geometry_gate": True,
+            "solver_gate": True,
+            "repeat_gate": True,
+            "abstention_ratio": 0.0,
+            "canonical_anchor_component_selected": True,
+        }
+        for name in (
+            "gauge_main_K1_R5",
+            "gauge_task_graph_refined",
+            "gauge_K1_R8",
+        )
+    }
+
+    checks = module._patch07_repair_checks(
+        {"abstention_required": True},
+        reports,
+        ordinary_refined={"gate_pass": True},
+        root_budget={"gate_pass": True},
+    )
+
+    assert checks["registered_local_failure_resolved"] is True
+    assert all(checks.values())

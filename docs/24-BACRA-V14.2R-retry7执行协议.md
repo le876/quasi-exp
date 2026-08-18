@@ -19,9 +19,19 @@ critical-cycle Gate。该结果不授权放宽 `geometry max <= 1 deg`。后续�
    的只读证据引用，不复制成 fresh execution；guard、patch repair 及所有下游
    certificate 必须重新执行。
 
-修订输出使用独立目录
-`runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry1`，不得覆盖首次
-retry7 artifacts。
+第一次 local-abstention 执行进一步表明，C1 对 fresh patch_07 canonical
+field 可在不 abstain 的情况下取得 100% coverage 和完整 certificate。因此
+abstention 是允许的隔离手段，不是必须人为制造的结果；若 fresh induced graph
+已经完整通过全部 Gate，应保留全域 section。
+
+task-graph refinement 稳定性只检查 baseline 中已注册物理边是否在 refined 图中
+退化；refinement 按定义新增的、且自身已获完整证书的边，不计作 assignment
+instability。物理 beta field、coverage 和新增边 certificate 仍分别报告。
+
+当前修订输出使用独立目录
+`runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry2`。retry1 的 numerical
+patch artifacts 仅作为带 closure 的只读输入重新聚合，不覆盖或冒充 fresh
+execution。
 
 本协议冻结 GPT-5 Pro 对 retry6 科学 Gate 失败的审计结论，并只对后续结果生效。retry6 artifacts 保持只读，不重写其结论。
 

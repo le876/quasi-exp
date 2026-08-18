@@ -203,6 +203,56 @@ def test_refined_graph_stability_does_not_penalize_new_verified_edges(
     )
 
 
+def test_gauge_prefixed_refined_graph_uses_baseline_edge_regression_semantics(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    frame = pd.DataFrame(
+        {
+            "task_node_id": [10, 11],
+            "abstained": [False, False],
+            **{name: [0.0, 0.0] for name in module.BETA_COLUMNS},
+        }
+    )
+    baseline = tmp_path / "gauge_main_K1_R5"
+    refined = tmp_path / "gauge_task_graph_refined"
+    baseline.mkdir()
+    refined.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_verified_edge_entities",
+        lambda directory, _config: (
+            {"edge:10:11"}
+            if directory == baseline
+            else {"edge:10:11", "edge:11:12"}
+        ),
+    )
+    config = {
+        "search_stability": {
+            "coverage_jaccard_min": 0.95,
+            "beta_p95_max_deg": 1.0,
+            "beta_max_deg": 2.0,
+            "assignment_change_max": 0.05,
+            "verified_edge_change_max": 0.05,
+        }
+    }
+
+    report = module._frame_stability(
+        frame,
+        frame,
+        config,
+        left_directory=baseline,
+        right_directory=refined,
+    )
+
+    assert report["gate_pass"] is True
+    assert report["verified_edge_change_ratio"] == 0.0
+    assert report["verified_new_edge_count"] == 1
+    assert report["verified_edge_comparison_semantics"] == (
+        "registered_baseline_edge_regression_only"
+    )
+
+
 def test_patch_jobs_register_full_shard_sets_against_one_global_token_pool(
     monkeypatch,
     tmp_path,

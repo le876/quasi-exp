@@ -3137,7 +3137,10 @@ def _frame_stability(
         edge_union = left_edges | right_edges
         if (
             right_directory is not None
-            and "task_graph_refined" in right_directory.parts
+            and any(
+                str(part).endswith("task_graph_refined")
+                for part in right_directory.parts
+            )
         ):
             report["verified_edge_change_ratio"] = len(left_edges - right_edges) / max(
                 1, len(left_edges)

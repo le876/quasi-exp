@@ -109,17 +109,21 @@ def _reuse_registered_stage(
     records = {
         str(record["path"]): record for record in manifest.get("artifacts", ())
     }
-    record = records.get(gate_relative.as_posix())
-    gate_path = prior_root / gate_relative
-    if (
-        record is None
-        or not gate_path.is_file()
-        or gate_path.stat().st_size != int(record["bytes"])
-        or base.sha256_file(gate_path) != str(record["sha256"])
-    ):
-        raise RuntimeError(
-            f"sealed retry7 stage reference is absent or mismatched: {gate_path}"
-        )
+    def verified_artifact(relative: Path) -> Path:
+        record = records.get(relative.as_posix())
+        path = prior_root / relative
+        if (
+            record is None
+            or not path.is_file()
+            or path.stat().st_size != int(record["bytes"])
+            or base.sha256_file(path) != str(record["sha256"])
+        ):
+            raise RuntimeError(
+                f"sealed retry7 stage reference is absent or mismatched: {path}"
+            )
+        return path
+
+    gate_path = verified_artifact(gate_relative)
     prior_gate = base._read_json(gate_path)
     stage = output_root / STAGE_DIRS[name]
     stage.mkdir(parents=True, exist_ok=True)
@@ -134,15 +138,30 @@ def _reuse_registered_stage(
         "prior_gate_pass": bool(prior_gate.get("gate_pass", False)),
     }
     base._write_json(stage / "reused_evidence_reference.json", reference)
+    selected_kernel = None
+    if name == "gauge_kernel_selection":
+        selected_path = verified_artifact(
+            Path(STAGE_DIRS[name]) / "selected_kernel.json"
+        )
+        selected_kernel = {
+            **base._read_json(selected_path),
+            "policy_evidence_role": "sealed_policy_reference_not_fresh_guard",
+            "prior_selected_kernel_sha256": base.sha256_file(selected_path),
+        }
+        base._write_json(stage / "selected_kernel.json", selected_kernel)
+    payload = {
+        **prior_gate,
+        "gate_pass": bool(prior_gate.get("gate_pass", False)),
+        "operational_completion": True,
+        **reference,
+    }
+    if selected_kernel is not None:
+        payload["selected_kernel"] = selected_kernel
     return _complete(
         stage,
         config,
         name,
-        {
-            "gate_pass": bool(prior_gate.get("gate_pass", False)),
-            "operational_completion": True,
-            **reference,
-        },
+        payload,
     )
 
 
@@ -952,6 +971,11 @@ def stage_gauge_kernel_selection(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> dict[str, Any]:
     holonomy = _require(config, output_root, "holonomy_diagnostics")
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "gauge_kernel_selection"
+    )
+    if reused is not None:
+        return reused
     stage = output_root / STAGE_DIRS["gauge_kernel_selection"]
     stage.mkdir(parents=True, exist_ok=True)
     if not holonomy.get("gate_pass", False):
@@ -1237,6 +1261,43 @@ def _stability(
     )
 
 
+def _patch07_repair_checks(
+    gauge: Mapping[str, Any],
+    reports: Mapping[str, Mapping[str, Any]],
+    *,
+    ordinary_refined: Mapping[str, Any],
+    root_budget: Mapping[str, Any],
+) -> dict[str, bool]:
+    full_fresh_repair = all(
+        bool(row.get("gate_pass", False))
+        and bool(row.get("certificate_gate", False))
+        and bool(row.get("geometry_gate", False))
+        and bool(row.get("solver_gate", False))
+        and bool(row.get("repeat_gate", False))
+        for row in reports.values()
+    )
+    explicit_abstention = any(
+        float(row.get("abstention_ratio", 0.0)) > 0.0
+        for row in reports.values()
+    )
+    return {
+        "all_patch_certificates": all(
+            bool(row.get("gate_pass", False)) for row in reports.values()
+        ),
+        "ordinary_refined_stability": bool(ordinary_refined["gate_pass"]),
+        "R5_R8_same_anchor_stability": bool(root_budget["gate_pass"]),
+        "anchor_selected": all(
+            bool(row.get("canonical_anchor_component_selected", False))
+            for row in reports.values()
+        ),
+        "registered_local_failure_resolved": (
+            not bool(gauge.get("abstention_required", False))
+            or explicit_abstention
+            or full_fresh_repair
+        ),
+    }
+
+
 def stage_patch07_repair(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> dict[str, Any]:
@@ -1251,23 +1312,57 @@ def stage_patch07_repair(
     if not gauge.get("proceed_to_patch07_repair", False):
         return _complete(stage, config, "patch07_repair", base.write_scientific_skip(stage, "gauge_kernel_selection_failed"))
     variants = ("gauge_main_K1_R5", "gauge_task_graph_refined", "gauge_K1_R8")
-    _run_patch_jobs(config, output_root, "patch07_repair", [("patch_07", name) for name in variants])
+    prior_root = _prior_retry7_root(config, project_root)
+    reuse_numerical = bool(
+        config.get("reuse_patch07_numerical_artifacts", False)
+    )
+    numerical_stage = stage
+    if reuse_numerical:
+        if prior_root is None:
+            raise RuntimeError(
+                "patch07 numerical reuse requires retry7_pre_abstention_root"
+            )
+        numerical_stage = prior_root / STAGE_DIRS["patch07_repair"]
+        for name in variants:
+            report_path = numerical_stage / "patch_07" / name / "report.json"
+            completion_path = (
+                numerical_stage / "patch_07" / name / "completion_manifest.json"
+            )
+            if not report_path.is_file() or not completion_path.is_file():
+                raise FileNotFoundError(
+                    f"sealed patch07 numerical artifact missing: {report_path}"
+                )
+        base._write_json(
+            stage / "numerical_artifact_reference.json",
+            {
+                "evidence_role": "sealed_numerical_artifacts_reaggregated_under_corrected_gate",
+                "prior_retry7_root": str(prior_root),
+                "prior_patch07_stage": str(numerical_stage),
+                "prior_manifest_sha256": base.sha256_file(
+                    prior_root / "10_summary/retry7_artifact_manifest.json"
+                ),
+            },
+        )
+    else:
+        _run_patch_jobs(config, output_root, "patch07_repair", [("patch_07", name) for name in variants])
     reports = {
-        name: base._read_json(stage / "patch_07" / name / "report.json")
+        name: base._read_json(
+            numerical_stage / "patch_07" / name / "report.json"
+        )
         for name in variants
     }
-    ordinary_refined = _stability(config, stage, variants[0], variants[1])
-    root_budget = _stability(config, stage, variants[0], variants[2])
-    checks = {
-        "all_patch_certificates": all(bool(row["gate_pass"]) for row in reports.values()),
-        "ordinary_refined_stability": bool(ordinary_refined["gate_pass"]),
-        "R5_R8_same_anchor_stability": bool(root_budget["gate_pass"]),
-        "anchor_selected": all(bool(row["canonical_anchor_component_selected"]) for row in reports.values()),
-        "registered_local_abstention_is_explicit": (
-            not bool(gauge.get("abstention_required", False))
-            or any(float(row["abstention_ratio"]) > 0.0 for row in reports.values())
-        ),
-    }
+    ordinary_refined = _stability(
+        config, numerical_stage, variants[0], variants[1]
+    )
+    root_budget = _stability(
+        config, numerical_stage, variants[0], variants[2]
+    )
+    checks = _patch07_repair_checks(
+        gauge,
+        reports,
+        ordinary_refined=ordinary_refined,
+        root_budget=root_budget,
+    )
     base._write_json(stage / "stability.json", {"ordinary_refined": ordinary_refined, "root_budget": root_budget})
     return _complete(stage, config, "patch07_repair", {"gate_pass": bool(all(checks.values())), "checks": checks, "patch_reports": reports})
 

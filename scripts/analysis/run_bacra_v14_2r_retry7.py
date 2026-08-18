@@ -65,6 +65,13 @@ def _retry6_root(config: Mapping[str, Any], project_root: Path) -> Path:
     return project_root / str(config["sources"]["retry6_root"])
 
 
+def _prior_retry7_root(
+    config: Mapping[str, Any], project_root: Path
+) -> Path | None:
+    value = config.get("sources", {}).get("retry7_pre_abstention_root")
+    return None if value is None else project_root / str(value)
+
+
 def _complete(
     stage: Path,
     config: Mapping[str, Any],
@@ -84,6 +91,59 @@ def _require(config: Mapping[str, Any], output_root: Path, name: str) -> dict[st
     if result is None:
         raise FileNotFoundError(f"retry7 upstream stage is not sealed: {name}")
     return result
+
+
+def _reuse_registered_stage(
+    config: Mapping[str, Any],
+    project_root: Path,
+    output_root: Path,
+    name: str,
+) -> dict[str, Any] | None:
+    registered = set(map(str, config.get("reuse_sealed_stages", ())))
+    prior_root = _prior_retry7_root(config, project_root)
+    if name not in registered or prior_root is None:
+        return None
+    manifest_path = prior_root / "10_summary/retry7_artifact_manifest.json"
+    manifest = base._read_json(manifest_path)
+    gate_relative = Path(STAGE_DIRS[name]) / "gate.json"
+    records = {
+        str(record["path"]): record for record in manifest.get("artifacts", ())
+    }
+    record = records.get(gate_relative.as_posix())
+    gate_path = prior_root / gate_relative
+    if (
+        record is None
+        or not gate_path.is_file()
+        or gate_path.stat().st_size != int(record["bytes"])
+        or base.sha256_file(gate_path) != str(record["sha256"])
+    ):
+        raise RuntimeError(
+            f"sealed retry7 stage reference is absent or mismatched: {gate_path}"
+        )
+    prior_gate = base._read_json(gate_path)
+    stage = output_root / STAGE_DIRS[name]
+    stage.mkdir(parents=True, exist_ok=True)
+    reference = {
+        "evidence_reused": True,
+        "evidence_role": "read_only_reference_not_fresh_execution",
+        "prior_retry7_root": str(prior_root),
+        "prior_retry7_source_sha": str(manifest.get("source_sha", "")),
+        "prior_manifest_sha256": base.sha256_file(manifest_path),
+        "prior_gate_path": str(gate_path),
+        "prior_gate_sha256": base.sha256_file(gate_path),
+        "prior_gate_pass": bool(prior_gate.get("gate_pass", False)),
+    }
+    base._write_json(stage / "reused_evidence_reference.json", reference)
+    return _complete(
+        stage,
+        config,
+        name,
+        {
+            "gate_pass": bool(prior_gate.get("gate_pass", False)),
+            "operational_completion": True,
+            **reference,
+        },
+    )
 
 
 def stage_inventory(
@@ -109,12 +169,27 @@ def stage_inventory(
         raise FileNotFoundError(f"retry7 upstream retry6 evidence is incomplete: {missing}")
     upstream_closure = base._verify_upstream_artifact_manifest(required[0])
     reach_round6_closure = base._verify_upstream_artifact_manifest(v14_2_manifest)
+    prior_retry7 = _prior_retry7_root(config, project_root)
+    prior_retry7_manifest = (
+        prior_retry7 / "10_summary/retry7_artifact_manifest.json"
+        if prior_retry7 is not None
+        else None
+    )
+    prior_retry7_closure = (
+        base._verify_upstream_artifact_manifest(prior_retry7_manifest)
+        if prior_retry7_manifest is not None
+        else None
+    )
     base._write_json(
         stage / "upstream_manifest_check.json", upstream_closure
     )
     base._write_json(
         stage / "reach_round6_manifest_check.json", reach_round6_closure
     )
+    if prior_retry7_closure is not None:
+        base._write_json(
+            stage / "prior_retry7_manifest_check.json", prior_retry7_closure
+        )
     fixed = {
         "source_sha": base._git_sha(),
         "config_sha256": base.sha256_file(Path(str(config["config_path"]))),
@@ -131,6 +206,19 @@ def stage_inventory(
         "reach_round6_artifact_closure_sha256": reach_round6_closure[
             "artifact_closure_sha256"
         ],
+        "prior_retry7_root": (
+            str(prior_retry7) if prior_retry7 is not None else None
+        ),
+        "prior_retry7_artifact_manifest_sha256": (
+            base.sha256_file(prior_retry7_manifest)
+            if prior_retry7_manifest is not None
+            else None
+        ),
+        "prior_retry7_artifact_closure_sha256": (
+            prior_retry7_closure["artifact_closure_sha256"]
+            if prior_retry7_closure is not None
+            else None
+        ),
     }
     base._write_json(stage / "source_fixed_point.json", fixed)
     base._write_json(stage / "environment.json", base._runtime_closure())
@@ -174,6 +262,10 @@ def stage_inventory(
             reach_round6_closure["artifact_count"]
         )
         > 0,
+        "prior_retry7_artifact_closure_complete": (
+            prior_retry7_closure is None
+            or int(prior_retry7_closure["artifact_count"]) > 0
+        ),
         "targeted_diagnostics_below_limit": (
             estimate["targeted_diagnostic_executions"]
             < estimate["registered_limit"]
@@ -199,6 +291,11 @@ def stage_lineage_audit(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> dict[str, Any]:
     _require(config, output_root, "inventory")
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "lineage_audit"
+    )
+    if reused is not None:
+        return reused
     stage = output_root / STAGE_DIRS["lineage_audit"]
     stage.mkdir(parents=True, exist_ok=True)
     retry6 = _retry6_root(config, project_root)
@@ -312,6 +409,11 @@ def stage_kr_ablation(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> dict[str, Any]:
     lineage = _require(config, output_root, "lineage_audit")
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "kr_ablation"
+    )
+    if reused is not None:
+        return reused
     stage = output_root / STAGE_DIRS["kr_ablation"]
     if config.get("_patch_id"):
         report = base._execute_patch(
@@ -500,6 +602,11 @@ def stage_holonomy_diagnostics(
     config: Mapping[str, Any], project_root: Path, output_root: Path
 ) -> dict[str, Any]:
     kr = _require(config, output_root, "kr_ablation")
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "holonomy_diagnostics"
+    )
+    if reused is not None:
+        return reused
     stage = output_root / STAGE_DIRS["holonomy_diagnostics"]
     stage.mkdir(parents=True, exist_ok=True)
     if not kr.get("gate_pass", False):
@@ -595,29 +702,120 @@ def stage_holonomy_diagnostics(
     )
 
 
-def _repeat_max(frame: pd.DataFrame) -> float:
+def _repeat_metrics(frame: pd.DataFrame) -> dict[str, Any]:
+    """Compare repeat endpoints only after a trace closes at its physical start.
+
+    A failed or truncated cycle can end at a different task node.  Treating its
+    last available beta as though it were the closed-cycle endpoint conflates
+    solver completeness with repeat disagreement.  Incomplete traces remain a
+    hard Gate failure, but do not contribute a physically meaningless beta gap.
+    """
+
     if frame.empty:
-        return math.inf
+        return {
+            "max_deg": math.inf,
+            "p95_deg": math.inf,
+            "trace_count": 0,
+            "complete_trace_count": 0,
+            "incomplete_trace_count": 0,
+            "comparison_count": 0,
+            "gate_pass": False,
+        }
     identity = [
         name
-        for name in ("guard_patch_id", "guard_schedule_id")
+        for name in (
+            "guard_patch_id",
+            "guard_schedule_id",
+            "physical_entity_id",
+            "kernel_id",
+        )
         if name in frame.columns
     ]
-    finals = frame.sort_values("prefix_index", kind="stable").groupby(
-        [*identity, "start_node_id", "direction", "repeat_id"], as_index=False
-    ).tail(1)
-    maximum = 0.0
-    for _key, group in finals.groupby([*identity, "start_node_id", "direction"]):
-        beta = group[[f"beta_{index}" for index in range(6)]].to_numpy(float)
-        if len(beta) > 1:
-            maximum = max(
-                maximum,
-                max(
-                    base.beta_rms_deg(beta[0], beta[index])
-                    for index in range(1, len(beta))
+    trace_keys = [*identity, "start_node_id", "direction", "repeat_id"]
+    ordered = frame.sort_values([*trace_keys, "prefix_index"], kind="stable")
+    trace_rows = []
+    for key, group in ordered.groupby(trace_keys, sort=False, dropna=False):
+        last = group.iloc[-1]
+        key_values = key if isinstance(key, tuple) else (key,)
+        record = dict(zip(trace_keys, key_values))
+        record.update(
+            {
+                "complete": bool(
+                    group["success"].astype(bool).all()
+                    and int(last["target_node_id"]) == int(last["start_node_id"])
                 ),
-            )
-    return float(maximum)
+                **{
+                    f"beta_{index}": float(last[f"beta_{index}"])
+                    for index in range(6)
+                },
+            }
+        )
+        trace_rows.append(record)
+    traces = pd.DataFrame.from_records(trace_rows)
+    complete = traces[traces["complete"].astype(bool)]
+    comparison_keys = [*identity, "start_node_id", "direction"]
+    gaps: list[float] = []
+    for _key, group in complete.groupby(
+        comparison_keys, sort=False, dropna=False
+    ):
+        group = group.sort_values("repeat_id", kind="stable")
+        if len(group) < 2:
+            continue
+        beta = group[[f"beta_{index}" for index in range(6)]].to_numpy(float)
+        gaps.extend(
+            base.beta_rms_deg(beta[0], beta[index])
+            for index in range(1, len(beta))
+        )
+    maximum = max(gaps) if gaps else 0.0
+    p95 = float(np.percentile(gaps, 95)) if gaps else 0.0
+    incomplete = int((~traces["complete"].astype(bool)).sum())
+    return {
+        "max_deg": float(maximum),
+        "p95_deg": p95,
+        "trace_count": int(len(traces)),
+        "complete_trace_count": int(len(complete)),
+        "incomplete_trace_count": incomplete,
+        "comparison_count": len(gaps),
+        "gate_pass": bool(incomplete == 0 and maximum <= 0.2),
+    }
+
+
+def _repeat_max(frame: pd.DataFrame) -> float:
+    return float(_repeat_metrics(frame)["max_deg"])
+
+
+def _select_gauge_candidate(
+    candidates: Sequence[tuple[str, Any]],
+    metrics: Sequence[Mapping[str, Any]],
+    *,
+    maximum_localized_excess_edges: int,
+    maximum_localized_geometry_deg: float = 1.10,
+) -> tuple[str, Any, str] | None:
+    """Select a strict repair, else a solver-complete local-abstention probe.
+
+    The fallback is authorization to test an explicit abstention mask.  It is
+    not a critical-cycle pass and cannot itself authorize deployment.
+    """
+
+    policy_by_id = dict(candidates)
+    for row in metrics:
+        if bool(row["critical_gate"]) and row["kernel_id"] in policy_by_id:
+            return str(row["kernel_id"]), policy_by_id[str(row["kernel_id"])], "critical_pass"
+    for row in metrics:
+        kernel_id = str(row["kernel_id"])
+        if kernel_id == "C0_baseline" or kernel_id not in policy_by_id:
+            continue
+        if (
+            bool(row["all_traces_complete"])
+            and float(row["repeat_max_deg"]) <= 0.2
+            and float(row["fk_residual_max_mm"]) <= 3.0
+            and 0 < int(row["geometry_excess_edge_count"])
+            <= int(maximum_localized_excess_edges)
+            and float(row["geometry_max_deg"])
+            <= float(maximum_localized_geometry_deg)
+        ):
+            return kernel_id, policy_by_id[kernel_id], "localized_abstention"
+    return None
 
 
 def _evaluate_kernel(
@@ -658,6 +856,13 @@ def _evaluate_kernel(
         counter_delta.get("kinematics_cache_hit_count", 0)
         + counter_delta.get("kinematics_cache_miss_count", 0)
     )
+    repeat = _repeat_metrics(frame)
+    excess_edges = {
+        (int(row.source_node_id), int(row.target_node_id))
+        for row in frame.loc[
+            frame["geometry_gap_deg"].gt(1.0)
+        ].itertuples(index=False)
+    }
     metrics = {
         "kernel_id": kernel_id,
         "wall_time_s": wall,
@@ -666,7 +871,12 @@ def _evaluate_kernel(
         ),
         "continuation_segment_calls": len(frame),
         "geometry_max_deg": float(frame["geometry_gap_deg"].max()),
-        "repeat_max_deg": _repeat_max(frame),
+        "repeat_max_deg": repeat["max_deg"],
+        "repeat_p95_deg": repeat["p95_deg"],
+        "complete_trace_count": repeat["complete_trace_count"],
+        "incomplete_trace_count": repeat["incomplete_trace_count"],
+        "all_traces_complete": repeat["incomplete_trace_count"] == 0,
+        "geometry_excess_edge_count": len(excess_edges),
         "fk_residual_max_mm": float(frame["fk_residual_mm"].max()),
         "solver_iteration_count": int(frame["solver_iterations"].sum()),
         "fk_calls": counter_delta.get("fk_row_count", 0),
@@ -691,9 +901,51 @@ def _evaluate_kernel(
         metrics["geometry_max_deg"] <= 1.0
         and metrics["repeat_max_deg"] <= 0.2
         and metrics["fk_residual_max_mm"] <= 3.0
-        and frame["success"].all()
+        and metrics["all_traces_complete"]
     )
     return frame, metrics
+
+
+def _recompute_reused_kernel_metrics(
+    frame: pd.DataFrame,
+    prior: Mapping[str, Any],
+) -> dict[str, Any]:
+    kernel_id = str(prior["kernel_id"])
+    repeat = _repeat_metrics(frame)
+    excess_edges = {
+        (int(row.source_node_id), int(row.target_node_id))
+        for row in frame.loc[
+            frame["geometry_gap_deg"].gt(1.0)
+        ].itertuples(index=False)
+    }
+    metrics = dict(prior)
+    metrics.update(
+        {
+            "kernel_id": kernel_id,
+            "execution_count": int(
+                frame.groupby(
+                    ["start_node_id", "direction", "repeat_id"]
+                ).ngroups
+            ),
+            "continuation_segment_calls": len(frame),
+            "geometry_max_deg": float(frame["geometry_gap_deg"].max()),
+            "repeat_max_deg": repeat["max_deg"],
+            "repeat_p95_deg": repeat["p95_deg"],
+            "complete_trace_count": repeat["complete_trace_count"],
+            "incomplete_trace_count": repeat["incomplete_trace_count"],
+            "all_traces_complete": repeat["incomplete_trace_count"] == 0,
+            "geometry_excess_edge_count": len(excess_edges),
+            "fk_residual_max_mm": float(frame["fk_residual_mm"].max()),
+            "raw_trace_reused": True,
+        }
+    )
+    metrics["critical_gate"] = bool(
+        metrics["geometry_max_deg"] <= 1.0
+        and metrics["repeat_max_deg"] <= 0.2
+        and metrics["fk_residual_max_mm"] <= 3.0
+        and metrics["all_traces_complete"]
+    )
+    return metrics
 
 
 def stage_gauge_kernel_selection(
@@ -757,44 +1009,104 @@ def stage_gauge_kernel_selection(
             ),
         ]
     )
-    critical_frames = []
-    metrics = []
+    critical_frames: list[pd.DataFrame] = []
+    metrics: list[dict[str, Any]] = []
     selected: tuple[str, GaugeCorrectorPolicy | None] | None = None
+    selection_mode: str | None = None
     baseline_wall = None
     anchor_beta = context["canonical"][int(cycle[0])].beta_rad
-    for kernel_id, policy in candidates:
-        if policy is None:
-            continuation = _baseline_continuation(context)
-        else:
-            continuation = gauge_locked_predictor_corrector(
-                context["environment"],
-                policy=policy,
-                anchor_beta_rad=(
-                    anchor_beta
-                    if policy.mode in ("anchor_potential", "proximal_slsqp")
-                    else None
-                ),
-            )
-        frame, row = _evaluate_kernel(config, context, cycle, kernel_id, continuation)
-        critical_frames.append(frame)
-        row.update(
-            {
-                "mode": None if policy is None else policy.mode,
-                "gauge_gain": None if policy is None else policy.gauge_gain,
-                "cartesian_step_mm": 5.0 if policy is None else policy.cartesian_step_mm,
-            }
+    prior_root = _prior_retry7_root(config, project_root)
+    reuse_traces = bool(config.get("reuse_pre_abstention_gauge_traces", False))
+    if reuse_traces:
+        if prior_root is None:
+            raise RuntimeError("gauge trace reuse requires retry7_pre_abstention_root")
+        prior_stage = prior_root / STAGE_DIRS["gauge_kernel_selection"]
+        prior_trace_path = prior_stage / "critical_cycle_results.parquet"
+        prior_performance_path = prior_stage / "kernel_performance.parquet"
+        if not prior_trace_path.is_file() or not prior_performance_path.is_file():
+            raise FileNotFoundError("sealed pre-abstention gauge traces are incomplete")
+        prior_trace = pd.read_parquet(prior_trace_path)
+        prior_performance = pd.read_parquet(prior_performance_path).set_index(
+            "kernel_id"
         )
-        metrics.append(row)
-        if baseline_wall is None:
-            baseline_wall = float(row["wall_time_s"])
-        if policy is not None and row["critical_gate"]:
-            selected = (kernel_id, policy)
-            break
+        for kernel_id, policy in candidates:
+            frame = prior_trace[
+                prior_trace["kernel_id"].astype(str).eq(kernel_id)
+            ].copy()
+            if frame.empty or kernel_id not in prior_performance.index:
+                raise RuntimeError(
+                    f"sealed pre-abstention trace missing kernel {kernel_id}"
+                )
+            row = _recompute_reused_kernel_metrics(
+                frame, prior_performance.loc[kernel_id].to_dict() | {"kernel_id": kernel_id}
+            )
+            critical_frames.append(frame)
+            metrics.append(row)
+            if baseline_wall is None:
+                baseline_wall = float(row["wall_time_s"])
+        base._write_json(
+            stage / "critical_cycle_trace_reference.json",
+            {
+                "evidence_role": "sealed_raw_trace_reanalysis_not_fresh_execution",
+                "prior_trace_path": str(prior_trace_path),
+                "prior_trace_sha256": base.sha256_file(prior_trace_path),
+                "prior_performance_path": str(prior_performance_path),
+                "prior_performance_sha256": base.sha256_file(
+                    prior_performance_path
+                ),
+            },
+        )
+    else:
+        for kernel_id, policy in candidates:
+            if policy is None:
+                continuation = _baseline_continuation(context)
+            else:
+                continuation = gauge_locked_predictor_corrector(
+                    context["environment"],
+                    policy=policy,
+                    anchor_beta_rad=(
+                        anchor_beta
+                        if policy.mode in ("anchor_potential", "proximal_slsqp")
+                        else None
+                    ),
+                )
+            frame, row = _evaluate_kernel(config, context, cycle, kernel_id, continuation)
+            critical_frames.append(frame)
+            row.update(
+                {
+                    "mode": None if policy is None else policy.mode,
+                    "gauge_gain": None if policy is None else policy.gauge_gain,
+                    "cartesian_step_mm": 5.0 if policy is None else policy.cartesian_step_mm,
+                }
+            )
+            metrics.append(row)
+            if baseline_wall is None:
+                baseline_wall = float(row["wall_time_s"])
+            if policy is not None and row["critical_gate"]:
+                selected = (kernel_id, policy)
+                selection_mode = "critical_pass"
+                break
+    if selected is None:
+        fallback = _select_gauge_candidate(
+            candidates,
+            metrics,
+            maximum_localized_excess_edges=int(
+                config["gauge"]["maximum_localized_excess_edges"]
+            ),
+            maximum_localized_geometry_deg=float(
+                config["gauge"]["maximum_localized_geometry_deg"]
+            ),
+        )
+        if fallback is not None:
+            selected = (str(fallback[0]), fallback[1])
+            selection_mode = str(fallback[2])
     critical = pd.concat(critical_frames, ignore_index=True)
-    base._write_parquet(critical, stage / "critical_cycle_results.parquet")
+    if not reuse_traces:
+        base._write_parquet(critical, stage / "critical_cycle_results.parquet")
     performance = pd.DataFrame.from_records(metrics)
     base._write_parquet(performance, stage / "kernel_performance.parquet")
-    # Guard set is evaluated only for the first critical-passing kernel.
+    # A strict repair and a registered local-abstention candidate both need an
+    # independent guard set.  The latter still does not pass the critical cycle.
     guard_frames = []
     if selected is not None:
         kernel_id, policy = selected
@@ -846,11 +1158,12 @@ def stage_gauge_kernel_selection(
                         guard_frames.append(frame)
     guard = pd.concat(guard_frames, ignore_index=True) if guard_frames else pd.DataFrame()
     base._write_parquet(guard, stage / "guard_set_results.parquet")
+    guard_repeat = _repeat_metrics(guard)
     guard_gate = bool(
         len(guard)
         and float(np.percentile(guard["geometry_gap_deg"], 95)) <= 0.5
         and float(guard["geometry_gap_deg"].max()) <= 1.0
-        and _repeat_max(guard) <= 0.2
+        and guard_repeat["gate_pass"]
         and float(guard["fk_residual_mm"].max()) <= 3.0
         and guard["success"].all()
     )
@@ -858,6 +1171,9 @@ def stage_gauge_kernel_selection(
     if selected is None:
         selection_payload = {
             "gate_pass": False,
+            "proceed_to_patch07_repair": False,
+            "critical_gate": False,
+            "abstention_required": False,
             "kernel_id": None,
             "reason": "no_registered_gauge_kernel_repaired_critical_cycle",
         }
@@ -867,12 +1183,24 @@ def stage_gauge_kernel_selection(
         performance_gate = float(selected_row["wall_time_s"]) <= 2.0 * max(
             1.0e-9, float(baseline_wall)
         )
+        proceed = bool(guard_gate and performance_gate)
+        critical_gate = bool(selected_row["critical_gate"])
+        abstention_required = selection_mode == "localized_abstention"
         selection_payload = {
-            "gate_pass": bool(guard_gate and performance_gate),
+            "gate_pass": proceed,
+            "proceed_to_patch07_repair": proceed,
+            "critical_gate": critical_gate,
+            "abstention_required": abstention_required,
             "kernel_id": kernel_id,
             **asdict(policy),
             "guard_gate": guard_gate,
+            "guard_repeat_metrics": guard_repeat,
             "performance_gate": performance_gate,
+            "selection_reason": (
+                "critical_cycle_repaired"
+                if critical_gate
+                else "localized_geometric_excess_with_repeat_solver_guard_pass"
+            ),
             "baseline_wall_time_s": baseline_wall,
             "selected_wall_time_s": selected_row["wall_time_s"],
         }
@@ -882,7 +1210,17 @@ def stage_gauge_kernel_selection(
         stage,
         config,
         "gauge_kernel_selection",
-        {"gate_pass": bool(selection_payload["gate_pass"]), "selected_kernel": selection_payload},
+        {
+            "gate_pass": bool(selection_payload["gate_pass"]),
+            "proceed_to_patch07_repair": bool(
+                selection_payload.get("proceed_to_patch07_repair", False)
+            ),
+            "critical_gate": bool(selection_payload.get("critical_gate", False)),
+            "abstention_required": bool(
+                selection_payload.get("abstention_required", False)
+            ),
+            "selected_kernel": selection_payload,
+        },
     )
 
 
@@ -910,7 +1248,7 @@ def stage_patch07_repair(
             str(config["_variant"]), stage / str(config["_patch_id"]) / str(config["_variant"])
         )
         return {"gate_pass": True, "worker_report": report}
-    if not gauge.get("gate_pass", False):
+    if not gauge.get("proceed_to_patch07_repair", False):
         return _complete(stage, config, "patch07_repair", base.write_scientific_skip(stage, "gauge_kernel_selection_failed"))
     variants = ("gauge_main_K1_R5", "gauge_task_graph_refined", "gauge_K1_R8")
     _run_patch_jobs(config, output_root, "patch07_repair", [("patch_07", name) for name in variants])
@@ -925,6 +1263,10 @@ def stage_patch07_repair(
         "ordinary_refined_stability": bool(ordinary_refined["gate_pass"]),
         "R5_R8_same_anchor_stability": bool(root_budget["gate_pass"]),
         "anchor_selected": all(bool(row["canonical_anchor_component_selected"]) for row in reports.values()),
+        "registered_local_abstention_is_explicit": (
+            not bool(gauge.get("abstention_required", False))
+            or any(float(row["abstention_ratio"]) > 0.0 for row in reports.values())
+        ),
     }
     base._write_json(stage / "stability.json", {"ordinary_refined": ordinary_refined, "root_budget": root_budget})
     return _complete(stage, config, "patch07_repair", {"gate_pass": bool(all(checks.values())), "checks": checks, "patch_reports": reports})

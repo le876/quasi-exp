@@ -1,7 +1,8 @@
 schema_version: 1
 protocol_version: retry7
-experiment_id: bacra_v14_2r_retry7_gauge_locked_canonical_atlas
-output_root: runs/bacra_v14_2r_stitched_atlas_retry7
+protocol_revision: local_abstention_retry1
+experiment_id: bacra_v14_2r_retry7_local_abstention
+output_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry1
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
@@ -11,8 +12,12 @@ sources:
   legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
   retry6_root: runs/bacra_v14_2r_stitched_atlas_retry6
+  retry7_pre_abstention_root: runs/bacra_v14_2r_stitched_atlas_retry7
   v14_2_root: runs/bacra_v14_2_section_first_atlas
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+reuse_sealed_stages: [lineage_audit, kr_ablation, holonomy_diagnostics]
+reuse_pre_abstention_gauge_traces: true
 
 parallel: {patch_workers: 12, numerical_threads_per_worker: 1}
 
@@ -49,6 +54,8 @@ gauge:
   maximum_gauge_step_deg: 0.25
   anchor_weight: 0.1
   proximal_slsqp_maximum_iterations: 400
+  maximum_localized_excess_edges: 1
+  maximum_localized_geometry_deg: 1.10
   selected_mode: predictor_proximal
   selected_gain: 0.1
 

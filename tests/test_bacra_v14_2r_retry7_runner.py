@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -25,6 +27,13 @@ def test_retry7_config_freezes_anchor_gauge_and_four_of_four_gate() -> None:
     )
 
     assert config["protocol_version"] == "retry7"
+    assert config["protocol_revision"] == "local_abstention_retry1"
+    assert config["reuse_sealed_stages"] == [
+        "lineage_audit",
+        "kr_ablation",
+        "holonomy_diagnostics",
+    ]
+    assert config["reuse_pre_abstention_gauge_traces"] is True
     assert config["parallel"] == {
         "patch_workers": 12,
         "numerical_threads_per_worker": 1,
@@ -33,6 +42,7 @@ def test_retry7_config_freezes_anchor_gauge_and_four_of_four_gate() -> None:
     assert config["canonical_anchor"]["require_anchor_selected"] is True
     assert config["gauge"]["gain_candidates"] == [0.1, 0.3]
     assert config["gauge"]["proximal_slsqp_maximum_iterations"] == 400
+    assert config["gauge"]["maximum_localized_excess_edges"] == 1
     assert config["reach_round8"]["seed_a"] != config["reach_round8"]["seed_b"]
 
 
@@ -121,3 +131,134 @@ def test_reach_round_prefix_uses_filtered_payload_not_raw_sobol_count() -> None:
     assert not module._verify_reach_round_prefix(
         round6, changed, physical_columns=columns
     )
+
+
+def _repeat_row(
+    *,
+    repeat_id: int,
+    prefix_index: int,
+    target_node_id: int,
+    success: bool,
+    beta0: float,
+) -> dict[str, object]:
+    return {
+        "physical_entity_id": "patch_07:fundamental_cycle:1,2,3",
+        "start_node_id": 1,
+        "direction": "forward",
+        "repeat_id": repeat_id,
+        "prefix_index": prefix_index,
+        "target_node_id": target_node_id,
+        "success": success,
+        **{f"beta_{index}": beta0 if index == 0 else 0.0 for index in range(6)},
+    }
+
+
+def test_repeat_metrics_compare_only_complete_same_endpoint_traces() -> None:
+    module = _module()
+    rows = []
+    for prefix in (1, 2, 3):
+        rows.append(
+            _repeat_row(
+                repeat_id=0,
+                prefix_index=prefix,
+                target_node_id=(2, 3, 1)[prefix - 1],
+                success=True,
+                beta0=0.0,
+            )
+        )
+    # The perturbed trace stops at a different physical endpoint.  Its large
+    # beta must not be reported as repeat disagreement with the closed trace.
+    rows.append(
+        _repeat_row(
+            repeat_id=1,
+            prefix_index=1,
+            target_node_id=2,
+            success=False,
+            beta0=np.deg2rad(20.0),
+        )
+    )
+
+    metrics = module._repeat_metrics(pd.DataFrame.from_records(rows))
+
+    assert metrics["max_deg"] == 0.0
+    assert metrics["complete_trace_count"] == 1
+    assert metrics["incomplete_trace_count"] == 1
+    assert metrics["gate_pass"] is False
+
+
+def test_abstention_candidate_never_claims_critical_cycle_pass() -> None:
+    module = _module()
+    candidates = [
+        ("C1_predictor_proximal_g0.1", object()),
+        ("C4_proximal_slsqp", object()),
+    ]
+    metrics = [
+        {
+            "kernel_id": "C1_predictor_proximal_g0.1",
+            "critical_gate": False,
+            "all_traces_complete": True,
+            "repeat_max_deg": 0.01,
+            "fk_residual_max_mm": 2.9,
+            "geometry_excess_edge_count": 1,
+            "geometry_max_deg": 1.05,
+            "wall_time_s": 50.0,
+        },
+        {
+            "kernel_id": "C4_proximal_slsqp",
+            "critical_gate": False,
+            "all_traces_complete": False,
+            "repeat_max_deg": 0.0,
+            "fk_residual_max_mm": 2.0,
+            "geometry_excess_edge_count": 0,
+            "geometry_max_deg": 0.3,
+            "wall_time_s": 400.0,
+        },
+    ]
+
+    selected = module._select_gauge_candidate(
+        candidates,
+        metrics,
+        maximum_localized_excess_edges=1,
+    )
+
+    assert selected is not None
+    assert selected[0] == "C1_predictor_proximal_g0.1"
+    assert selected[2] == "localized_abstention"
+    assert metrics[0]["critical_gate"] is False
+
+
+def test_patch_runner_accepts_guarded_local_abstention_policy(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    config = module.base.load_config(
+        ROOT / "configs/bacra_v14_2r_stitched_atlas_retry7.yaml"
+    )
+    stage = tmp_path / "04_gauge_kernel_selection"
+    stage.mkdir(parents=True)
+    (stage / "selected_kernel.json").write_text(
+        json.dumps(
+            {
+                "gate_pass": True,
+                "proceed_to_patch07_repair": True,
+                "critical_gate": False,
+                "abstention_required": True,
+                "kernel_id": "C1_predictor_proximal_g0.1",
+                "mode": "predictor_proximal",
+                "gauge_gain": 0.1,
+                "maximum_gauge_step_deg": 0.25,
+                "anchor_weight": 0.0,
+                "cartesian_step_mm": 5.0,
+                "maximum_iterations": 100,
+                "damping": 0.001,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    policy = module.base._selected_gauge_policy(
+        config, tmp_path, "gauge_main_K1_R5"
+    )
+
+    assert policy is not None
+    assert policy.mode == "predictor_proximal"

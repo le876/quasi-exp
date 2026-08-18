@@ -2342,8 +2342,10 @@ def _selected_gauge_policy(
             f"gauge patch execution requires a sealed selected kernel: {selection_path}"
         )
     selected = _read_json(selection_path)
-    if not bool(selected.get("gate_pass", False)):
-        raise RuntimeError("selected gauge kernel did not pass the registered guard set")
+    if not bool(selected.get("proceed_to_patch07_repair", selected.get("gate_pass", False))):
+        raise RuntimeError(
+            "selected gauge kernel is not authorized for registered patch repair"
+        )
     if str(selected.get("kernel_id", "")) == "C0_baseline":
         return None
     return GaugeCorrectorPolicy(

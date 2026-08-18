@@ -1,5 +1,28 @@
 # BACRA V14.2R retry7 执行协议
 
+## local-abstention retry1 修订
+
+首次 retry7 已封存并证明 K/R 对照稳定，但没有已注册 kernel 单独通过
+critical-cycle Gate。该结果不授权放宽 `geometry max <= 1 deg`。后续采用本
+协议原有的最小局部 abstention 后备路线：
+
+1. repeat 只比较到达同一闭环物理端点且整条 trace 成功的执行；失败或截断
+   trace 单独计入 `incomplete_trace_count`，并继续阻断 solver Gate；
+2. 只有 solver 全完成、repeat/FK 通过、`>1 deg` 几何超标集中在至多一条物理
+   转移边、且最大 gap 不超过 `1.10 deg` 的最便宜 kernel，才可作为
+   `localized_abstention` 候选；这不等价于 critical-cycle pass；
+3. 候选仍须 fresh guard-set 通过，随后在 patch_07 上显式移除失败端点，重建
+   node-induced graph、完整 cycle basis 和 fresh primary certificate；
+4. retained coverage 必须 `>=0.90`、largest coherent region 必须 `>=0.60`，
+   且 geometry/solver/repeat/certificate/edge/cycle Gate 全部通过；否则科学停止；
+5. 已封存 retry7 的 lineage、K/R、holonomy 和 raw critical traces仅作为带 SHA
+   的只读证据引用，不复制成 fresh execution；guard、patch repair 及所有下游
+   certificate 必须重新执行。
+
+修订输出使用独立目录
+`runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry1`，不得覆盖首次
+retry7 artifacts。
+
 本协议冻结 GPT-5 Pro 对 retry6 科学 Gate 失败的审计结论，并只对后续结果生效。retry6 artifacts 保持只读，不重写其结论。
 
 ## 科学假设

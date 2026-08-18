@@ -1,12 +1,12 @@
 schema_version: 1
 upstream_protocol_version: retry7
-experiment_id: bacra_v14_3_repaired_5k_student_retry7
-output_root: runs/bacra_v14_3_repaired_5k_student_retry7
+experiment_id: bacra_v14_3_repaired_5k_student_retry7_abstention
+output_root: runs/bacra_v14_3_repaired_5k_student_retry7_abstention_retry1
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/24-BACRA-V14.2R-retry7执行协议.md
-  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry7
+  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry1
   v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry7.yaml
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot

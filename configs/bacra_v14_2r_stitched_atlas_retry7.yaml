@@ -1,8 +1,8 @@
 schema_version: 1
 protocol_version: retry7
-protocol_revision: empty_primary_retry3
+protocol_revision: empty_audit_schema_retry4
 experiment_id: bacra_v14_2r_retry7_empty_primary
-output_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry3
+output_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:

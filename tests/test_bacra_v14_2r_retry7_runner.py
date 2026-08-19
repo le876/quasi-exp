@@ -28,7 +28,7 @@ def test_retry7_config_freezes_anchor_gauge_and_four_of_four_gate() -> None:
     )
 
     assert config["protocol_version"] == "retry7"
-    assert config["protocol_revision"] == "empty_primary_retry3"
+    assert config["protocol_revision"] == "empty_audit_schema_retry4"
     assert config["reuse_sealed_stages"] == [
         "lineage_audit",
         "kr_ablation",

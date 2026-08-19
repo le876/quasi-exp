@@ -4,9 +4,13 @@ import importlib.util
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
+
+from quasi_exp.teacher.canonical_atlas import AtlasTaskNode
+from quasi_exp.teacher.section_first_atlas import RootedSectionPolicy, SectionGrowthResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -389,6 +393,75 @@ def test_real_schedule_subprocess_shards_are_exact_and_resumable(tmp_path) -> No
         progress = module._read_json(path)
         assert progress["status"] == "complete"
         assert progress["completed_schedule_count"] == progress["total_schedule_count"]
+
+
+def test_empty_audit_registry_seals_logical_shards_without_spawning_workers(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry6.yaml")
+    config["audit_execution"]["progress_every_schedules"] = 1
+    node = AtlasTaskNode(0, np.zeros(3, dtype=float), ())
+    growth = SectionGrowthResult(
+        task_nodes=(node,),
+        charts=(),
+        primary_chart_by_node={0: None},
+        abstained_node_ids=frozenset({0}),
+        events=(),
+        cap_hit_events=(),
+        policy=RootedSectionPolicy(root_count=1),
+        continuation_attempt_count=0,
+        rejected_continuation_count=0,
+    )
+    tasks = pd.DataFrame.from_records(
+        [{"task_node_id": 0, "x_m": 0.0, "y_m": 0.0, "z_m": 0.0}]
+    )
+    task_edges = pd.DataFrame(
+        columns=("left_node_id", "right_node_id")
+    )
+    schedules = pd.DataFrame(
+        columns=("schedule_id", "audit_kind", "path_node_ids")
+    )
+
+    def unexpected_spawn(*_args, **_kwargs):
+        raise AssertionError("an empty audit registry must not spawn a worker")
+
+    monkeypatch.setattr(module, "_runtime_sha256", lambda: "runtime-test")
+    monkeypatch.setattr(module, "_git_sha", lambda: "source-test")
+    monkeypatch.setattr(module.subprocess, "Popen", unexpected_spawn)
+    executor = module._SubprocessAuditExecutor(
+        config=config,
+        project_root=ROOT,
+        tasks=tasks,
+        task_edges=task_edges,
+        patch_directory=tmp_path,
+        shard_count=2,
+        maximum_concurrent_workers=2,
+        assignment_strategy="cost_balanced_lpt",
+    )
+
+    executions = executor(
+        growth,
+        schedules,
+        None,
+        module._audit_policy(config),
+        object(),
+        "primary_certificate",
+    )
+
+    assert executions.empty
+    reports = [
+        module._read_json(
+            tmp_path
+            / "_audit_checkpoints"
+            / "primary_certificate"
+            / f"shard_{shard_id:02d}"
+            / "report.json"
+        )
+        for shard_id in range(2)
+    ]
+    assert all(report["gate_pass"] for report in reports)
+    assert all(report["synthetic_empty_shard"] for report in reports)
 
 
 def test_growth_checkpoint_rehydrates_only_under_the_same_input_closure(tmp_path) -> None:

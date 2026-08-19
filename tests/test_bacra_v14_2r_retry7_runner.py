@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,12 +28,16 @@ def test_retry7_config_freezes_anchor_gauge_and_four_of_four_gate() -> None:
     )
 
     assert config["protocol_version"] == "retry7"
-    assert config["protocol_revision"] == "local_abstention_retry2"
+    assert config["protocol_revision"] == "empty_primary_retry3"
     assert config["reuse_sealed_stages"] == [
         "lineage_audit",
         "kr_ablation",
         "holonomy_diagnostics",
         "gauge_kernel_selection",
+        "patch07_repair",
+        "four_patch_gate",
+        "reach_round8",
+        "confirmation",
     ]
     assert config["reuse_pre_abstention_gauge_traces"] is False
     assert config["reuse_patch07_numerical_artifacts"] is True
@@ -64,6 +69,46 @@ def test_retry7_stage_order_is_gate_driven_funnel() -> None:
         "meso_bridge",
         "summary",
     )
+
+
+def test_prior_stage_reference_requires_fixed_point_and_artifact_closure(
+    tmp_path,
+) -> None:
+    module = _module()
+    prior = tmp_path / "prior"
+    inventory = prior / module.STAGE_DIRS["inventory"]
+    stage = prior / module.STAGE_DIRS["lineage_audit"]
+    inventory.mkdir(parents=True)
+    stage.mkdir(parents=True)
+    fixed = {
+        "source_sha": "source-a",
+        "config_sha256": "config-a",
+        "runtime_sha256": "runtime-a",
+    }
+    module.base._write_json(inventory / "source_fixed_point.json", fixed)
+    module.base._write_json(stage / "gate.json", {"gate_pass": True})
+    record = {
+        "path": "gate.json",
+        "bytes": (stage / "gate.json").stat().st_size,
+        "sha256": module.base.sha256_file(stage / "gate.json"),
+    }
+    module.base._write_json(
+        stage / "completion_manifest.json",
+        {
+            "schema_version": 1,
+            **fixed,
+            "stage_name": "lineage_audit",
+            "artifacts": [record],
+        },
+    )
+
+    closure = module._verify_prior_stage(prior, "lineage_audit")
+    assert closure["artifact_count"] == 1
+    assert closure["source_sha"] == "source-a"
+
+    module.base._write_json(stage / "gate.json", {"gate_pass": False})
+    with pytest.raises(RuntimeError, match="artifact mismatch"):
+        module._verify_prior_stage(prior, "lineage_audit")
 
 
 def test_root_variants_preserve_anchor_and_report_actual_budget() -> None:

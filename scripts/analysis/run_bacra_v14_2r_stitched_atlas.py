@@ -1429,6 +1429,7 @@ def _run_audit_shard_worker(
     report["finished_at_unix_s"] = time.time()
     report["wall_time_s"] = report["finished_at_unix_s"] - worker_started_at
     report["cpu_time_s"] = time.process_time() - worker_cpu_started
+    report["synthetic_empty_shard"] = False
     _write_json(shard_directory / "report.json", report)
     _write_json(
         progress_path,
@@ -1574,11 +1575,11 @@ class _SubprocessAuditExecutor:
             shard_directory = phase_directory / f"shard_{shard_id:02d}"
             report_path = shard_directory / "report.json"
             execution_path = shard_directory / "executions.parquet"
+            shard_registry = registry[registry["shard_id"].eq(shard_id)]
             if report_path.is_file() and execution_path.is_file():
                 try:
                     executions = pd.read_parquet(execution_path)
                     report = _read_json(report_path)
-                    shard_registry = registry[registry["shard_id"].eq(shard_id)]
                     valid = validate_shard_completion(
                         report,
                         shard_registry,
@@ -1598,6 +1599,52 @@ class _SubprocessAuditExecutor:
                         continue
                 except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                     pass
+            if shard_registry.empty:
+                shard_directory.mkdir(parents=True, exist_ok=True)
+                executions = pd.DataFrame(columns=AUDIT_EXECUTION_COLUMNS)
+                _write_parquet(executions, execution_path)
+                finished_at = time.time()
+                report = build_shard_completion_report(
+                    shard_registry,
+                    executions,
+                    source_sha=_git_sha(),
+                    config_sha256=str(manifest["config_sha256"]),
+                    input_sha256=input_sha,
+                    phase_id=str(phase_id),
+                    shard_id=shard_id,
+                    repeats_per_direction=policy.repeats_per_direction,
+                )
+                report.update(
+                    {
+                        "pid": os.getpid(),
+                        "executions_file_sha256": sha256_file(execution_path),
+                        "started_at_unix_s": finished_at,
+                        "finished_at_unix_s": finished_at,
+                        "wall_time_s": 0.0,
+                        "cpu_time_s": 0.0,
+                        "synthetic_empty_shard": True,
+                    }
+                )
+                _write_json(report_path, report)
+                _write_json(
+                    shard_directory / "progress.json",
+                    {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "phase_id": str(phase_id),
+                        "shard_id": shard_id,
+                        "completed_schedule_count": 0,
+                        "total_schedule_count": 0,
+                        "execution_count": 0,
+                        "started_at_unix_s": finished_at,
+                        "finished_at_unix_s": finished_at,
+                        "wall_time_s": 0.0,
+                        "cpu_time_s": 0.0,
+                        "updated_at_unix_s": finished_at,
+                    },
+                )
+                completed[shard_id] = executions
+                continue
             missing.append(shard_id)
         reused_shard_count = len(completed)
 

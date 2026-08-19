@@ -11,6 +11,7 @@ from quasi_exp.teacher.canonical_gauge import CanonicalAnchorPolicy
 from quasi_exp.teacher.section_atlas_repair import (
     AtlasRepairPolicy,
     AuditV2Policy,
+    _primary_growth,
     compare_stitched_primary_atlases,
     diagnose_rooted_section_artifacts,
     execute_audit_schedules,
@@ -557,6 +558,23 @@ def test_parquet_safe_section_frames_rehydrate_the_same_selected_beta() -> None:
             assert left_candidate.posture_cost == right_candidate.posture_cost
             assert left_candidate.condition_number == right_candidate.condition_number
             assert left_candidate.quality == right_candidate.quality
+
+
+def test_empty_primary_section_frames_keep_the_rehydration_schema() -> None:
+    original = _growth((0.0,))
+    empty = _primary_growth(original, {}, original.chart_by_id)
+    frames = empty.frames()
+
+    restored = section_growth_from_frames(
+        empty.task_nodes,
+        frames["section_hypotheses"],
+        frames["selected_edges"],
+        policy=empty.policy,
+    )
+
+    assert frames["section_hypotheses"].empty
+    assert restored.charts == ()
+    assert restored.covered_node_ids == frozenset()
 
 
 def test_persistent_failed_edge_splits_and_reaudits_nontrivial_fragments() -> None:

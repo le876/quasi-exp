@@ -68,8 +68,64 @@ def _retry6_root(config: Mapping[str, Any], project_root: Path) -> Path:
 def _prior_retry7_root(
     config: Mapping[str, Any], project_root: Path
 ) -> Path | None:
-    value = config.get("sources", {}).get("retry7_pre_abstention_root")
+    value = config.get("sources", {}).get("retry7_reference_root")
     return None if value is None else project_root / str(value)
+
+
+def _verify_prior_stage(
+    prior_root: Path, name: str
+) -> dict[str, Any]:
+    stage = prior_root / STAGE_DIRS[name]
+    manifest_path = stage / "completion_manifest.json"
+    manifest = base._read_json(manifest_path)
+    if int(manifest.get("schema_version", 0)) != 1:
+        raise RuntimeError(f"prior retry7 stage schema is invalid: {manifest_path}")
+    if str(manifest.get("stage_name", "")) != str(name):
+        raise RuntimeError(f"prior retry7 stage identity is invalid: {manifest_path}")
+    records = tuple(manifest.get("artifacts", ()))
+    if "gate.json" not in {str(record.get("path", "")) for record in records}:
+        raise RuntimeError(f"prior retry7 stage has no sealed gate: {manifest_path}")
+    verified: list[dict[str, Any]] = []
+    for record in records:
+        relative = Path(str(record["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"prior retry7 stage path is unsafe: {relative}")
+        path = stage / relative
+        if (
+            not path.is_file()
+            or path.stat().st_size != int(record["bytes"])
+            or base.sha256_file(path) != str(record["sha256"])
+        ):
+            raise RuntimeError(f"prior retry7 stage artifact mismatch: {path}")
+        verified.append(dict(record))
+    fixed = base._read_json(
+        prior_root / STAGE_DIRS["inventory"] / "source_fixed_point.json"
+    )
+    closure_checks = {
+        "source_sha": str(manifest.get("source_sha", ""))
+        == str(fixed.get("source_sha", "")),
+        "config_sha256": str(manifest.get("config_sha256", ""))
+        == str(fixed.get("config_sha256", "")),
+        "runtime_sha256": str(manifest.get("runtime_sha256", ""))
+        == str(fixed.get("runtime_sha256", "")),
+    }
+    if not all(closure_checks.values()):
+        raise RuntimeError(
+            f"prior retry7 stage fixed-point closure failed: {name} {closure_checks}"
+        )
+    return {
+        "stage": stage,
+        "manifest_path": manifest_path,
+        "manifest_sha256": base.sha256_file(manifest_path),
+        "source_sha": str(manifest["source_sha"]),
+        "config_sha256": str(manifest["config_sha256"]),
+        "runtime_sha256": str(manifest["runtime_sha256"]),
+        "artifact_count": len(verified),
+        "artifact_closure_sha256": base._payload_sha256(
+            {"stage_name": name, "artifacts": verified}
+        ),
+        "records": {str(record["path"]): record for record in verified},
+    }
 
 
 def _complete(
@@ -103,15 +159,13 @@ def _reuse_registered_stage(
     prior_root = _prior_retry7_root(config, project_root)
     if name not in registered or prior_root is None:
         return None
-    manifest_path = prior_root / "10_summary/retry7_artifact_manifest.json"
-    manifest = base._read_json(manifest_path)
-    gate_relative = Path(STAGE_DIRS[name]) / "gate.json"
-    records = {
-        str(record["path"]): record for record in manifest.get("artifacts", ())
-    }
+    closure = _verify_prior_stage(prior_root, name)
+    prior_stage = Path(closure["stage"])
+    records = dict(closure["records"])
+
     def verified_artifact(relative: Path) -> Path:
         record = records.get(relative.as_posix())
-        path = prior_root / relative
+        path = prior_stage / relative
         if (
             record is None
             or not path.is_file()
@@ -123,16 +177,19 @@ def _reuse_registered_stage(
             )
         return path
 
-    gate_path = verified_artifact(gate_relative)
+    gate_path = verified_artifact(Path("gate.json"))
     prior_gate = base._read_json(gate_path)
     stage = output_root / STAGE_DIRS[name]
     stage.mkdir(parents=True, exist_ok=True)
     reference = {
         "evidence_reused": True,
-        "evidence_role": "read_only_reference_not_fresh_execution",
+        "evidence_role": "stage_completion_hash_verified_read_only_reference",
         "prior_retry7_root": str(prior_root),
-        "prior_retry7_source_sha": str(manifest.get("source_sha", "")),
-        "prior_manifest_sha256": base.sha256_file(manifest_path),
+        "prior_retry7_source_sha": str(closure["source_sha"]),
+        "prior_stage_manifest_sha256": str(closure["manifest_sha256"]),
+        "prior_stage_artifact_closure_sha256": str(
+            closure["artifact_closure_sha256"]
+        ),
         "prior_gate_path": str(gate_path),
         "prior_gate_sha256": base.sha256_file(gate_path),
         "prior_gate_pass": bool(prior_gate.get("gate_pass", False)),
@@ -140,9 +197,7 @@ def _reuse_registered_stage(
     base._write_json(stage / "reused_evidence_reference.json", reference)
     selected_kernel = None
     if name == "gauge_kernel_selection":
-        selected_path = verified_artifact(
-            Path(STAGE_DIRS[name]) / "selected_kernel.json"
-        )
+        selected_path = verified_artifact(Path("selected_kernel.json"))
         selected_kernel = {
             **base._read_json(selected_path),
             "policy_evidence_role": "sealed_policy_reference_not_fresh_guard",
@@ -189,14 +244,35 @@ def stage_inventory(
     upstream_closure = base._verify_upstream_artifact_manifest(required[0])
     reach_round6_closure = base._verify_upstream_artifact_manifest(v14_2_manifest)
     prior_retry7 = _prior_retry7_root(config, project_root)
-    prior_retry7_manifest = (
-        prior_retry7 / "10_summary/retry7_artifact_manifest.json"
+    prior_stage_closures = (
+        [
+            _verify_prior_stage(prior_retry7, name)
+            for name in map(str, config.get("reuse_sealed_stages", ()))
+        ]
         if prior_retry7 is not None
-        else None
+        else []
     )
     prior_retry7_closure = (
-        base._verify_upstream_artifact_manifest(prior_retry7_manifest)
-        if prior_retry7_manifest is not None
+        {
+            "artifact_count": sum(
+                int(item["artifact_count"]) for item in prior_stage_closures
+            ),
+            "artifact_closure_sha256": base._payload_sha256(
+                {
+                    "stages": [
+                        {
+                            "stage": Path(item["stage"]).name,
+                            "manifest_sha256": item["manifest_sha256"],
+                            "artifact_closure_sha256": item[
+                                "artifact_closure_sha256"
+                            ],
+                        }
+                        for item in prior_stage_closures
+                    ]
+                }
+            ),
+        }
+        if prior_stage_closures
         else None
     )
     base._write_json(
@@ -207,7 +283,8 @@ def stage_inventory(
     )
     if prior_retry7_closure is not None:
         base._write_json(
-            stage / "prior_retry7_manifest_check.json", prior_retry7_closure
+            stage / "prior_retry7_stage_closure_check.json",
+            prior_retry7_closure,
         )
     fixed = {
         "source_sha": base._git_sha(),
@@ -228,9 +305,15 @@ def stage_inventory(
         "prior_retry7_root": (
             str(prior_retry7) if prior_retry7 is not None else None
         ),
-        "prior_retry7_artifact_manifest_sha256": (
-            base.sha256_file(prior_retry7_manifest)
-            if prior_retry7_manifest is not None
+        "prior_retry7_stage_manifest_sha256": (
+            base._payload_sha256(
+                {
+                    "manifests": [
+                        item["manifest_sha256"] for item in prior_stage_closures
+                    ]
+                }
+            )
+            if prior_stage_closures
             else None
         ),
         "prior_retry7_artifact_closure_sha256": (
@@ -1043,7 +1126,7 @@ def stage_gauge_kernel_selection(
     reuse_traces = bool(config.get("reuse_pre_abstention_gauge_traces", False))
     if reuse_traces:
         if prior_root is None:
-            raise RuntimeError("gauge trace reuse requires retry7_pre_abstention_root")
+            raise RuntimeError("gauge trace reuse requires retry7_reference_root")
         prior_stage = prior_root / STAGE_DIRS["gauge_kernel_selection"]
         prior_trace_path = prior_stage / "critical_cycle_results.parquet"
         prior_performance_path = prior_stage / "kernel_performance.parquet"
@@ -1309,6 +1392,11 @@ def stage_patch07_repair(
             str(config["_variant"]), stage / str(config["_patch_id"]) / str(config["_variant"])
         )
         return {"gate_pass": True, "worker_report": report}
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "patch07_repair"
+    )
+    if reused is not None:
+        return reused
     if not gauge.get("proceed_to_patch07_repair", False):
         return _complete(stage, config, "patch07_repair", base.write_scientific_skip(stage, "gauge_kernel_selection_failed"))
     variants = ("gauge_main_K1_R5", "gauge_task_graph_refined", "gauge_K1_R8")
@@ -1320,7 +1408,7 @@ def stage_patch07_repair(
     if reuse_numerical:
         if prior_root is None:
             raise RuntimeError(
-                "patch07 numerical reuse requires retry7_pre_abstention_root"
+                "patch07 numerical reuse requires retry7_reference_root"
             )
         numerical_stage = prior_root / STAGE_DIRS["patch07_repair"]
         for name in variants:
@@ -1338,9 +1426,9 @@ def stage_patch07_repair(
                 "evidence_role": "sealed_numerical_artifacts_reaggregated_under_corrected_gate",
                 "prior_retry7_root": str(prior_root),
                 "prior_patch07_stage": str(numerical_stage),
-                "prior_manifest_sha256": base.sha256_file(
-                    prior_root / "10_summary/retry7_artifact_manifest.json"
-                ),
+                "prior_stage_manifest_sha256": _verify_prior_stage(
+                    prior_root, "patch07_repair"
+                )["manifest_sha256"],
             },
         )
     else:
@@ -1378,6 +1466,11 @@ def stage_four_patch_gate(
             str(config["_variant"]), stage / str(config["_patch_id"]) / str(config["_variant"])
         )
         return {"gate_pass": True, "worker_report": report}
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "four_patch_gate"
+    )
+    if reused is not None:
+        return reused
     if not patch07.get("gate_pass", False):
         return _complete(stage, config, "four_patch_gate", base.write_scientific_skip(stage, "patch07_repair_failed"))
     patches = tuple(map(str, config["diagnostic_patch_ids"]))
@@ -1443,6 +1536,11 @@ def stage_reach_round8(
 ) -> dict[str, Any]:
     four = _require(config, output_root, "four_patch_gate")
     stage = output_root / STAGE_DIRS["reach_round8"]
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "reach_round8"
+    )
+    if reused is not None:
+        return reused
     if not four.get("gate_pass", False):
         return _complete(stage, config, "reach_round8", base.write_scientific_skip(stage, "four_patch_gate_failed_before_registered_round8_compute"))
     stage.mkdir(parents=True, exist_ok=True)
@@ -1687,6 +1785,11 @@ def stage_confirmation(
             stage / str(config["_patch_id"]) / str(config["_variant"]),
         )
         return {"gate_pass": True, "worker_report": report}
+    reused = _reuse_registered_stage(
+        config, project_root, output_root, "confirmation"
+    )
+    if reused is not None:
+        return reused
     if not four.get("gate_pass", False):
         return _complete(stage, config, "confirmation", base.write_scientific_skip(stage, "four_patch_gate_failed"))
     development = tuple(map(str, config["development_patch_ids"]))

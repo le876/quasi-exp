@@ -303,7 +303,17 @@ def merge_validated_audit_shards(
     repeats_per_direction: int,
 ) -> pd.DataFrame:
     if registry.empty:
-        return pd.DataFrame(columns=list(_EXECUTION_KEY))
+        # Empty scientific schedules are a valid fail-closed outcome (for
+        # example, an entirely abstained primary atlas).  Preserve the
+        # execution schema written by the logical shards so downstream report
+        # aggregation can emit zero-valued metrics instead of confusing an
+        # empty result with a malformed result.
+        columns = list(_EXECUTION_KEY)
+        for shard_id in sorted(shard_executions):
+            for column in shard_executions[shard_id].columns:
+                if column not in columns:
+                    columns.append(column)
+        return pd.DataFrame(columns=columns)
     registered_count = int(registry["registered_shard_count"].iloc[0])
     if not registry["registered_shard_count"].eq(registered_count).all():
         raise ValueError("registry contains inconsistent shard counts")

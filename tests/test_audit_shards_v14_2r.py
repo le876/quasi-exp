@@ -215,3 +215,34 @@ def test_merge_fails_closed_on_missing_or_duplicate_shards() -> None:
         merge_validated_audit_shards(
             registry, duplicated, repeats_per_direction=3
         )
+
+
+def test_empty_registry_merge_preserves_declared_execution_schema() -> None:
+    registry = pd.DataFrame(columns=("schedule_id", "shard_id"))
+    frames = {
+        shard_id: pd.DataFrame(
+            columns=(
+                "schedule_id",
+                "direction",
+                "repeat_index",
+                "classification",
+                "retry_tier",
+                "executed_solver_chain",
+            )
+        )
+        for shard_id in range(2)
+    }
+
+    merged = merge_validated_audit_shards(
+        registry, frames, repeats_per_direction=3
+    )
+
+    assert merged.empty
+    assert tuple(merged.columns) == (
+        "schedule_id",
+        "direction",
+        "repeat_index",
+        "classification",
+        "retry_tier",
+        "executed_solver_chain",
+    )

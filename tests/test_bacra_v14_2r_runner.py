@@ -450,6 +450,7 @@ def test_empty_audit_registry_seals_logical_shards_without_spawning_workers(
     )
 
     assert executions.empty
+    assert set(module.AUDIT_EXECUTION_COLUMNS).issubset(executions.columns)
     reports = [
         module._read_json(
             tmp_path

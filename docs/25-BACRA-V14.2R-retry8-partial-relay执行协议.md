@@ -57,7 +57,7 @@ retry8 不重新运行 retry7 已通过的 12-patch、Reach、holonomy、K/R 和
 - retry8 Teacher：`scripts/pipelines/run_bacra_v14_2r_retry8_partial_relay.sh`；
 - balanced Smoke：`scripts/pipelines/run_bacra_v14_3_retry8_smoke.sh`；
 - repaired 5k：`scripts/pipelines/run_bacra_v14_3_retry8_5k.sh`；
-- 串联入口：`scripts/pipelines/run_bacra_retry8_then_v14_3.sh`。
+- retry8 完成后的 V14.3 串联入口：`scripts/pipelines/run_bacra_v14_3_retry8_remaining.sh`。
 
 串联入口只有在 Smoke summary 明确写出
 `five_k_teacher_execution_authorized=true` 时进入 5k；该字段不得由

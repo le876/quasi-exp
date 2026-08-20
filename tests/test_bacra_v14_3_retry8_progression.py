@@ -137,3 +137,77 @@ def test_student_quality_miss_does_not_block_five_k_teacher() -> None:
     assert quality_miss["five_k_teacher_execution_authorized"] is True
     assert quality_miss["student_claim_authorized"] is False
     assert integrity_failure["five_k_teacher_execution_authorized"] is False
+
+
+def test_retry8_inherited_candidates_keep_integer_local_cluster_ids(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    runner = _runner()
+    tasks = pd.DataFrame(
+        {
+            "task_node_id": [10],
+            "x_m": [1.0],
+            "y_m": [0.0],
+            "z_m": [0.0],
+            "source_parent_node_id": [1],
+        }
+    )
+    candidates = pd.DataFrame.from_records(
+        [
+            {
+                "task_node_id": 10,
+                "candidate_id": "legacy_10",
+                "cluster_id": 0,
+                "source_candidate_ids": ["legacy_10"],
+                "cluster_size": 1,
+                "quality": "Gold",
+                "solver_success": True,
+                "actual_bounds": True,
+                "residual_mm": 0.0,
+                "min_margin_deg": 1.0,
+                "normalized_min_margin": 0.1,
+                "posture_cost": 0.0,
+                "condition_number": 1.0,
+                **{column: 0.0 for column in runner.BETA_COLUMNS},
+            }
+        ]
+    )
+    frozen = pd.DataFrame.from_records(
+        [
+            {
+                "candidate_id": "frozen_10",
+                "canonical_lineage_id": "lineage",
+                "x_m": 1.0,
+                "y_m": 0.0,
+                "z_m": 0.0,
+                **{column: 0.1 for column in runner.BETA_COLUMNS},
+            }
+        ]
+    )
+    lineage_path = tmp_path / "lineage.parquet"
+    frozen.to_parquet(lineage_path, index=False)
+    monkeypatch.setattr(
+        runner,
+        "_legacy_pilot_inputs",
+        lambda *_: (tasks, pd.DataFrame(), candidates, pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_upstream_stage_paths",
+        lambda *_: {"lineage": lineage_path},
+    )
+    monkeypatch.setattr(runner, "_sources", lambda *_: {"v14_2r": tmp_path})
+
+    _tasks, _edges, merged, _parents, _roots = runner._retry8_pilot_inputs(
+        {
+            "execution_mode": "five_k",
+            "pilot": {"root_count": 1},
+        },
+        tmp_path,
+    )
+    output = tmp_path / "candidate_clusters.parquet"
+    runner._write_parquet(merged, output)
+
+    restored = pd.read_parquet(output)
+    assert restored["cluster_id"].map(type).eq(int).all()
+    assert sorted(restored["cluster_id"].tolist()) == [0, 1]

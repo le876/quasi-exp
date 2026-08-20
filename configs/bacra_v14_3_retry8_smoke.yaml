@@ -2,7 +2,7 @@ schema_version: 1
 upstream_protocol_version: retry8
 execution_mode: smoke
 experiment_id: bacra_v14_3_retry8_balanced_smoke
-output_root: runs/bacra_v14_3_retry8_balanced_smoke_retry4
+output_root: runs/bacra_v14_3_retry8_balanced_smoke_retry5
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:

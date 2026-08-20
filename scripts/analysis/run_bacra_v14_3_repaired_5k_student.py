@@ -563,12 +563,27 @@ def _retry8_pilot_inputs(config: Mapping[str, Any], project_root: Path):
         root_count=int(pilot["root_count"]),
     )
     inherited_rows = []
+    next_cluster_by_node: dict[int, int] = {}
     for row in roots.itertuples(index=False):
+        task_node_id = int(row.task_node_id)
+        if task_node_id not in next_cluster_by_node:
+            local_clusters = pd.to_numeric(
+                candidates.loc[
+                    candidates["task_node_id"].astype(int).eq(task_node_id),
+                    "cluster_id",
+                ],
+                errors="coerce",
+            ).dropna()
+            next_cluster_by_node[task_node_id] = (
+                int(local_clusters.max()) + 1 if not local_clusters.empty else 0
+            )
+        cluster_id = next_cluster_by_node[task_node_id]
+        next_cluster_by_node[task_node_id] += 1
         inherited_rows.append(
             {
-                "task_node_id": int(row.task_node_id),
+                "task_node_id": task_node_id,
                 "candidate_id": f"retry8_lineage_{int(row.root_index):03d}",
-                "cluster_id": f"retry8_lineage_{int(row.root_index):03d}",
+                "cluster_id": cluster_id,
                 "source_candidate_ids": [str(row.candidate_id)],
                 "cluster_size": 1,
                 "quality": "Gold",

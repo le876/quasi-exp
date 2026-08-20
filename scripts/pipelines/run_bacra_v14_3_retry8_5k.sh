@@ -30,6 +30,8 @@ run_stage stitched_atlas
 run_stage fixed_budget_dataset
 run_stage students
 run_stage representation_decision
+run_stage reach_update
+run_stage formal_admission
 run_stage summary
 
 echo "retry8_5k_status=operationally_complete formal_authorization=false"

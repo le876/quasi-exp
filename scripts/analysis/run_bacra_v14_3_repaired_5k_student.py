@@ -208,6 +208,8 @@ def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     }
     if "smoke_root" in row:
         result["smoke"] = project_root / str(row["smoke_root"])
+    if "retry7_root" in row:
+        result["retry7"] = project_root / str(row["retry7_root"])
     return result
 
 
@@ -295,12 +297,13 @@ def _write_stage_completion_manifest(
     output_root: Path, *, config: Mapping[str, Any], stage_name: str
 ) -> dict[str, Any]:
     directory = output_root / STAGE_DIRS[stage_name]
+    upstream_completion_sha256 = _upstream_completion_sha256(
+        output_root, stage_name
+    )
     manifest = v142r._write_stage_completion_manifest(
         directory, config=config, stage_name=stage_name
     )
-    manifest["upstream_completion_sha256"] = _upstream_completion_sha256(
-        output_root, stage_name
-    )
+    manifest["upstream_completion_sha256"] = upstream_completion_sha256
     _write_json(directory / "completion_manifest.json", manifest)
     return manifest
 
@@ -2249,10 +2252,13 @@ def stage_reach_update(
     dataset = _require(output_root, "fixed_budget_dataset", config)
     students = _require(output_root, "students", config)
     stage = output_root / STAGE_DIRS["reach_update"]
-    upstream_root = _sources(config, project_root)["v14_2r"]
-    if str(config.get("upstream_protocol_version", "retry6")) == "retry7":
+    sources = _sources(config, project_root)
+    upstream_root = sources["v14_2r"]
+    protocol = str(config.get("upstream_protocol_version", "retry6"))
+    if protocol in {"retry7", "retry8"}:
+        reach_root = upstream_root if protocol == "retry7" else sources["retry7"]
         round8 = _read_json(
-            _upstream_stage_paths(config, upstream_root)["reach"]
+            reach_root / "07_reach_round8/gate.json"
         )
         return _gate(
             stage / "gate.json",

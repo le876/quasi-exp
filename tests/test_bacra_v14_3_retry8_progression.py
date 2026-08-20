@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +46,56 @@ def test_retry8_smoke_config_is_small_and_keeps_formal_thresholds() -> None:
     assert five_k["pilot"]["minimum_x_tertiles"] == 2
     assert five_k["dataset"]["minimum_unique_rows"] == 3000
     assert five_k["dataset"]["target_unique_rows"] == 10000
+
+
+def test_retry8_pipelines_seal_reach_and_formal_before_summary() -> None:
+    for name in (
+        "run_bacra_v14_3_retry8_smoke.sh",
+        "run_bacra_v14_3_retry8_5k.sh",
+    ):
+        script = (ROOT / "scripts/pipelines" / name).read_text(encoding="utf-8")
+        stages = [
+            line.removeprefix("run_stage ").strip()
+            for line in script.splitlines()
+            if line.startswith("run_stage ")
+        ]
+
+        assert stages[-4:] == [
+            "representation_decision",
+            "reach_update",
+            "formal_admission",
+            "summary",
+        ]
+
+
+def test_retry8_reach_update_reuses_registered_retry7_round8(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    runner = _runner()
+    retry7_root = tmp_path / "retry7"
+    reach_gate = retry7_root / "07_reach_round8/gate.json"
+    reach_gate.parent.mkdir(parents=True)
+    reach_gate.write_text(
+        json.dumps({"gate_pass": False, "reach_convergence_gate": False}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner,
+        "_sources",
+        lambda *_: {"v14_2r": tmp_path / "retry8", "retry7": retry7_root},
+    )
+    monkeypatch.setattr(runner, "_require", lambda *_args, **_kwargs: {})
+
+    report = runner.stage_reach_update(
+        {"upstream_protocol_version": "retry8"},
+        tmp_path,
+        tmp_path / "output",
+    )
+
+    assert report["gate_pass"] is False
+    assert report["reach_source"] == "retry7_round8"
+    assert report["round8_executed_upstream"] is True
+    assert report["round9_forbidden"] is True
 
 
 def test_balanced_smoke_keeps_p0_and_only_a_registered_hard_subset() -> None:

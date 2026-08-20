@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -156,3 +157,23 @@ def test_stage_dependency_digest_changes_when_upstream_completion_changes(tmp_pa
     second = module._upstream_completion_sha256(tmp_path, "pilot_registry")
 
     assert first != second
+
+
+def test_stage_completion_is_not_half_written_when_upstream_is_missing(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    summary = tmp_path / module.STAGE_DIRS["summary"]
+    summary.mkdir(parents=True)
+    (summary / "gate.json").write_text("{}", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("schema_version: 1\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="missing upstream completion"):
+        module._write_stage_completion_manifest(
+            tmp_path,
+            config={"config_path": str(config_path)},
+            stage_name="summary",
+        )
+
+    assert not (summary / "completion_manifest.json").exists()

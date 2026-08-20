@@ -30,6 +30,8 @@ run_stage stitched_atlas
 run_stage fixed_budget_dataset
 run_stage students
 run_stage representation_decision
+run_stage reach_update
+run_stage formal_admission
 run_stage summary
 
 echo "retry8_smoke_status=complete five_k_authorization=see_09_summary"

@@ -1,0 +1,138 @@
+schema_version: 1
+protocol_version: retry8
+protocol_revision: p0_partial_relay_funnel_v1
+experiment_id: bacra_v14_2r_retry8_partial_relay
+output_root: runs/bacra_v14_2r_retry8_partial_relay
+robot_config: configs/robot_rods_only_standard_100k.yaml
+
+sources:
+  reviewed_plan: docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+  performance_protocol: docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
+  scientific_closure_protocol: docs/23-BACRA-V14.2R科学Gate与closure修复协议.md
+  retry7_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4
+  retry7_meso_variant: gauge_K1_R8
+  legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
+  retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
+  v14_2_root: runs/bacra_v14_2_section_first_atlas
+  original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+parallel:
+  numerical_workers: 12
+  numerical_threads_per_worker: 1
+
+optimization:
+  analytic_endpoint_kinematics: true
+  explicit_least_squares_jacobian: true
+
+rooted_section:
+  beam_width: 1
+  maximum_growth_waves: 32
+  parent_consensus_gold_deg: 0.5
+  parent_consensus_silver_deg: 1.0
+  continuation_residual_max_mm: 3.0
+  reverse_return_max_deg: 0.5
+  minimum_alternative_chart_cells: 8
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+relay:
+  target_count: 4
+  maximum_count: 8
+  minimum_count: 2
+  preferred_separation_mm: 20.0
+  minimum_separation_mm: 10.0
+  inheritance_gap_max_deg: 0.1
+  marginal_coverage_gain_min: 0.01
+  expandable_frontier_trigger: 0.05
+
+growth_funnel:
+  registered_methods:
+    - {method_id: D0_raw_retry7, diagnostic_only: true, selectable: false, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: P0_frozen_partial_singleton, diagnostic_only: false, selectable: true, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: G32_origin, diagnostic_only: false, selectable: true, relay_count: 0, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R2W16, diagnostic_only: false, selectable: true, relay_count: 2, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: R2W32, diagnostic_only: false, selectable: true, relay_count: 2, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R4W16, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: R4W32, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R8W32, diagnostic_only: false, selectable: true, relay_count: 8, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: K4_best, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 4}
+  beam4_cap_hit_ratio_trigger: 0.05
+
+screening:
+  maximum_interior_edges: 256
+  maximum_cycles: 64
+  maximum_full_certificate_candidates: 3
+  repeats_per_direction: 2
+  directions: [forward]
+  geometry_p95_max_deg: 1.0
+  geometry_max_deg: 2.0
+  repeat_p95_max_deg: 0.5
+  residual_max_mm: 5.0
+
+audit_execution:
+  total_shard_workers: 12
+  logical_shard_count: 48
+  maximum_concurrent_workers: 12
+  assignment_strategy: cost_balanced_lpt
+  checkpoint_resume: true
+  heartbeat_every_completed_shards: 1
+  progress_every_schedules: 32
+
+audit_v2:
+  geometry_p95_max_deg: 0.5
+  geometry_max_deg: 1.0
+  repeat_p95_max_deg: 0.2
+  continuation_residual_max_mm: 3.0
+  repeats_per_direction: 3
+  repeat_perturbation_rad: 1.0e-8
+  directions: [forward, reverse]
+  retry_tiers:
+    - {tier_id: R0, maximum_step_mm: 5.0, maximum_iterations: 100, solver_chain: [predictor, bounded_ls]}
+    - {tier_id: R1, maximum_step_mm: 2.5, maximum_iterations: 200, solver_chain: [weighted_dls, bounded_ls]}
+    - {tier_id: R2, maximum_step_mm: 1.25, maximum_iterations: 400, solver_chain: [weighted_dls, bounded_ls, slsqp]}
+
+chart_repair:
+  minimum_chart_cells: 8
+  minimum_chart_fraction: 0.002
+  minimum_chart_spread_mm: 10.0
+  minimum_stitch_overlap_cells: 8
+  stitch_p95_max_deg: 0.5
+  stitch_max_deg: 1.0
+  minimum_boundary_transition_edges: 4
+  minimum_overlap_fraction: 0.002
+  minimum_overlap_spread_mm: 10.0
+  abstention_hops: 0
+  abstention_radius_mm: 10.0
+
+seed_labels:
+  minimum_unique_rows: 3000
+  target_unique_rows: 5000
+  maximum_unique_rows: 10000
+  interpolation_fractions: [0.2, 0.4, 0.6, 0.8]
+  logical_shard_count: 48
+  multiparent_beta_gap_max_deg: 0.5
+  reverse_return_max_deg: 0.5
+  silver_neighbor_jump_max_deg: 1.0
+  continuation_residual_max_mm: 3.0
+
+smoke:
+  minimum_strict_unique_labels: 3000
+  target_unique_labels: 5000
+  balanced_parent_count: 1000
+  hard_meso_parent_target: 192
+  hard_meso_parent_min: 128
+  hard_meso_parent_max: 256
+  macroblock_sizes_mm: [40, 30, 20]
+  minimum_train_blocks: 10
+  minimum_validation_blocks: 3
+  minimum_test_blocks: 3
+  minimum_rows_per_split: 500
+  split_seed: 20260881
+  split_fractions: [0.70, 0.15, 0.15]
+
+exploratory_target:
+  coverage_min: 0.30
+  largest_component_min: 0.20
+
+formal_gate:
+  unchanged: true
+  deployment_claim: false

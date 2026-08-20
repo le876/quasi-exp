@@ -76,6 +76,7 @@ class AuditV2Policy:
     continuation_residual_max_mm: float = 3.0
     repeats_per_direction: int = 3
     repeat_perturbation_rad: float = 1.0e-8
+    directions: tuple[str, ...] = ("forward", "reverse")
     retry_tiers: tuple[RetryTier, ...] = field(default_factory=_default_retry_tiers)
 
     def __post_init__(self) -> None:
@@ -90,6 +91,10 @@ class AuditV2Policy:
             raise ValueError("audit-v2 thresholds must be finite and positive")
         if self.repeats_per_direction < 1 or not self.retry_tiers:
             raise ValueError("audit-v2 requires repeats and retry tiers")
+        directions = tuple(dict.fromkeys(map(str, self.directions)))
+        if not directions or set(directions) - {"forward", "reverse"}:
+            raise ValueError("audit-v2 directions must use forward/reverse")
+        object.__setattr__(self, "directions", directions)
 
 
 @dataclass(frozen=True)
@@ -492,6 +497,7 @@ def repair_rooted_section_atlas(
             continuation_residual_max_mm=active.audit.continuation_residual_max_mm,
             repeats_per_direction=1,
             repeat_perturbation_rad=active.audit.repeat_perturbation_rad,
+            directions=active.audit.directions,
             retry_tiers=active.audit.retry_tiers,
         )
     executions = _execute_phase(
@@ -856,6 +862,14 @@ def _build_schedules(growth: SectionGrowthResult, *, patch_id: str, method: str)
     )
 
 
+def build_registered_audit_schedules(
+    growth: SectionGrowthResult, *, patch_id: str, method: str
+) -> pd.DataFrame:
+    """Return the deterministic full schedule registry for external funnels."""
+
+    return _build_schedules(growth, patch_id=patch_id, method=method)
+
+
 def execute_audit_schedules(
     growth: SectionGrowthResult,
     schedules: pd.DataFrame,
@@ -876,7 +890,12 @@ def execute_audit_schedules(
         chart = chart_by_id[str(schedule["chart_id"])]
         selected = {node: item.candidate for node, item in chart.selected_by_node.items()}
         base_path = tuple(int(value) for value in schedule["path_node_ids"])
-        for direction, path in (("forward", base_path), ("reverse", tuple(reversed(base_path)))):
+        paths_by_direction = {
+            "forward": base_path,
+            "reverse": tuple(reversed(base_path)),
+        }
+        for direction in policy.directions:
+            path = paths_by_direction[direction]
             physical_entity = str(
                 schedule.get(
                     "physical_entity_id",

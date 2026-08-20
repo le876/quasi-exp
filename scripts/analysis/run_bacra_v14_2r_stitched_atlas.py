@@ -389,6 +389,7 @@ def _audit_policy(config: Mapping[str, Any]) -> AuditV2Policy:
         continuation_residual_max_mm=float(row["continuation_residual_max_mm"]),
         repeats_per_direction=int(row["repeats_per_direction"]),
         repeat_perturbation_rad=float(row.get("repeat_perturbation_rad", 1.0e-8)),
+        directions=tuple(map(str, row.get("directions", ("forward", "reverse")))),
         retry_tiers=tuple(
             RetryTier(
                 str(tier["tier_id"]),
@@ -1397,6 +1398,11 @@ def _run_audit_shard_worker(
                 "repeats_per_direction", manifest["repeats_per_direction"]
             )
         ),
+        directions=tuple(
+            manifest.get("audit_policy", {}).get(
+                "directions", ("forward", "reverse")
+            )
+        ),
     )
     report_progress(0, len(shard_registry))
     if len(shard_registry):
@@ -1420,6 +1426,7 @@ def _run_audit_shard_worker(
         phase_id=str(manifest["phase_id"]),
         shard_id=int(shard_id),
         repeats_per_direction=audit_policy.repeats_per_direction,
+        directions=audit_policy.directions,
     )
     report["pid"] = os.getpid()
     report["executions_file_sha256"] = sha256_file(
@@ -1513,6 +1520,7 @@ class _SubprocessAuditExecutor:
             registered_schedules,
             shard_count=self.shard_count,
             repeats_per_direction=policy.repeats_per_direction,
+            directions=policy.directions,
             assignment_strategy=self.assignment_strategy,
         )
         _write_parquet(self.tasks, phase_directory / "task_nodes.parquet")
@@ -1543,6 +1551,7 @@ class _SubprocessAuditExecutor:
             "shard_count": self.shard_count,
             "schedule_count": len(registry),
             "repeats_per_direction": policy.repeats_per_direction,
+            "directions": list(policy.directions),
             "audit_policy": {
                 "geometry_p95_max_deg": policy.geometry_p95_max_deg,
                 "geometry_max_deg": policy.geometry_max_deg,
@@ -1550,6 +1559,7 @@ class _SubprocessAuditExecutor:
                 "continuation_residual_max_mm": policy.continuation_residual_max_mm,
                 "repeats_per_direction": policy.repeats_per_direction,
                 "repeat_perturbation_rad": policy.repeat_perturbation_rad,
+                "directions": list(policy.directions),
                 "retry_tiers": [
                     {
                         "tier_id": tier.tier_id,
@@ -1590,6 +1600,7 @@ class _SubprocessAuditExecutor:
                         phase_id=str(phase_id),
                         shard_id=shard_id,
                         repeats_per_direction=policy.repeats_per_direction,
+                        directions=policy.directions,
                     )
                     file_hash_ok = str(report.get("executions_file_sha256", "")) == sha256_file(
                         execution_path
@@ -1613,6 +1624,7 @@ class _SubprocessAuditExecutor:
                     phase_id=str(phase_id),
                     shard_id=shard_id,
                     repeats_per_direction=policy.repeats_per_direction,
+                    directions=policy.directions,
                 )
                 report.update(
                     {
@@ -1744,6 +1756,7 @@ class _SubprocessAuditExecutor:
                     phase_id=str(phase_id),
                     shard_id=shard_id,
                     repeats_per_direction=policy.repeats_per_direction,
+                    directions=policy.directions,
                 )
                 if not valid["gate_pass"]:
                     raise RuntimeError(
@@ -1766,6 +1779,7 @@ class _SubprocessAuditExecutor:
             registry,
             completed,
             repeats_per_direction=policy.repeats_per_direction,
+            directions=policy.directions,
         )
         _write_parquet(merged, phase_directory / "executions.parquet")
         aggregate = _gate(
@@ -1773,7 +1787,7 @@ class _SubprocessAuditExecutor:
             {
                 "all_registered_shards_complete": len(completed) == self.shard_count,
                 "exact_execution_set": len(merged)
-                == len(registry) * 2 * policy.repeats_per_direction,
+                == len(registry) * len(policy.directions) * policy.repeats_per_direction,
             },
             phase_id=str(phase_id),
             schedule_count=len(registry),

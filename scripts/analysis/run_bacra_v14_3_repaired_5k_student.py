@@ -47,6 +47,12 @@ from quasi_exp.teacher.section_atlas_repair import (
     section_growth_from_frames,
     repair_rooted_section_atlas,
 )
+from quasi_exp.teacher.partial_relay import choose_macroblock_split
+from quasi_exp.teacher.retry8_progression import (
+    authorize_five_k_after_smoke,
+    map_frozen_lineage_roots,
+    select_balanced_smoke_domain,
+)
 from quasi_exp.teacher.section_first_atlas import RootedSectionPolicy, build_section_first_atlas
 from quasi_exp.teacher.student_tracking_tf import StudentGeometry
 from quasi_exp.teacher.workspace_atlas import RepresentationMode
@@ -148,16 +154,34 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if not bool(audit.get("screening_first", False)):
         raise ValueError("V14.3 requires the registered screening-first protocol")
     pilot = config["pilot"]
-    if (int(pilot["parent_cell_count"]), int(pilot["task_probe_count"]), int(pilot["root_count"])) != (5000, 25000, 32):
-        raise ValueError("V14.3 registers 5000 parent cells, 25000 probes, and 32 roots")
+    retry8 = str(config.get("upstream_protocol_version", "retry6")) == "retry8"
+    mode = str(config.get("execution_mode", "legacy_5k"))
+    expected = {
+        "smoke": (1000, 5000, 24),
+        "five_k": (5000, 25000, 24),
+        "legacy_5k": (5000, 25000, 32),
+    }
+    if mode not in expected or tuple(
+        map(int, (pilot["parent_cell_count"], pilot["task_probe_count"], pilot["root_count"]))
+    ) != expected[mode]:
+        raise ValueError(f"V14.3 {mode} registry must be {expected.get(mode)}")
+    if retry8 != (mode in {"smoke", "five_k"}):
+        raise ValueError("retry8 upstream must use Smoke or five_k execution mode")
     dataset = config["dataset"]
     if bool(dataset["row_padding"]):
         raise ValueError("V14.3 forbids supervision row padding")
-    if not (20000 <= int(dataset["minimum_unique_rows"]) <= int(dataset["maximum_unique_rows"]) <= 50000):
-        raise ValueError("V14.3 unique supervision budget must be within 20k-50k")
+    minimum_allowed = 3000 if retry8 else 20000
+    if not (
+        minimum_allowed
+        <= int(dataset["minimum_unique_rows"])
+        <= int(dataset["target_unique_rows"])
+        <= int(dataset["maximum_unique_rows"])
+        <= 50000
+    ):
+        raise ValueError("V14.3 unique supervision budget is outside the registered range")
     if tuple(ROUTER_FEATURE_COLUMNS) != ("x_m", "y_m", "z_m"):
         raise AssertionError("router inference contract must remain xyz-only")
-    if (
+    if not retry8 and (
         int(config["student"]["trajectory_count"]),
         int(config["student"]["trajectory_waypoints"]),
     ) != (36, 100):
@@ -171,7 +195,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     row = config["sources"]
-    return {
+    result = {
         "plan": SOURCE_ROOT / str(row["reviewed_plan"]),
         "v14_2r": project_root / str(row["v14_2r_root"]),
         "v14_2r_config": SOURCE_ROOT / str(row["v14_2r_config"]),
@@ -182,12 +206,24 @@ def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
         "historical_final8_catalog": project_root / str(row["historical_final8_catalog"]),
         "robot_config": SOURCE_ROOT / str(config["robot_config"]),
     }
+    if "smoke_root" in row:
+        result["smoke"] = project_root / str(row["smoke_root"])
+    return result
 
 
 def _upstream_stage_paths(
     config: Mapping[str, Any], upstream_root: Path
 ) -> dict[str, Path]:
-    if str(config.get("upstream_protocol_version", "retry6")) == "retry7":
+    protocol = str(config.get("upstream_protocol_version", "retry6"))
+    if protocol == "retry8":
+        return {
+            "authorization": upstream_root / "07_authorization/retry8_next_stage_authorization.json",
+            "labels": upstream_root / "06_seed_labels/primary_seed_supervision.parquet",
+            "lineage": upstream_root / "05_partial_certificate/primary_canonical_labels.parquet",
+            "summary": upstream_root / "08_summary/gate.json",
+            "manifest": upstream_root / "08_summary/retry8_artifact_manifest.json",
+        }
+    if protocol == "retry7":
         return {
             "confirmation": upstream_root / "08_twelve_patch_confirmation/gate.json",
             "reach": upstream_root / "07_reach_round8/gate.json",
@@ -297,6 +333,7 @@ def _audit_policy_from_manifest(manifest: Mapping[str, Any]) -> AuditV2Policy:
         continuation_residual_max_mm=float(row["continuation_residual_max_mm"]),
         repeats_per_direction=int(row["repeats_per_direction"]),
         repeat_perturbation_rad=float(row["repeat_perturbation_rad"]),
+        directions=tuple(row.get("directions", ("forward", "reverse"))),
         retry_tiers=tuple(
             RetryTier(
                 str(tier["tier_id"]),
@@ -417,20 +454,50 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
     stage = output_root / STAGE_DIRS["inventory"]
     sources = _sources(config, project_root)
     upstream = _upstream_stage_paths(config, sources["v14_2r"])
-    confirmation = upstream["confirmation"]
-    reach = upstream["reach"]
-    meso = upstream["meso"]
     upstream_manifest = upstream["manifest"]
-    required = [
-        sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
-        sources["historical_final8_teacher"], sources["historical_final8_catalog"],
-        confirmation, reach, meso, upstream_manifest,
-    ]
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        required = [
+            sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
+            sources["historical_final8_teacher"], sources["historical_final8_catalog"],
+            upstream["authorization"], upstream["labels"], upstream["lineage"],
+            upstream["summary"], upstream_manifest,
+        ]
+        authorization = _read_json(upstream["authorization"])
+        summary_gate = _read_json(upstream["summary"])
+        upstream_authorized = bool(authorization.get("smoke_execution_authorized", False))
+        upstream_scientific = bool(summary_gate.get("partial_certificate_pass", False))
+        if str(config.get("execution_mode")) == "five_k":
+            smoke_authorization = (
+                sources["smoke"]
+                / "09_summary/retry8_next_stage_authorization.json"
+            )
+            if not smoke_authorization.is_file():
+                raise FileNotFoundError(
+                    f"retry8 Smoke authorization is missing: {smoke_authorization}"
+                )
+            required.append(smoke_authorization)
+            upstream_authorized = bool(
+                _read_json(smoke_authorization).get(
+                    "five_k_teacher_execution_authorized", False
+                )
+            )
+    else:
+        confirmation = upstream["confirmation"]
+        reach = upstream["reach"]
+        meso = upstream["meso"]
+        required = [
+            sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
+            sources["historical_final8_teacher"], sources["historical_final8_catalog"],
+            confirmation, reach, meso, upstream_manifest,
+        ]
+        confirmation_gate = _read_json(confirmation)
+        meso_gate = _read_json(meso)
+        upstream_authorized = bool(confirmation_gate.get("gate_pass", False))
+        upstream_scientific = bool(meso_gate.get("gate_pass", False))
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"V14.3 source inventory incomplete: {missing}")
-    confirmation_gate = _read_json(confirmation)
-    meso_gate = _read_json(meso)
     upstream_closure = v142r._verify_upstream_artifact_manifest(upstream_manifest)
     records = [{"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in required]
     _write_parquet(pd.DataFrame.from_records(records), stage / "source_inventory.parquet")
@@ -438,8 +505,8 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         "source_sha": v142r._git_sha(),
         "working_tree_clean": v142r._tree_clean(),
         "runtime": runtime_fingerprint(),
-        "v14_2r_confirmation_gate": bool(confirmation_gate.get("gate_pass", False)),
-        "v14_2r_meso_bridge_gate": bool(meso_gate.get("gate_pass", False)),
+        "v14_2r_confirmation_gate": upstream_authorized,
+        "v14_2r_meso_bridge_gate": upstream_scientific,
         "v14_2r_upstream_closure": upstream_closure,
         "source_records": records,
         "patch_workers": 12,
@@ -461,46 +528,128 @@ def _legacy_pilot_inputs(config: Mapping[str, Any], project_root: Path):
     return legacy._pilot_inputs(legacy_config, project_root)
 
 
+def _retry8_pilot_inputs(config: Mapping[str, Any], project_root: Path):
+    tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
+    upstream = _upstream_stage_paths(config, _sources(config, project_root)["v14_2r"])
+    frozen = pd.read_parquet(upstream["lineage"])
+    pilot = config["pilot"]
+    if str(config["execution_mode"]) == "smoke":
+        retry7_root = project_root / str(config["sources"]["retry7_root"])
+        hard_tasks = pd.read_parquet(
+            retry7_root / "09_meso_bridge/input/meso_task_nodes.parquet"
+        )
+        selected_parent_ids = set(
+            select_balanced_smoke_domain(
+                parents,
+                tasks,
+                frozen,
+                hard_parent_ids=set(hard_tasks["source_parent_node_id"].astype(int)),
+                parent_count=int(pilot["parent_cell_count"]),
+                hard_parent_target=int(pilot["hard_meso_parent_target"]),
+                hard_parent_maximum=int(pilot["hard_meso_parent_max"]),
+            )
+        )
+        tasks = tasks[tasks["source_parent_node_id"].astype(int).isin(selected_parent_ids)].copy()
+        node_ids = set(tasks["task_node_id"].astype(int))
+        edges = edges[
+            edges["left_node_id"].astype(int).isin(node_ids)
+            & edges["right_node_id"].astype(int).isin(node_ids)
+        ].copy()
+        candidates = candidates[candidates["task_node_id"].astype(int).isin(node_ids)].copy()
+        parents = parents[parents["node_id"].astype(int).isin(selected_parent_ids)].copy()
+    roots = map_frozen_lineage_roots(
+        frozen,
+        tasks,
+        root_count=int(pilot["root_count"]),
+    )
+    inherited_rows = []
+    for row in roots.itertuples(index=False):
+        inherited_rows.append(
+            {
+                "task_node_id": int(row.task_node_id),
+                "candidate_id": f"retry8_lineage_{int(row.root_index):03d}",
+                "cluster_id": f"retry8_lineage_{int(row.root_index):03d}",
+                "source_candidate_ids": [str(row.candidate_id)],
+                "cluster_size": 1,
+                "quality": "Gold",
+                "solver_success": True,
+                "actual_bounds": True,
+                "residual_mm": float(getattr(row, "source_teacher_residual_mm", 0.0)),
+                "min_margin_deg": 1.0,
+                "normalized_min_margin": 0.1,
+                "posture_cost": float(
+                    np.linalg.norm([getattr(row, column) for column in BETA_COLUMNS])
+                ),
+                "condition_number": 1.0,
+                **{column: float(getattr(row, column)) for column in BETA_COLUMNS},
+            }
+        )
+    inherited = pd.DataFrame.from_records(inherited_rows).reindex(columns=candidates.columns)
+    candidates = pd.concat([candidates, inherited], ignore_index=True)
+    roots = roots.copy()
+    roots["candidate_id"] = roots["root_index"].map(
+        lambda value: f"retry8_lineage_{int(value):03d}"
+    )
+    return tasks, edges, candidates, parents, roots
+
+
 def stage_pilot_registry(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     inventory = _require(output_root, "inventory", config)
     stage = output_root / STAGE_DIRS["pilot_registry"]
     if not inventory.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "v14_2r_confirmation_not_admitted")
-    tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        tasks, edges, candidates, parents, inherited_roots = _retry8_pilot_inputs(
+            config, project_root
+        )
+    else:
+        tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
     pilot = config["pilot"]
     if len(parents) != int(pilot["parent_cell_count"]) or len(tasks) != int(pilot["task_probe_count"]):
         raise RuntimeError(
             f"frozen lower proxy registry drift: parents={len(parents)}, probes={len(tasks)}"
         )
-    representatives = tasks[tasks["is_representative"].astype(bool)]
-    root_nodes = tuple(
-        AtlasTaskNode(int(row.task_node_id), np.asarray([row.x_m, row.y_m, row.z_m]), ())
-        for row in representatives.itertuples(index=False)
-    )
-    selected_nodes = deterministic_root_nodes(root_nodes, count=int(pilot["root_count"]))
-    candidate_objects = legacy._candidates_from_frame(candidates)
-    by_node: dict[int, list[Any]] = {}
-    for candidate in candidate_objects:
-        by_node.setdefault(candidate.node_id, []).append(candidate)
-    registry_rows = []
-    for root_index, node_id in enumerate(selected_nodes):
-        ranked = sorted(
-            by_node.get(node_id, ()),
-            key=lambda item: (0 if item.is_gold else 1, item.posture_cost, -item.min_margin_deg, item.candidate_id),
+    if retry8:
+        registry = inherited_roots[
+            [
+                "root_index", "task_node_id", "candidate_id", "root_kind",
+                "canonical_lineage_id", "inherited_from_frozen_lineage",
+            ]
+        ].copy()
+    else:
+        representatives = tasks[tasks["is_representative"].astype(bool)]
+        root_nodes = tuple(
+            AtlasTaskNode(int(row.task_node_id), np.asarray([row.x_m, row.y_m, row.z_m]), ())
+            for row in representatives.itertuples(index=False)
         )
-        if not ranked:
-            raise RuntimeError(f"registered pilot root {node_id} lacks a feasible candidate")
-        registry_rows.append({"root_index": root_index, "task_node_id": node_id, "candidate_id": ranked[0].candidate_id})
-    registry = pd.DataFrame.from_records(registry_rows)
+        selected_nodes = deterministic_root_nodes(root_nodes, count=int(pilot["root_count"]))
+        candidate_objects = legacy._candidates_from_frame(candidates)
+        by_node: dict[int, list[Any]] = {}
+        for candidate in candidate_objects:
+            by_node.setdefault(candidate.node_id, []).append(candidate)
+        registry_rows = []
+        for root_index, node_id in enumerate(selected_nodes):
+            ranked = sorted(
+                by_node.get(node_id, ()),
+                key=lambda item: (0 if item.is_gold else 1, item.posture_cost, -item.min_margin_deg, item.candidate_id),
+            )
+            if not ranked:
+                raise RuntimeError(f"registered pilot root {node_id} lacks a feasible candidate")
+            registry_rows.append({"root_index": root_index, "task_node_id": node_id, "candidate_id": ranked[0].candidate_id})
+        registry = pd.DataFrame.from_records(registry_rows)
     _write_parquet(tasks, stage / "pilot_task_nodes.parquet")
     _write_parquet(edges, stage / "pilot_task_edges.parquet")
     _write_parquet(candidates, stage / "pilot_candidate_clusters.parquet")
     _write_parquet(parents, stage / "pilot_parent_cells.parquet")
     _write_parquet(registry, stage / "root_registry.parquet")
     return _gate(stage / "gate.json", {
-        "exact_parent_cells": len(parents) == 5000,
-        "exact_task_probes": len(tasks) == 25000,
-        "maximin_roots": len(registry) == 32,
+        "exact_parent_cells": len(parents) == int(pilot["parent_cell_count"]),
+        "exact_task_probes": len(tasks) == int(pilot["task_probe_count"]),
+        "maximin_roots": len(registry) == int(pilot["root_count"]),
+        "single_frozen_lineage_roots": bool(
+            not retry8 or registry["canonical_lineage_id"].astype(str).nunique() == 1
+        ),
     }, parent_cell_count=len(parents), task_probe_count=len(tasks), root_count=len(registry))
 
 
@@ -867,8 +1016,15 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
         (int(row.task_node_id), str(row.candidate_id))
         for row in registered_roots.itertuples(index=False)
     )
+    upstream_audit = (
+        v142r._audit_policy(config)
+        if str(config.get("upstream_protocol_version")) == "retry8"
+        else v142r._audit_policy(
+            v142r.load_config(_sources(config, project_root)["v14_2r_config"])
+        )
+    )
     policy = AtlasRepairPolicy(
-        audit=v142r._audit_policy(v142r.load_config(_sources(config, project_root)["v14_2r_config"])),
+        audit=upstream_audit,
         minimum_chart_cells=int(pilot["minimum_chart_cells"]),
         minimum_chart_fraction=float(pilot["minimum_chart_fraction"]),
         minimum_chart_spread_mm=float(pilot["minimum_chart_spread_mm"]),
@@ -1131,13 +1287,14 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
     root_stability, root_stability_frame = _pilot_root_removal_stability(growth, repaired)
     _write_parquet(root_stability_frame, stage / "root_removal_stability.parquet")
     optimization = repaired.frames["primary_optimization"]
-    checks = {
+    exploratory_checks = {
         "labelable_measure": labelable_measure >= float(pilot["labelable_measure_min"]),
         "labelable_measure_lcb": labelable_lcb >= float(pilot["labelable_measure_lcb_min"]),
         "largest_coherent_region": largest_coherent_measure >= float(pilot["largest_coherent_region_min"]),
         "unresolved_abstention": unresolved_abstention <= float(pilot["unresolved_abstention_max"]),
         "mutually_exclusive_measure_decomposition": abs(sum(measures.values()) - 1.0) <= 1e-12,
-        "all_x_tertiles": len(label_bins) == 3,
+        "all_x_tertiles": len(label_bins)
+        >= int(pilot.get("minimum_x_tertiles", 3)),
         "retained_geometry_certificate": repaired.certificate_gate,
         "root_search_stability": root_stability,
         "primary_optimization_finite": bool(
@@ -1146,8 +1303,29 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
             and int(optimization["selected"].astype(bool).sum()) == 1
         ),
     }
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    checks = (
+        {
+            "partial_certificate": bool(repaired.certificate_gate),
+            "nonempty_unique_primary": bool(
+                len(labels) and not labels["task_node_id"].duplicated().any()
+            ),
+            "mutually_exclusive_measure_decomposition": exploratory_checks[
+                "mutually_exclusive_measure_decomposition"
+            ],
+        }
+        if retry8
+        else exploratory_checks
+    )
     return _gate(stage / "gate.json", checks,
-        scientific_gate_pass=bool(all(checks.values())),
+        scientific_gate_pass=bool(all(exploratory_checks.values())),
+        partial_certificate_pass=bool(repaired.certificate_gate),
+        data_legality_gate=bool(all(checks.values())),
+        global_coverage_gate_pass=bool(
+            exploratory_checks["labelable_measure"]
+            and exploratory_checks["largest_coherent_region"]
+        ),
+        exploratory_checks=exploratory_checks,
         labelable_measure_ratio=labelable_measure,
         labelable_measure_bootstrap_lcb95=labelable_lcb,
         labelable_measure_bootstrap_ucb95=labelable_ucb,
@@ -1412,6 +1590,51 @@ def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, ou
         )
         return {"gate_pass": True, "worker_report": report}
     labels = pd.read_parquet(output_root / STAGE_DIRS["stitched_atlas"] / "primary_canonical_labels.parquet").sort_values("task_node_id", kind="stable")
+    labels["label_quality"] = "Gold"
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        upstream = _upstream_stage_paths(
+            config, _sources(config, project_root)["v14_2r"]
+        )
+        seed = pd.read_parquet(upstream["labels"])
+        task_meta = pd.read_parquet(
+            output_root / STAGE_DIRS["pilot_registry"] / "pilot_task_nodes.parquet"
+        )
+        representatives = task_meta[task_meta["is_representative"].astype(bool)].copy()
+        tree = cKDTree(representatives.loc[:, XYZ_COLUMNS].to_numpy(float))
+        distance, nearest = tree.query(seed.loc[:, XYZ_COLUMNS].to_numpy(float), k=1)
+        nearest_rows = representatives.iloc[np.asarray(nearest, dtype=int)].reset_index(drop=True)
+        cell_diagonal = (
+            pd.to_numeric(nearest_rows["cell_level_mm"], errors="coerce").to_numpy(float)
+            / 1000.0
+            * math.sqrt(3.0)
+        )
+        seed = seed.loc[np.asarray(distance) <= cell_diagonal + 1.0e-12].reset_index(drop=True)
+        nearest_rows = nearest_rows.loc[np.asarray(distance) <= cell_diagonal + 1.0e-12].reset_index(drop=True)
+        first_node = int(task_meta["task_node_id"].max()) + 1
+        seed_labels = pd.DataFrame(
+            {
+                "task_node_id": np.arange(first_node, first_node + len(seed), dtype=int),
+                "physical_point_id": seed["physical_point_id"].astype(str),
+                "x_m": seed["x_m"].astype(float),
+                "y_m": seed["y_m"].astype(float),
+                "z_m": seed["z_m"].astype(float),
+                "source_parent_node_id": nearest_rows["source_parent_node_id"].astype(int),
+                "cell_level_mm": nearest_rows["cell_level_mm"].astype(int),
+                "cell_ix": nearest_rows["cell_ix"].astype(int),
+                "cell_iy": nearest_rows["cell_iy"].astype(int),
+                "cell_iz": nearest_rows["cell_iz"].astype(int),
+                "chart_id": "retry8_primary",
+                "abstained": False,
+                "label_quality": seed["label_quality"].astype(str),
+                **{column: seed[column].astype(float) for column in BETA_COLUMNS},
+            }
+        )
+        labels = pd.concat([labels, seed_labels], ignore_index=True, sort=False)
+        labels["_xyz_key"] = labels.loc[:, XYZ_COLUMNS].round(12).astype(str).agg("|".join, axis=1)
+        labels = labels.sort_values(
+            ["_xyz_key", "label_quality"], kind="stable"
+        ).drop_duplicates("_xyz_key", keep="first").drop(columns="_xyz_key")
     budget = config["dataset"]
     labels = labels.iloc[: int(budget["maximum_unique_rows"])].copy()
     existing_certified_row_count = int(len(labels))
@@ -1487,15 +1710,33 @@ def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, ou
     beta_matrix = labels.loc[:, BETA_COLUMNS].to_numpy(float)
     jacobian_matrix = environment.fk_and_jacobian(beta_matrix)[1]
     rows = []
+    split = None
+    if retry8:
+        split = choose_macroblock_split(
+            labels,
+            block_sizes_mm=tuple(map(int, budget["macroblock_sizes_mm"])),
+            split_seed=int(budget["split_seed"]),
+            split_fractions=tuple(map(float, budget["split_fractions"])),
+            minimum_train_blocks=int(budget["minimum_train_blocks"]),
+            minimum_validation_blocks=int(budget["minimum_validation_blocks"]),
+            minimum_test_blocks=int(budget["minimum_test_blocks"]),
+            minimum_rows_per_split=int(budget["minimum_rows_per_split"]),
+        )
+        split_by_point = split.frame.set_index("physical_point_id")[["split_role", "macroblock"]]
     for row_index, row in enumerate(labels.itertuples(index=False)):
         jacobian = jacobian_matrix[row_index]
-        split_role, macroblock = _split_role(row, config)
+        if split is None:
+            split_role, macroblock = _split_role(row, config)
+        else:
+            split_role = str(split_by_point.loc[str(row.physical_point_id), "split_role"])
+            macroblock = str(split_by_point.loc[str(row.physical_point_id), "macroblock"])
         rows.append({
             "record_id": f"v14_3_{int(row.task_node_id):07d}",
             "task_node_id": int(row.task_node_id),
             "physical_point_id": str(row.physical_point_id),
             "kind": "static", "split_role": split_role,
             "chart_id": str(row.chart_id), "is_primary": True, "sample_weight": 1.0,
+            "label_quality": str(getattr(row, "label_quality", "Gold")),
             **{name: float(getattr(row, name)) for name in XYZ_COLUMNS},
             **{name: float(getattr(row, name)) for name in BETA_COLUMNS},
             **{name: float(jacobian.reshape(-1)[index]) for index, name in enumerate(JACOBIAN_COLUMNS)},
@@ -1535,6 +1776,9 @@ def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, ou
         multiparent_target_count=int(len(results)),
         multiparent_accepted_count=int(results["accepted"].sum()) if len(results) else 0,
         alternative_branches_used_for_xyz_only_supervision=False,
+        gold_label_count=int(frame["label_quality"].eq("Gold").sum()),
+        silver_label_count=int(frame["label_quality"].eq("Silver").sum()),
+        adaptive_macroblock_mm=(int(split.block_size_mm) if split is not None else int(budget["macroblock_mm"])),
     )
 
 
@@ -2235,6 +2479,45 @@ def stage_summary(config: Mapping[str, Any], project_root: Path, output_root: Pa
         "selected_representation": gates.get("representation_decision", {}).get("selected_representation"),
         "formal_generation_authorized": bool(gates.get("formal_admission", {}).get("gate_pass", False)),
     }
+    if str(config.get("upstream_protocol_version")) == "retry8":
+        dataset = gates.get("fixed_budget_dataset", {})
+        students = gates.get("students", {})
+        student_metrics_path = output_root / STAGE_DIRS["students"] / "student_metrics.parquet"
+        metrics = (
+            pd.read_parquet(student_metrics_path)
+            if student_metrics_path.is_file()
+            else pd.DataFrame()
+        )
+        implementation_failure = bool(
+            metrics.empty
+            or (
+                "training_error" in metrics
+                and metrics["training_error"].notna().all()
+            )
+        )
+        progression = authorize_five_k_after_smoke(
+            smoke_pipeline_operationally_complete=bool(
+                gates.get("inventory", {}).get("gate_pass", False)
+                and gates.get("pilot_registry", {}).get("gate_pass", False)
+                and gates.get("root_charts", {}).get("gate_pass", False)
+                and gates.get("stitched_atlas", {}).get("data_legality_gate", False)
+                and dataset.get("gate_pass", False)
+                and not metrics.empty
+            ),
+            teacher_label_integrity_failure=not bool(dataset.get("gate_pass", False)),
+            unresolved_training_implementation_failure=implementation_failure,
+            smoke_student_quality_pass=bool(students.get("gate_pass", False)),
+        )
+        report.update(
+            {
+                **progression,
+                "smoke_student_quality_pass": bool(students.get("gate_pass", False)),
+                "teacher_label_integrity_failure": not bool(dataset.get("gate_pass", False)),
+                "unresolved_training_implementation_failure": implementation_failure,
+                "quality_miss_does_not_block_five_k": True,
+            }
+        )
+        _write_json(stage / "retry8_next_stage_authorization.json", progression)
     _write_json(stage / "summary_report.json", report)
     return _gate(stage / "gate.json", {"manifest_nonempty": bool(artifacts)}, **report)
 

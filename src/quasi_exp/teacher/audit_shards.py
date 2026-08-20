@@ -23,6 +23,13 @@ _EXECUTION_KEY = ("schedule_id", "direction", "repeat_index")
 _DIRECTIONS = ("forward", "reverse")
 
 
+def _registered_directions(directions: tuple[str, ...] | None) -> tuple[str, ...]:
+    values = _DIRECTIONS if directions is None else tuple(dict.fromkeys(map(str, directions)))
+    if not values or set(values) - set(_DIRECTIONS):
+        raise ValueError("audit shard directions must use forward/reverse")
+    return values
+
+
 def add_schedule_waypoint_estimates(
     schedules: pd.DataFrame,
     task_nodes: pd.DataFrame,
@@ -126,11 +133,13 @@ def build_audit_shard_registry(
     *,
     shard_count: int,
     repeats_per_direction: int,
+    directions: tuple[str, ...] | None = None,
     assignment_strategy: str = "hash",
     cost_model: AuditCostModel | None = None,
 ) -> pd.DataFrame:
     """Assign every registered schedule to exactly one stable subprocess shard."""
 
+    registered_directions = _registered_directions(directions)
     if shard_count < 1 or repeats_per_direction < 1:
         raise ValueError("shard and repeat counts must be positive")
     if "schedule_id" not in schedules:
@@ -149,7 +158,7 @@ def build_audit_shard_registry(
         registry["estimated_waypoint_count"] = registry["estimated_path_edge_count"]
         registry["estimated_cost"] = (
             registry["estimated_waypoint_count"].astype(float)
-            * 2.0
+            * float(len(registered_directions))
             * float(repeats_per_direction)
         )
         registry["shard_id"] = registry["schedule_id"].map(
@@ -157,7 +166,10 @@ def build_audit_shard_registry(
             % int(shard_count)
         )
     else:
-        model = cost_model or AuditCostModel(repeats_per_direction=int(repeats_per_direction))
+        model = cost_model or AuditCostModel(
+            direction_count=len(registered_directions),
+            repeats_per_direction=int(repeats_per_direction),
+        )
         estimates = [model.estimate(row) for row in registry.to_dict(orient="records")]
         registry["estimated_path_edge_count"] = [value[0] for value in estimates]
         registry["estimated_waypoint_count"] = [value[1] for value in estimates]
@@ -176,7 +188,8 @@ def build_audit_shard_registry(
         registry["shard_id"] = registry["schedule_id"].map(assignment).astype(int)
     registry["assignment_strategy"] = strategy
     registry["registered_shard_count"] = int(shard_count)
-    registry["expected_execution_count"] = 2 * int(repeats_per_direction)
+    registry["expected_execution_count"] = len(registered_directions) * int(repeats_per_direction)
+    registry["registered_directions"] = json.dumps(list(registered_directions), separators=(",", ":"))
     return registry.sort_values("schedule_id", kind="stable").reset_index(drop=True)
 
 
@@ -185,12 +198,14 @@ def _coverage_checks(
     executions: pd.DataFrame,
     *,
     repeats_per_direction: int,
+    directions: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    registered_directions = _registered_directions(directions)
     schedule_ids = tuple(registry.get("schedule_id", pd.Series(dtype=str)).astype(str))
     expected = {
         (schedule_id, direction, repeat_index)
         for schedule_id in schedule_ids
-        for direction in _DIRECTIONS
+        for direction in registered_directions
         for repeat_index in range(int(repeats_per_direction))
     }
     missing_columns = set(_EXECUTION_KEY) - set(executions)
@@ -233,10 +248,14 @@ def build_shard_completion_report(
     phase_id: str,
     shard_id: int,
     repeats_per_direction: int,
+    directions: tuple[str, ...] | None = None,
     input_sha256: str = "",
 ) -> dict[str, Any]:
     coverage = _coverage_checks(
-        registry, executions, repeats_per_direction=repeats_per_direction
+        registry,
+        executions,
+        repeats_per_direction=repeats_per_direction,
+        directions=directions,
     )
     return {
         "schema_version": 1,
@@ -266,10 +285,14 @@ def validate_shard_completion(
     phase_id: str,
     shard_id: int,
     repeats_per_direction: int,
+    directions: tuple[str, ...] | None = None,
     input_sha256: str = "",
 ) -> dict[str, Any]:
     coverage = _coverage_checks(
-        registry, executions, repeats_per_direction=repeats_per_direction
+        registry,
+        executions,
+        repeats_per_direction=repeats_per_direction,
+        directions=directions,
     )
     registry_sha = _frame_digest(registry, sort_columns=("schedule_id",))
     execution_sha = _frame_digest(executions, sort_columns=_EXECUTION_KEY)
@@ -301,6 +324,7 @@ def merge_validated_audit_shards(
     shard_executions: Mapping[int, pd.DataFrame],
     *,
     repeats_per_direction: int,
+    directions: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
     if registry.empty:
         # Empty scientific schedules are a valid fail-closed outcome (for
@@ -330,7 +354,10 @@ def merge_validated_audit_shards(
         shard_registry = registry[registry["shard_id"].eq(shard_id)]
         frame = shard_executions[shard_id]
         coverage = _coverage_checks(
-            shard_registry, frame, repeats_per_direction=repeats_per_direction
+            shard_registry,
+            frame,
+            repeats_per_direction=repeats_per_direction,
+            directions=directions,
         )
         if not coverage["gate_pass"]:
             raise ValueError(
@@ -343,7 +370,10 @@ def merge_validated_audit_shards(
     else:
         merged = pd.DataFrame(columns=list(_EXECUTION_KEY))
     coverage = _coverage_checks(
-        registry, merged, repeats_per_direction=repeats_per_direction
+        registry,
+        merged,
+        repeats_per_direction=repeats_per_direction,
+        directions=directions,
     )
     if not coverage["gate_pass"]:
         raise ValueError(f"aggregate does not have exact execution coverage: {coverage}")

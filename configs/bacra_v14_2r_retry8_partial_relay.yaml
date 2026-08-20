@@ -2,7 +2,7 @@ schema_version: 1
 protocol_version: retry8
 protocol_revision: p0_partial_relay_funnel_v1
 experiment_id: bacra_v14_2r_retry8_partial_relay
-output_root: runs/bacra_v14_2r_retry8_partial_relay_retry2
+output_root: runs/bacra_v14_2r_retry8_partial_relay_retry3
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
@@ -46,15 +46,15 @@ relay:
 
 growth_funnel:
   registered_methods:
-    - {method_id: D0_raw_retry7, diagnostic_only: true, selectable: false, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
-    - {method_id: P0_frozen_partial_singleton, diagnostic_only: false, selectable: true, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
-    - {method_id: G32_origin, diagnostic_only: false, selectable: true, relay_count: 0, maximum_growth_waves: 32, beam_width: 1}
-    - {method_id: R2W16, diagnostic_only: false, selectable: true, relay_count: 2, maximum_growth_waves: 16, beam_width: 1}
-    - {method_id: R2W32, diagnostic_only: false, selectable: true, relay_count: 2, maximum_growth_waves: 32, beam_width: 1}
-    - {method_id: R4W16, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 16, beam_width: 1}
-    - {method_id: R4W32, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 1}
-    - {method_id: R8W32, diagnostic_only: false, selectable: true, relay_count: 8, maximum_growth_waves: 32, beam_width: 1}
-    - {method_id: K4_best, diagnostic_only: false, selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 4}
+    - {method_id: D0_raw_retry7, is_diagnostic_only: true, is_selectable: false, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: P0_frozen_partial_singleton, is_diagnostic_only: false, is_selectable: true, relay_count: 0, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: G32_origin, is_diagnostic_only: false, is_selectable: true, relay_count: 0, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R2W16, is_diagnostic_only: false, is_selectable: true, relay_count: 2, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: R2W32, is_diagnostic_only: false, is_selectable: true, relay_count: 2, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R4W16, is_diagnostic_only: false, is_selectable: true, relay_count: 4, maximum_growth_waves: 16, beam_width: 1}
+    - {method_id: R4W32, is_diagnostic_only: false, is_selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: R8W32, is_diagnostic_only: false, is_selectable: true, relay_count: 8, maximum_growth_waves: 32, beam_width: 1}
+    - {method_id: K4_best, is_diagnostic_only: false, is_selectable: true, relay_count: 4, maximum_growth_waves: 32, beam_width: 4}
   beam4_cap_hit_ratio_trigger: 0.05
 
 screening:

@@ -4,10 +4,12 @@ import importlib.util
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts/analysis/run_bacra_v14_2r_retry8.py"
+CONFIG = ROOT / "configs/bacra_v14_2r_retry8_partial_relay.yaml"
 
 
 def _module():
@@ -122,6 +124,17 @@ def test_screening_ranking_never_selects_d0_and_keeps_p0_fallback() -> None:
     assert ranked[0] == "R4W32"
     assert "D0_raw_retry7" not in ranked
     assert "P0_frozen_partial_singleton" in ranked
+
+
+def test_yaml_method_schema_matches_screening_contract() -> None:
+    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    methods = config["growth_funnel"]["registered_methods"]
+
+    assert methods
+    assert all("is_selectable" in method for method in methods)
+    assert all("is_diagnostic_only" in method for method in methods)
+    assert all("selectable" not in method for method in methods)
+    assert all("diagnostic_only" not in method for method in methods)
 
 
 def test_r8_growth_is_triggered_by_frontier_even_without_two_percent_gain() -> None:

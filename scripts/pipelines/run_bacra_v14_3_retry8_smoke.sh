@@ -6,7 +6,7 @@ PROJECT_ROOT=${SOURCE_ROOT%%/.worktrees/*}
 PYTHON_BIN=/mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
 RUNNER="$SOURCE_ROOT/scripts/analysis/run_bacra_v14_3_repaired_5k_student.py"
 CONFIG="$SOURCE_ROOT/configs/bacra_v14_3_retry8_smoke.yaml"
-OUTPUT_ROOT="$PROJECT_ROOT/runs/bacra_v14_3_retry8_balanced_smoke_retry3"
+OUTPUT_ROOT="$PROJECT_ROOT/runs/bacra_v14_3_retry8_balanced_smoke_retry4"
 
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export TF_NUM_INTRAOP_THREADS=1 TF_NUM_INTEROP_THREADS=1

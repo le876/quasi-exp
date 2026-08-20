@@ -2,7 +2,7 @@ schema_version: 1
 protocol_version: retry8
 protocol_revision: p0_partial_relay_funnel_v1
 experiment_id: bacra_v14_2r_retry8_partial_relay
-output_root: runs/bacra_v14_2r_retry8_partial_relay_retry3
+output_root: runs/bacra_v14_2r_retry8_partial_relay_retry4
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:

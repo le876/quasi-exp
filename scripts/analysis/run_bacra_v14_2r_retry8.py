@@ -1300,9 +1300,9 @@ def _seed_target_registry(
     return pd.DataFrame.from_records(records)
 
 
-def _source_candidate(row: Any) -> AtlasCandidate:
+def _source_candidate(task_node_id: int, row: Any) -> AtlasCandidate:
     return AtlasCandidate(
-        node_id=int(row.task_node_id),
+        node_id=int(task_node_id),
         candidate_id=str(row.candidate_id),
         beta_rad=np.asarray([getattr(row, column) for column in BETA_COLUMNS]),
         residual_mm=0.0,
@@ -1342,7 +1342,7 @@ def _execute_seed_shard(
         outcomes = []
         for source_node_id in (int(target.source_node_1), int(target.source_node_2)):
             source_row = indexed.loc[source_node_id]
-            source = _source_candidate(source_row)
+            source = _source_candidate(source_node_id, source_row)
             forward = continuation(source, target_node)
             if not (
                 forward.success

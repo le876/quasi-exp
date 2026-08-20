@@ -161,3 +161,21 @@ def test_retry8_json_boundary_serializes_path_evidence(tmp_path: Path) -> None:
     assert module._read_json(target)["artifact_path"] == str(
         tmp_path / "artifact.parquet"
     )
+
+
+def test_seed_source_candidate_uses_explicit_task_node_id_after_indexing() -> None:
+    module = _module()
+    labels = pd.DataFrame.from_records(
+        [
+            {
+                "task_node_id": 42,
+                "candidate_id": "canonical_42",
+                **{column: 0.01 * index for index, column in enumerate(module.BETA_COLUMNS)},
+            }
+        ]
+    ).set_index("task_node_id")
+
+    candidate = module._source_candidate(42, labels.loc[42])
+
+    assert candidate.node_id == 42
+    assert candidate.candidate_id == "canonical_42"

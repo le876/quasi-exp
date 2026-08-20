@@ -191,6 +191,8 @@ def _strict(value: Any) -> Any:
         return _strict(value.tolist())
     if isinstance(value, np.generic):
         return _strict(value.item())
+    if isinstance(value, Path):
+        return str(value)
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value

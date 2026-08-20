@@ -2,14 +2,14 @@ schema_version: 1
 upstream_protocol_version: retry8
 execution_mode: five_k
 experiment_id: bacra_v14_3_retry8_repaired_5k
-output_root: runs/bacra_v14_3_retry8_repaired_5k
+output_root: runs/bacra_v14_3_retry8_repaired_5k_retry2
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
   reviewed_plan: docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
-  v14_2r_root: runs/bacra_v14_2r_retry8_partial_relay
+  v14_2r_root: runs/bacra_v14_2r_retry8_partial_relay_retry2
   v14_2r_config: configs/bacra_v14_2r_retry8_partial_relay.yaml
-  smoke_root: runs/bacra_v14_3_retry8_balanced_smoke
+  smoke_root: runs/bacra_v14_3_retry8_balanced_smoke_retry2
   retry7_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot

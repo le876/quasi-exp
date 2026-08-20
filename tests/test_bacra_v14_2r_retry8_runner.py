@@ -137,3 +137,14 @@ def test_r8_growth_is_triggered_by_frontier_even_without_two_percent_gain() -> N
         r4w32_gain_over_origin=0.006,
         expandable_frontier_ratio=0.04,
     )
+
+
+def test_retry8_json_boundary_serializes_path_evidence(tmp_path: Path) -> None:
+    module = _module()
+    target = tmp_path / "closure.json"
+
+    module._write_json(target, {"artifact_path": tmp_path / "artifact.parquet"})
+
+    assert module._read_json(target)["artifact_path"] == str(
+        tmp_path / "artifact.parquet"
+    )

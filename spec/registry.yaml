@@ -1,0 +1,69 @@
+schema_version: 3
+
+experiments:
+  canonical_layer_field_u3_pilot_v1:
+    role: fk_only_canonical_configuration_pilot
+    scientific_source_fixed_point: e94ddb2e45116e4a3786b1383dc58dee94f9bbe9
+    protocol_sources:
+      - docs/CanonicalLayerFieldU3Pilot实验结果.md
+      - docs/GPT5Pro四次反馈_构型控制策略与EEPose逆解一致性问题.md
+    config: configs/robot_rods_only_priority_grid_third_joint_first_v1.yaml
+    runner: scripts/generate_canonical_layer_field_dataset.py
+    launcher: null
+    tests:
+      self_contained:
+        - tests/test_canonical_layer_field_dataset.py
+        - tests/test_local_continuity.py
+        - tests/test_branch_aware_continuity.py
+      artifact_bound: []
+    upstream_experiments: []
+
+  bacra_v14_2r_retry8_partial_relay:
+    role: partial_relay_scientific_closure
+    scientific_source_fixed_point: 73b28039ca0013693c0cc321a4ec006e63fefc26
+    protocol_sources:
+      - docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
+      - docs/23-BACRA-V14.2R科学Gate与closure修复协议.md
+      - docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+    config: configs/bacra_v14_2r_retry8_partial_relay.yaml
+    runner: scripts/analysis/run_bacra_v14_2r_retry8.py
+    launcher: scripts/pipelines/run_bacra_v14_2r_retry8_partial_relay.sh
+    tests:
+      self_contained:
+        - tests/test_bacra_v14_2r_retry8_runner.py
+        - tests/test_partial_relay_v14_2r_retry8.py
+      artifact_bound: []
+    upstream_experiments: []
+
+  bacra_v14_3_retry8_balanced_smoke:
+    role: balanced_smoke_progression_check
+    scientific_source_fixed_point: 73b28039ca0013693c0cc321a4ec006e63fefc26
+    protocol_sources:
+      - docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+    config: configs/bacra_v14_3_retry8_smoke.yaml
+    runner: scripts/analysis/run_bacra_v14_3_repaired_5k_student.py
+    launcher: scripts/pipelines/run_bacra_v14_3_retry8_smoke.sh
+    tests:
+      self_contained:
+        - tests/test_bacra_v14_3_runner.py
+        - tests/test_bacra_v14_3_retry8_progression.py
+      artifact_bound: []
+    upstream_experiments:
+      - bacra_v14_2r_retry8_partial_relay
+
+  bacra_v14_3_retry8_repaired_5k:
+    role: repaired_5k_student_experiment
+    scientific_source_fixed_point: 73b28039ca0013693c0cc321a4ec006e63fefc26
+    protocol_sources:
+      - docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+    config: configs/bacra_v14_3_retry8_5k.yaml
+    runner: scripts/analysis/run_bacra_v14_3_repaired_5k_student.py
+    launcher: scripts/pipelines/run_bacra_v14_3_retry8_5k.sh
+    tests:
+      self_contained:
+        - tests/test_bacra_v14_3_runner.py
+        - tests/test_bacra_v14_3_retry8_progression.py
+      artifact_bound: []
+    upstream_experiments:
+      - bacra_v14_2r_retry8_partial_relay
+      - bacra_v14_3_retry8_balanced_smoke

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Quasi-exp Scientific Contract Review"
+  short_description: "审查 quasi-exp 科学协议到 sealed artifact 的完整合同链"
+  default_prompt: "使用 $quasi-exp-scientific-contract-review 只读审查所选实验的科学合同链和结论边界。"
+
+policy:
+  allow_implicit_invocation: true

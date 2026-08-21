@@ -1,0 +1,25 @@
+schema_version: 1
+public_repository: https://github.com/le876/quasi-exp
+current_public_release_id: bacra_v14_2r_scientific_closure_2026_08_11
+verified_at: "2026-08-18"
+
+mappings:
+  - id: bacra_v14_2r_scientific_closure_2026_08_11
+    status: verified
+    scientific_source_sha: eb9ed0adb9a29ad3fc2d8cb8ac2899f03c243628
+    public_release_sha: 76cd445e279e4d57f36759055915d135b8d31b2f
+    evidence:
+      type: github_commit_message
+      url: https://github.com/le876/quasi-exp/commit/76cd445e279e4d57f36759055915d135b8d31b2f
+
+unpublished_scientific_fixed_points:
+  - scientific_source_sha: e94ddb2e45116e4a3786b1383dc58dee94f9bbe9
+    status: not_mapped_to_public_release
+    experiments:
+      - canonical_layer_field_u3_pilot_v1
+  - scientific_source_sha: 73b28039ca0013693c0cc321a4ec006e63fefc26
+    status: not_mapped_to_public_release
+    experiments:
+      - bacra_v14_2r_retry8_partial_relay
+      - bacra_v14_3_retry8_balanced_smoke
+      - bacra_v14_3_retry8_repaired_5k

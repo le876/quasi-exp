@@ -1,0 +1,11 @@
+schema_version: 2
+unit: unicode_characters
+files:
+  AGENTS.md: 3800
+  docs/AGENTS.md: 3200
+  README.md: 2000
+  ARCHITECTURE.md: 5200
+  docs/README.md: 3200
+  docs/current-state.md: 2400
+  docs/scientific-objective.md: 2600
+  docs/testing.md: 2800

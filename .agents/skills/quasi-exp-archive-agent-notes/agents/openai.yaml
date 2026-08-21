@@ -1,0 +1,7 @@
+interface:
+  display_name: "Quasi-exp Archive Agent Notes"
+  short_description: "审查 supersession 并封存低未来价值的 quasi-exp Agent Notes"
+  default_prompt: "使用 $quasi-exp-archive-agent-notes 审查重复决策并安全封存相应 Agent Notes。"
+
+policy:
+  allow_implicit_invocation: true

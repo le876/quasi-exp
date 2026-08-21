@@ -22,34 +22,43 @@ bash scripts/pipelines/start_inverse_5deg_autogate_longrun.sh
 bash scripts/pipelines/longrun_tmux.sh status
 ```
 
-3. 查看日志（最近 120 行）
+3. 阻塞等待当前任务结束，并返回任务记录的退出码
+```bash
+bash scripts/pipelines/longrun_tmux.sh wait
+```
+
+`wait` 只读取 PID、状态和退出码，不会启动、重启、停止或修改任务。worker
+存活时每 300 秒检查一次；如果 PID 已消失但状态不是已知终态，`wait` 会以
+非零码失败退出，不会无限等待。
+
+4. 查看日志（最近 120 行）
 ```bash
 bash scripts/pipelines/longrun_tmux.sh logs 120
 ```
 
-4. 进入 tmux 观察实时输出
+5. 进入 tmux 观察实时输出
 ```bash
 bash scripts/pipelines/longrun_tmux.sh attach
 ```
 
-5. 停止当前任务
+6. 停止当前任务
 ```bash
 bash scripts/pipelines/longrun_tmux.sh stop
 ```
 
-6. 启动“自动汇报” watcher（默认 300 秒，按进度自适应）
+7. 启动“自动汇报” watcher（默认 300 秒，按进度自适应）
 ```bash
 nohup bash scripts/pipelines/watch_inverse_tune_progress.sh 300 runs/maintenance/inverse_tune_watch.log \
   > runs/maintenance/inverse_tune_watch.nohup.log 2>&1 &
 ```
 
-7. 查看 watcher 状态与输出
+8. 查看 watcher 状态与输出
 ```bash
 cat runs/maintenance/inverse_tune_watch.pid
 tail -n 50 runs/maintenance/inverse_tune_watch.log
 ```
 
-8. watcher 自适应规则（默认）
+9. watcher 自适应规则（默认）
 - 进度停滞或很慢：缩短汇报间隔（更快告警）
 - 进度稳定推进：按基础间隔汇报
 - 接近完成（>=90%）：加密到更短间隔
@@ -59,7 +68,7 @@ tail -n 50 runs/maintenance/inverse_tune_watch.log
 - `start` 会检查 `runs/maintenance/longrun/current.pid`。
 - 如果已有活跃 PID，脚本直接拒绝再次启动，避免并发污染同一输出目录。
 - 任务结束后自动写入：
-  - `current.status`（`success`/`failed`）
+  - `current.status`（运行中为 `running`；终态为 `success`/`failed`/`stopped_by_user`）
   - `current.rc`
   - `current.started_at` / `current.finished_at`
   - `current.log`（日志路径）
@@ -69,11 +78,17 @@ tail -n 50 runs/maintenance/inverse_tune_watch.log
 bash scripts/pipelines/longrun_tmux.sh start tune_inverse_2k runs/maintenance/tune_inverse_2k.log -- \
   python3 scripts/pipelines/tune_inverse_5deg_2k_gate.py \
     --python-bin /mnt/ML_projects/conda_envs/dante_env/bin/python \
-    --max-attempts 8 --num-samples 2000
+    --max-attempts 8 --num-samples 2000 \
+  && bash scripts/pipelines/longrun_tmux.sh wait
 ```
 
+Codex 的长时间 monitor 必须持有上面这条 `start ... && wait` 前台命令链，
+以项目 launcher 的状态与退出码为唯一事实来源；不要创建
+`run_<task>_checkpoint.sh` 一类任务专用轮询脚本。
+
 ## Codex 协作建议
-- 长任务运行期间，Codex 只做 `status/logs` 轮询，不在同一前台命令里跑长任务。
+- 新的 `long_wait_monitor` 在一个前台命令链中持有 `start ... && wait`；
+  Codex 主线程不自行高频轮询。人工排障时仍可使用 `status` 和 `logs`。
 - 如果出现 `turn_aborted`，优先检查：
   1) `bash scripts/pipelines/longrun_tmux.sh status`
   2) `bash scripts/pipelines/longrun_tmux.sh logs 120`

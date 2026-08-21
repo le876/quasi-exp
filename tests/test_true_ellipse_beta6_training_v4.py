@@ -209,3 +209,43 @@ def test_strict_limit_identifies_support_boundary() -> None:
     )
 
     assert mod.classify_strict_limit(table, strict_rmax_mm=75.0) == "data_support"
+
+
+def test_prediction_bound_metrics_use_the_explicit_joint_domain() -> None:
+    mod = _load_module()
+    from true_ellipse_radial_bundle_engine import registered_joint_domain
+
+    beta = np.zeros((3, 6), dtype=float)
+    beta[:, 2] = np.deg2rad(7.0)
+    cfg = mod.load_config(str(mod.DEFAULT_CONFIG))
+    robot = mod.load_robot_inputs(cfg)
+    theta_sign = float(cfg["kinematics"]["theta_sign"])
+    target = mod.fk_dh_batch(
+        mod.theta_from_beta_batch(beta, theta_sign=theta_sign),
+        lengths_m=robot.lengths_m,
+        p_end_local_m=robot.p_end_local_m,
+    )
+
+    current, _xyz, _theta = mod.evaluate_beta_prediction(
+        beta_pred=beta,
+        target_xyz=target,
+        lengths_m=robot.lengths_m,
+        p_end_local_m=robot.p_end_local_m,
+        theta_sign=theta_sign,
+        joint_domain=registered_joint_domain("current_v6"),
+    )
+    standard, _xyz, _theta = mod.evaluate_beta_prediction(
+        beta_pred=beta,
+        target_xyz=target,
+        lengths_m=robot.lengths_m,
+        p_end_local_m=robot.p_end_local_m,
+        theta_sign=theta_sign,
+        joint_domain=registered_joint_domain("standard_beta34_10deg_v1"),
+    )
+
+    assert current["joint_domain_id"] == "current_v6"
+    assert current["beta_bound_violation_count"] == 3
+    assert np.isclose(current["prediction_min_joint_margin_deg"], -2.0)
+    assert standard["joint_domain_id"] == "standard_beta34_10deg_v1"
+    assert standard["beta_bound_violation_count"] == 0
+    assert np.isclose(standard["prediction_min_joint_margin_deg"], 3.0)

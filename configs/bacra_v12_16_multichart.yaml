@@ -1,0 +1,106 @@
+extends: bacra_v12_15_single_student.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.16-chart-b-region-spatial-seal
+schema_version: 1
+claim_scope: simulation_chart_b_region_readiness
+deployment_claim_gate_pass: false
+output_root: runs/bacra_v12_16_chart_b_region
+
+# V12.16A deliberately stops before multi-chart Student training.  It first
+# establishes that chart B has a connected, locally consistent region rather
+# than only one 720-phase centerline.
+v12_14:
+  chart_scope: chart_B
+  canonical_source_priority:
+    chart_B: 0
+  expected_canonical_seed_rows: 720
+  source_d3: runs/bacra_v12_13_exploratory_expansion/05_chart_b_experts_retry1/stress02_chart_dataset.parquet
+  source_final_teacher: runs/bacra_v12_13_exploratory_expansion/05_chart_b_experts_retry1/stress02_chart_dataset.parquet
+  source_capability_pool: runs/branch_aware_canonical_region_atlas_v12_1_capability_bridge_attempt7_direct_w12/01_capability_bridge/01_global_4m/global_capability_light.parquet
+  expected_source_sha256:
+    source_d3: dd0dd92ba077a4943d46ad6189ffe650775e5edd3d1c90454e40ce7999ac2c16
+    source_final_teacher: dd0dd92ba077a4943d46ad6189ffe650775e5edd3d1c90454e40ce7999ac2c16
+    source_capability_pool: f813d01c1927eeef2e7f9f5afa7ebcb275a16a4618d5a479eaabdda01db03f05
+
+  seeds:
+    seed_fps: 20260800
+    sparse_target: 20260801
+    consistency: 20260802
+    dense_target: 20260803
+    development_random: 20260804
+    final_random: 20260805
+    trajectory: 20260806
+    enrichment: 20260807
+    training: [20260738, 20260739, 20260740]
+
+  region:
+    seed_count: 360
+    sparse_target_count: 3000
+    sparse_prefix_count: 1000
+    required_sparse_acceptance_rate: 0.75
+    required_component_nodes: 1000
+
+  consistency:
+    triangle_sample_count: 100
+    two_path_sample_count: 100
+
+  dense:
+    prefix_accepted_count: 5000
+    formal_accepted_count: 20000
+    attempt_multiplier: 3
+
+  dataset:
+    R0_rows: 720
+    R1_equal_rows: 720
+    R1_full_rows: 20000
+    R2_old_rows: 720
+    R2_region_rows: 20000
+
+v12_16:
+  source_v12_15_root: runs/bacra_v12_15_single_student_formal_margin_tail_retry1_20260730
+  source_chart_b_gate: runs/bacra_v12_13_exploratory_expansion/05_chart_b_experts_retry1/gate.json
+  expected_source_sha256:
+    v12_15_gate: bcb6715136c601474dfbefb4bd0ec733abe07cec586e514d131543a08f13d668
+    v12_15_model_lock: 633bf07e51eeaa754ba8c46bcec79464417c9ec74858ea39d430c8dc14146da2
+    v12_15_training_dataset: fc13cb17e45739602b5fb14a447fa85b95d149baea7927a41264d7fd1041a9c0
+    chart_b_gate: 9edbe5d2d3b7636d9b417ac8880202943cc571fafd14e39e9eb8ae28bd9bb2f6
+    chart_b_centerline: dd0dd92ba077a4943d46ad6189ffe650775e5edd3d1c90454e40ce7999ac2c16
+
+  seeds:
+    spatial_partition: 20260808
+
+  spatial_holdout:
+    macro_voxel_mm: 15.0
+    validation_fraction: 0.15
+    sealed_holdout_fraction: 0.15
+    train_buffer_mm: 5.0
+
+  parallel:
+    cpu_workers: 12
+
+smoke:
+  output_root: runs/bacra_v12_16_chart_b_region_smoke
+  v12_14:
+    region:
+      seed_count: 24
+      sparse_target_count: 96
+      sparse_prefix_count: 48
+      required_sparse_acceptance_rate: 0.25
+      required_component_nodes: 8
+      successful_parent_minimum: 2
+    consistency:
+      triangle_sample_count: 8
+      two_path_sample_count: 8
+    dense:
+      prefix_accepted_count: 20
+      formal_accepted_count: 40
+      attempt_multiplier: 3
+    dataset:
+      R0_rows: 720
+      R1_equal_rows: 24
+      R1_full_rows: 40
+      R2_old_rows: 24
+      R2_region_rows: 40
+  v12_16:
+    parallel:
+      cpu_workers: 4

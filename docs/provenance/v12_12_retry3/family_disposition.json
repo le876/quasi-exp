@@ -1,0 +1,75 @@
+{
+  "amendment_type": "posthoc_lineage_amendment",
+  "artifact_id": "branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3",
+  "development_boundary_families": [
+    {
+      "allowed_future_uses": [
+        "development_boundary_evidence",
+        "training_design",
+        "diagnostic_input"
+      ],
+      "family_fingerprint": "6b6bd823e14509d6e1bdaa1f2a7de753a68d240bd25a2cffba7b11500efe44fc",
+      "family_id": "independent_stress_00",
+      "final_sealed_test_eligible": false,
+      "reason": "结果已经被查看并可用于 Teacher/Student 诊断、数据扩展或模型决策"
+    },
+    {
+      "allowed_future_uses": [
+        "development_boundary_evidence",
+        "training_design",
+        "diagnostic_input"
+      ],
+      "family_fingerprint": "0c2ab37ece57c939cf5acd52529ff354a5e11e8fcb9b50acbe752deb7c82d6ff",
+      "family_id": "independent_stress_01",
+      "final_sealed_test_eligible": false,
+      "reason": "结果已经被查看并可用于 Teacher/Student 诊断、数据扩展或模型决策"
+    },
+    {
+      "allowed_future_uses": [
+        "development_boundary_evidence",
+        "training_design",
+        "diagnostic_input"
+      ],
+      "family_fingerprint": "6c79c4834ba6ad7a2c2c623075367587ea78188156b30e3a9c8d47ef606b56b3",
+      "family_id": "independent_stress_02",
+      "final_sealed_test_eligible": false,
+      "reason": "结果已经被查看并可用于 Teacher/Student 诊断、数据扩展或模型决策"
+    },
+    {
+      "allowed_future_uses": [
+        "development_boundary_evidence",
+        "training_design",
+        "diagnostic_input"
+      ],
+      "family_fingerprint": "1bdd2157f530eecac6ae7ff934ece6111aee8ca93e6fc3572f7343d4064f5459",
+      "family_id": "independent_stress_03",
+      "final_sealed_test_eligible": false,
+      "reason": "结果已经被查看并可用于 Teacher/Student 诊断、数据扩展或模型决策"
+    }
+  ],
+  "historical_formal_core_validation": [
+    {
+      "family_fingerprint": "7e205e8d68716aad0ac7a2d13ef0c38df98bb3ee3ff791c56221b43624763040",
+      "family_id": "independent_core_00"
+    },
+    {
+      "family_fingerprint": "143f364723936b12521e6a5e9d11110e16893ca2b12ee67b962dba322405a6f1",
+      "family_id": "independent_core_01"
+    },
+    {
+      "family_fingerprint": "a17697e74849ef3d1408eb13807cb5b34423fab9f7cd40b7a0e6ab812d5fb4ff",
+      "family_id": "independent_core_02"
+    },
+    {
+      "family_fingerprint": "f12ff683aed2874a90c6b74d691acecc197d537477a42c9c562d48fa6b722df5",
+      "family_id": "independent_core_03"
+    }
+  ],
+  "limitations": {
+    "core_formal_claim_rewritten": false,
+    "existing_numeric_results_or_gates_rewritten": false,
+    "stress_evidence_role_from_now_on": "development_boundary_only"
+  },
+  "manifest_type": "quasi_exp.family_disposition",
+  "schema_version": 1
+}

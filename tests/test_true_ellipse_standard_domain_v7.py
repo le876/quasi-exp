@@ -1,0 +1,973 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_module():
+    analysis_dir = REPO_ROOT / "scripts" / "analysis"
+    sys.path.insert(0, str(analysis_dir))
+    path = analysis_dir / "run_true_ellipse_standard_domain_v7.py"
+    spec = importlib.util.spec_from_file_location("run_true_ellipse_standard_domain_v7", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_cli_defaults_register_standard_domain_120mm_protocol() -> None:
+    mod = _load_module()
+    args = mod.parse_args([])
+    report = mod.formal_protocol_report(args)
+
+    assert args.family_id == "c0273_a100_py210_pz330_s0243"
+    assert args.joint_domain_id == "standard_beta34_10deg_v1"
+    assert args.target_radius_mm == 120.0
+    assert args.max_candidates_per_angle == 8
+    assert args.rescue_candidates_per_angle == 24
+    assert args.rescue_kappa_threshold == 100.0
+    assert args.lambda_margin == 0.01
+    assert args.stop_after_first_failed_job is True
+    assert args.share_rescue_cache_across_cuts is True
+    assert mod.parse_float_csv(args.radius_checkpoints_mm) == list(
+        mod.engine.v7_standard_domain_protocol().formal_checkpoints_mm
+    )
+    assert report["formal_protocol_gate_pass"] is True
+    assert report["checks"]["declared_runtime"] is True
+    assert report["protocol"]["runtime"]["python_series"] == "3.11"
+    assert mod.declared_runtime_gate(report["protocol"]["runtime"]) is True
+    assert report["joint_domain_fingerprint"] == mod.engine.registered_joint_domain(
+        "standard_beta34_10deg_v1"
+    ).fingerprint
+
+
+def test_formal_protocol_rejects_domain_candidate_and_radius_ladder_changes() -> None:
+    mod = _load_module()
+
+    baseline = mod.formal_protocol_report(mod.parse_args([]))
+    wrong_domain = mod.formal_protocol_report(mod.parse_args(["--joint-domain-id", "current_v6"]))
+    wrong_candidates = mod.formal_protocol_report(
+        mod.parse_args(["--rescue-candidates-per-angle", "8"])
+    )
+    wrong_ladder = mod.formal_protocol_report(
+        mod.parse_args(["--radius-checkpoints-mm", "75,80,100,120"])
+    )
+
+    assert wrong_domain["formal_protocol_gate_pass"] is False
+    assert wrong_candidates["formal_protocol_gate_pass"] is False
+    assert wrong_ladder["formal_protocol_gate_pass"] is False
+    assert wrong_domain["protocol_fingerprint"] != baseline["protocol_fingerprint"]
+    assert wrong_candidates["protocol_fingerprint"] != baseline["protocol_fingerprint"]
+    assert wrong_ladder["protocol_fingerprint"] != baseline["protocol_fingerprint"]
+
+
+def test_rescue_admission_is_exploratory_and_does_not_replace_strict_gate() -> None:
+    mod = _load_module()
+    admitted = mod.rescue_admission_gate(
+        {
+            "finite": True,
+            "in_domain": True,
+            "success_ratio_le2mm": 0.80,
+            "residual_max_mm": 20.0,
+        }
+    )
+    rejected = mod.rescue_admission_gate(
+        {
+            "finite": True,
+            "in_domain": True,
+            "success_ratio_le2mm": 0.79,
+            "residual_max_mm": 20.0,
+        }
+    )
+
+    assert admitted is True
+    assert rejected is False
+    frontier = mod.engine.compute_radius_frontiers(
+        pd.DataFrame(
+            {
+                "radius_mm": [100.0, 102.5, 105.0, 107.5],
+                "strict_gate_pass": [True, True, False, False],
+                "rescue_admission_pass": [True, True, True, True],
+            }
+        ),
+        anchor_mm=100.0,
+    )
+    assert frontier["strict_geometry_rmax_mm"] == 102.5
+    assert frontier["exploratory_rescue_rmax_mm"] == 107.5
+
+
+def test_materialized_dataset_radii_include_checkpoints_and_1p25mm_training_anchors() -> None:
+    mod = _load_module()
+
+    assert mod.materialized_dataset_radii(105.0) == (
+        75.0,
+        80.0,
+        82.5,
+        85.0,
+        87.5,
+        90.0,
+        92.5,
+        95.0,
+        97.5,
+        100.0,
+        101.25,
+        102.5,
+        103.75,
+        105.0,
+    )
+
+
+def test_half_phase_targets_are_exactly_shifted_and_keep_registered_family() -> None:
+    mod = _load_module()
+    family = mod.v6_utils.FamilySpec(
+        family_id="fixed-family",
+        center_x_m=1.1,
+        center_y_m=0.2,
+        center_z_m=-0.3,
+        phase_y_rad=0.4,
+        phase_z_rad=1.2,
+    )
+
+    shifted = mod.generate_half_phase_targets(family, radius_mm=105.0, n_points=360)
+
+    assert shifted["family_id"].eq("fixed-family").all()
+    assert shifted["radius_mm"].eq(105.0).all()
+    assert np.rad2deg(shifted["angle_rad"].iloc[0]) == pytest.approx(0.5)
+    assert np.rad2deg(shifted["angle_rad"].iloc[-1]) == pytest.approx(359.5)
+    expected_x0 = 1.1 + 0.105 * np.sin(np.deg2rad(0.5))
+    assert shifted["x_target_m"].iloc[0] == pytest.approx(expected_x0)
+
+
+def test_dynamic_split_holds_out_complete_radii_and_excludes_all_centerlines_from_training() -> None:
+    mod = _load_module()
+    rows = []
+    for radius in (75.0, 97.5, 101.25, 105.0):
+        for angle in range(2):
+            for centerline in (False, True):
+                rows.append(
+                    {
+                        "sample_id": f"{radius}:{angle}:{centerline}",
+                        "family_id": "fixed-family",
+                        "trajectory_id": f"fixed-family@{radius:g}",
+                        "radius_mm": radius,
+                        "angle_idx": angle,
+                        "is_centerline": centerline,
+                    }
+                )
+    dataset = pd.DataFrame(rows)
+
+    assigned, report = mod.assign_dynamic_radius_splits(
+        dataset,
+        validation_radius_mm=97.5,
+        test_radius_mm=105.0,
+    )
+
+    assert report["split_gate_pass"] is True
+    assert set(assigned.loc[assigned["used_for_training"], "radius_mm"]) == {75.0, 101.25}
+    assert not assigned.loc[assigned["used_for_training"], "is_centerline"].any()
+    assert set(assigned.loc[assigned["split"].eq("validation"), "radius_mm"]) == {97.5}
+    assert set(assigned.loc[assigned["split"].eq("test"), "radius_mm"]) == {105.0}
+
+
+def test_formal_label_gate_reuses_registered_v3_v5_99pct_tube_success_floor() -> None:
+    mod = _load_module()
+    passing = {
+        "rows": 9000,
+        "expected_rows": 9000,
+        "tube_success_ratio": 0.99,
+        "surface_gate_pass": True,
+        "joint_margin_gate_pass": True,
+        "tube_gate_pass": True,
+    }
+
+    assert mod.FORMAL_TUBE_SUCCESS_RATIO_MIN == 0.99
+    assert mod.formal_tube_label_gate(passing) is True
+    for field, value in (
+        ("tube_success_ratio", 0.989999),
+        ("surface_gate_pass", False),
+        ("joint_margin_gate_pass", False),
+        ("tube_gate_pass", False),
+    ):
+        failed = dict(passing)
+        failed[field] = value
+        assert mod.formal_tube_label_gate(failed) is False
+
+
+def test_dataset_trajectory_completeness_uses_the_same_99pct_success_floor() -> None:
+    mod = _load_module()
+    rows = 100
+    tube = pd.DataFrame(
+        {
+            "angle_idx": np.repeat(np.arange(4), 25),
+            "tube_offset_id": np.tile([f"offset-{index}" for index in range(25)], 4),
+            "sample_id": [f"sample-{index}" for index in range(rows)],
+            "tube_success": [True] * 99 + [False],
+        }
+    )
+
+    assert mod.tube_trajectory_complete(
+        tube,
+        expected_rows=rows,
+        expected_angles=4,
+        expected_offsets=25,
+    ) is True
+
+    tube.loc[98, "tube_success"] = False
+    assert mod.tube_trajectory_complete(
+        tube,
+        expected_rows=rows,
+        expected_angles=4,
+        expected_offsets=25,
+    ) is False
+
+
+def test_gate_only_tube_replay_requires_hash_bound_four_cut_evidence() -> None:
+    mod = _load_module()
+    source = {
+        "task_fingerprint": "source-task",
+        "tube_artifact_sha256": "artifact-hash",
+        "centerline_sha256": "centerline-hash",
+        "rows": 9000,
+        "expected_rows": 9000,
+        "tube_success_ratio": 0.993,
+        "target_success_ratio": 0.993,
+        "normal_grid_size": 25,
+        "normal_grid_coverage_ratio": 1.0,
+        "residual_p95_mm": 0.05,
+        "residual_max_mm": 2.4,
+        "tube10_beta_rms_p95_deg": 0.95,
+        "multi_branch_ratio": 0.0,
+        "surface_complete": True,
+        "cut_count": 4,
+        "cut_indices": [0, 90, 180, 270],
+        "cut_invariance_gate_pass": True,
+        "surface_gate_pass": True,
+        "joint_margin_gate_pass": True,
+        "tube_gate_pass": True,
+    }
+    recomputed_geometry = {
+        key: source[key]
+        for key in (
+            "rows",
+            "expected_rows",
+            "target_success_ratio",
+            "normal_grid_size",
+            "normal_grid_coverage_ratio",
+            "residual_p95_mm",
+            "residual_max_mm",
+            "tube10_beta_rms_p95_deg",
+            "multi_branch_ratio",
+            "tube_gate_pass",
+        )
+    }
+    recomputed_margin = {"joint_margin_gate_pass": True}
+
+    replay = mod.replay_tube_quality_gate(
+        source,
+        source_report_sha256="source-report-hash",
+        artifact_sha256="artifact-hash",
+        centerline_sha256="centerline-hash",
+        recomputed_geometry=recomputed_geometry,
+        recomputed_margin_gate=recomputed_margin,
+        expected_cut_indices=(0, 90, 180, 270),
+    )
+
+    assert replay["formal_tube_label_gate_pass"] is True
+    assert replay["gate_only_replay"] is True
+    assert replay["source_report_sha256"] == "source-report-hash"
+
+    with pytest.raises(ValueError, match="artifact hash"):
+        mod.replay_tube_quality_gate(
+            source,
+            source_report_sha256="source-report-hash",
+            artifact_sha256="tampered",
+            centerline_sha256="centerline-hash",
+            recomputed_geometry=recomputed_geometry,
+            recomputed_margin_gate=recomputed_margin,
+            expected_cut_indices=(0, 90, 180, 270),
+        )
+
+    missing_cut = dict(source, cut_indices=[0, 90, 180], cut_count=3)
+    with pytest.raises(ValueError, match="four-cut"):
+        mod.replay_tube_quality_gate(
+            missing_cut,
+            source_report_sha256="source-report-hash",
+            artifact_sha256="artifact-hash",
+            centerline_sha256="centerline-hash",
+            recomputed_geometry=recomputed_geometry,
+            recomputed_margin_gate=recomputed_margin,
+            expected_cut_indices=(0, 90, 180, 270),
+        )
+
+
+def test_nonformal_presets_apply_registered_resolution_unless_explicitly_overridden() -> None:
+    mod = _load_module()
+
+    smoke = mod.parse_args(["--preset", "smoke"])
+    pilot = mod.parse_args(["--preset", "pilot"])
+    explicit = mod.parse_args(
+        [
+            "--preset",
+            "smoke",
+            "--final-points",
+            "18",
+            "--cut-indices",
+            "0,9",
+            "--max-opt-nfev",
+            "3",
+        ]
+    )
+
+    assert smoke.final_points == 36
+    assert mod.parse_int_csv(smoke.cut_indices) == [0]
+    assert smoke.max_opt_nfev == 8
+    assert pilot.final_points == 72
+    assert mod.parse_int_csv(pilot.cut_indices) == [0, 18, 36, 54]
+    assert pilot.max_opt_nfev == 20
+    assert explicit.final_points == 18
+    assert mod.parse_int_csv(explicit.cut_indices) == [0, 9]
+    assert explicit.max_opt_nfev == 3
+
+
+def test_half_phase_predictor_uses_cyclic_neighbor_average() -> None:
+    mod = _load_module()
+    family = mod.v6_utils.FamilySpec(
+        family_id="fixed-family",
+        center_x_m=1.1,
+        center_y_m=0.2,
+        center_z_m=-0.3,
+        phase_y_rad=0.4,
+        phase_z_rad=1.2,
+    )
+    centerline = mod.generate_half_phase_targets(family, radius_mm=105.0, n_points=4)
+    centerline["angle_rad"] = np.arange(4, dtype=float) * np.pi / 2.0
+    for index, column in enumerate(mod.v6_utils.atlas.BETA_COLS):
+        centerline[column] = np.asarray([0.0, 2.0, 4.0, 6.0]) + index
+    targets = mod.generate_half_phase_targets(family, radius_mm=105.0, n_points=4)
+
+    predictor = mod.build_half_phase_predictor(centerline, targets)
+
+    assert predictor[mod.v6_utils.atlas.BETA_COLS[0]].tolist() == [1.0, 3.0, 5.0, 3.0]
+    assert predictor["angle_idx"].tolist() == [0, 1, 2, 3]
+    assert predictor["angle_rad"].tolist() == pytest.approx(targets["angle_rad"].tolist())
+    assert predictor["radial_predictor_type"].eq("cyclic_half_phase_average").all()
+
+
+def test_support_candidate_table_uses_only_strict_training_rows_below_candidate_test() -> None:
+    mod = _load_module()
+    rows = []
+    for radius in (75.0, 97.5, 105.0, 110.0):
+        for angle in range(4):
+            rows.append(
+                {
+                    "sample_id": f"{radius}:{angle}",
+                    "family_id": "fixed-family",
+                    "trajectory_id": f"fixed-family@{radius:g}",
+                    "radius_mm": radius,
+                    "angle_idx": angle,
+                    "is_centerline": False,
+                    "x_target_m": radius / 1000.0 + angle * 1.0e-4,
+                    "y_target_m": 0.0,
+                    "z_target_m": 0.0,
+                }
+            )
+    dataset = pd.DataFrame(rows)
+
+    table = mod.compute_holdout_support_candidates(
+        dataset,
+        candidate_test_radii_mm=[105.0],
+        validation_gap_mm=7.5,
+        support_radius_mm=15.0,
+    )
+
+    assert len(table) == 2
+    assert set(table["role"]) == {"validation", "test"}
+    assert table["test_radius_mm"].eq(105.0).all()
+    assert table["validation_radius_mm"].eq(97.5).all()
+    assert table["training_rows"].eq(4).all()
+    assert table["held_out_radius_excluded"].all()
+    assert table["larger_radius_excluded"].all()
+
+
+def test_holdout_candidates_descend_from_current_strict_frontier_without_105mm_floor() -> None:
+    mod = _load_module()
+    available = mod.materialized_dataset_radii(102.5)
+
+    candidates = mod.dynamic_holdout_test_candidates(
+        strict_geometry_rmax_mm=102.5,
+        available_radii_mm=available,
+        validation_gap_mm=7.5,
+    )
+
+    assert candidates[0] == 102.5
+    assert 105.0 not in candidates
+    assert all(candidate <= 102.5 for candidate in candidates)
+    assert all(candidate - 7.5 in available for candidate in candidates)
+
+
+def test_registered_test_frontier_excludes_larger_materialized_radii() -> None:
+    mod = _load_module()
+    dataset = pd.DataFrame(
+        {
+            "sample_id": ["a", "b", "c", "d"],
+            "radius_mm": [97.5, 105.0, 106.25, 107.5],
+        }
+    )
+
+    selected = mod.restrict_dataset_to_test_frontier(dataset, test_radius_mm=105.0)
+
+    assert selected["sample_id"].tolist() == ["a", "b"]
+    assert selected["radius_mm"].max() == 105.0
+
+
+def test_audit_dependency_fingerprint_changes_with_v6_source(tmp_path: Path) -> None:
+    mod = _load_module()
+    v6_dir = tmp_path / "v6"
+    for relative in (
+        "00_audit/audit_report.json",
+        "01_radial/radial_report.json",
+        "02_tube/tube_report.json",
+        "03_dataset/dataset_report.json",
+    ):
+        path = v6_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"gate": True}), encoding="utf-8")
+    args = mod.parse_args(
+        [
+            "--preset",
+            "smoke",
+            "--v6-dir",
+            str(v6_dir),
+            "--robot-config",
+            str(REPO_ROOT / "configs" / "robot_rods_only_standard_100k.yaml"),
+        ]
+    )
+
+    baseline = mod.audit_dependency_fingerprint(args)
+    (v6_dir / "00_audit" / "audit_report.json").write_text(
+        json.dumps({"gate": False}),
+        encoding="utf-8",
+    )
+
+    assert mod.audit_dependency_fingerprint(args) != baseline
+
+
+def test_report_artifact_manifest_fails_closed_after_mutation(tmp_path: Path) -> None:
+    mod = _load_module()
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"before")
+    manifest = {"one": {"path": str(artifact), "sha256": mod.file_sha256(artifact)}}
+
+    assert mod.artifact_manifest_is_current(manifest) is True
+    artifact.write_bytes(b"after")
+    assert mod.artifact_manifest_is_current(manifest) is False
+
+
+def test_dataset_gate_requires_tube_split_support_margin_and_challenge() -> None:
+    mod = _load_module()
+    passing = {
+        "formal_protocol_gate_pass": True,
+        "formal_tube_gate_pass": True,
+        "completeness_gate_pass": True,
+        "split_gate_pass": True,
+        "branch_conflict_gate_pass": True,
+        "joint_margin_gate_pass": True,
+        "holdout_selection_gate_pass": True,
+        "validation_support_gate_pass": True,
+        "test_support_gate_pass": True,
+        "challenge_gate_pass": True,
+    }
+
+    assert mod.formal_dataset_gate(passing) is True
+    for field in passing:
+        failed = dict(passing)
+        failed[field] = False
+        assert mod.formal_dataset_gate(failed) is False
+
+
+def test_radial_frontier_decision_separates_105mm_kpi_from_training_admission() -> None:
+    mod = _load_module()
+
+    decision = mod.radial_frontier_gate_decision(
+        formal_protocol_gate_pass=True,
+        strict_geometry_rmax_mm=102.5,
+    )
+
+    assert decision["target_105_achieved"] is False
+    assert decision["downstream_radial_admission_gate_pass"] is True
+    assert decision["formal_radial_gate_pass"] is True
+
+
+def test_tube_frontier_decision_accepts_complete_current_frontier_without_105mm_kpi() -> None:
+    mod = _load_module()
+
+    decision = mod.tube_frontier_gate_decision(
+        formal_protocol_gate_pass=True,
+        radial_strict_rmax_mm=102.5,
+        tube_strict_rmax_mm=102.5,
+        all_dataset_radii_pass=True,
+    )
+
+    assert decision["target_105_achieved"] is False
+    assert decision["formal_tube_gate_pass"] is True
+
+
+def test_tube_frontier_decision_accepts_highest_complete_tube_frontier_below_radial() -> None:
+    mod = _load_module()
+
+    decision = mod.tube_frontier_gate_decision(
+        formal_protocol_gate_pass=True,
+        radial_strict_rmax_mm=102.5,
+        tube_strict_rmax_mm=100.0,
+        all_dataset_radii_pass=True,
+    )
+
+    assert decision["tube_frontier_within_radial_gate_pass"] is True
+    assert decision["target_105_achieved"] is False
+    assert decision["formal_tube_gate_pass"] is True
+
+
+def test_complete_tube_frontier_stops_before_first_failed_required_radius() -> None:
+    mod = _load_module()
+    radii = (75.0, 80.0, 82.5, 85.0, 87.5, 90.0, 92.5, 95.0, 97.5, 100.0, 101.25, 102.5)
+    passed = {radius: True for radius in radii}
+
+    outer_failure = mod.complete_tube_checkpoint_frontier(
+        radial_frontier_mm=102.5,
+        materialized_radii_mm=radii,
+        passed_by_radius={**passed, 101.25: False, 102.5: False},
+    )
+    full_pass = mod.complete_tube_checkpoint_frontier(
+        radial_frontier_mm=102.5,
+        materialized_radii_mm=radii,
+        passed_by_radius=passed,
+    )
+
+    assert outer_failure["strict_geometry_rmax_mm"] == 100.0
+    assert outer_failure["selected_radii_mm"] == (
+        75.0,
+        80.0,
+        82.5,
+        85.0,
+        87.5,
+        90.0,
+        92.5,
+        95.0,
+        97.5,
+        100.0,
+    )
+    assert outer_failure["all_dataset_radii_pass"] is True
+    assert full_pass["strict_geometry_rmax_mm"] == 102.5
+    assert full_pass["selected_radii_mm"] == radii
+
+
+def test_candidate_tube_evidence_can_pass_without_granting_a_formal_claim() -> None:
+    mod = _load_module()
+
+    decision = mod.tube_frontier_gate_decision(
+        formal_protocol_gate_pass=False,
+        radial_strict_rmax_mm=105.0,
+        tube_strict_rmax_mm=105.0,
+        all_dataset_radii_pass=True,
+    )
+
+    assert decision["target_105_achieved"] is True
+    assert decision["tube_evidence_gate_pass"] is True
+    assert decision["downstream_tube_admission_gate_pass"] is True
+    assert decision["formal_tube_gate_pass"] is False
+
+
+def test_tube_phase_stops_before_materialization_without_strict_radial_frontier(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(["--out-dir", str(tmp_path)])
+    monkeypatch.setattr(
+        mod,
+        "ensure_radial_report",
+        lambda _args: {
+            "formal_radial_gate_pass": False,
+            "downstream_radial_admission_gate_pass": False,
+            "strict_geometry_rmax_mm": None,
+            "task_fingerprint": "radial-failure",
+        },
+    )
+    monkeypatch.setattr(
+        mod.v6_runner,
+        "load_family_spec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("tube materialization must not start")
+        ),
+    )
+
+    report = mod.phase_tube(args)
+
+    assert report["formal_tube_gate_pass"] is False
+    assert report["radial_strict_rmax_mm"] is None
+    assert report["strict_geometry_rmax_mm"] is None
+    assert report["reason"] == "no_strict_radial_frontier"
+
+
+def test_tube_phase_enters_materialization_at_102p5mm_even_when_105mm_kpi_is_false(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(["--out-dir", str(tmp_path)])
+    monkeypatch.setattr(
+        mod,
+        "ensure_radial_report",
+        lambda _args: {
+            "formal_radial_gate_pass": True,
+            "downstream_radial_admission_gate_pass": True,
+            "target_105_achieved": False,
+            "strict_geometry_rmax_mm": 102.5,
+            "task_fingerprint": "radial-102p5",
+        },
+    )
+
+    class EnteredTubeMaterialization(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        mod.v6_runner,
+        "load_family_spec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(EnteredTubeMaterialization()),
+    )
+
+    with pytest.raises(EnteredTubeMaterialization):
+        mod.phase_tube(args)
+
+
+def test_tube_phase_accepts_an_explicit_candidate_radial_report(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path),
+            "--radial-job-gate-mode",
+            "candidate_policy",
+            "--conditioning-kappa-threshold",
+            "400",
+        ]
+    )
+    radial = {
+        "formal_radial_gate_pass": False,
+        "downstream_radial_admission_gate_pass": True,
+        "target_105_achieved": True,
+        "strict_geometry_rmax_mm": 105.0,
+        "task_fingerprint": "candidate-radial-105",
+        "path_manifest": {},
+    }
+
+    class EnteredTubeMaterialization(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        mod,
+        "ensure_radial_report",
+        lambda _args: (_ for _ in ()).throw(AssertionError("explicit report must be used")),
+    )
+    monkeypatch.setattr(
+        mod.v6_runner,
+        "load_family_spec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(EnteredTubeMaterialization()),
+    )
+
+    with pytest.raises(EnteredTubeMaterialization):
+        mod.phase_tube(args, radial_report=radial)
+
+
+def test_candidate_dataset_evidence_is_separate_from_formal_dataset_gate() -> None:
+    mod = _load_module()
+    checks = {
+        "formal_protocol_gate_pass": False,
+        "formal_tube_gate_pass": False,
+        "tube_evidence_gate_pass": True,
+        "completeness_gate_pass": True,
+        "split_gate_pass": True,
+        "branch_conflict_gate_pass": True,
+        "joint_margin_gate_pass": True,
+        "holdout_selection_gate_pass": True,
+        "validation_support_gate_pass": True,
+        "test_support_gate_pass": True,
+        "challenge_gate_pass": True,
+    }
+
+    assert mod.dataset_evidence_gate(checks) is True
+    assert mod.formal_dataset_gate(checks) is False
+
+
+def test_dataset_phase_accepts_explicit_nonformal_tube_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path),
+            "--radial-job-gate-mode",
+            "candidate_policy",
+            "--conditioning-kappa-threshold",
+            "400",
+        ]
+    )
+    tube = {
+        "formal_tube_gate_pass": False,
+        "tube_evidence_gate_pass": True,
+        "strict_geometry_rmax_mm": 105.0,
+        "target_105_achieved": True,
+        "task_fingerprint": "candidate-tube-105",
+        "materialized_radii_mm": [75.0, 97.5, 105.0],
+        "tube_paths": {},
+    }
+
+    class EnteredDatasetMaterialization(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        mod,
+        "ensure_tube_report",
+        lambda _args: (_ for _ in ()).throw(AssertionError("explicit report must be used")),
+    )
+    monkeypatch.setattr(
+        mod.v6_runner,
+        "load_family_spec",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(EnteredDatasetMaterialization()),
+    )
+
+    with pytest.raises(EnteredDatasetMaterialization):
+        mod.phase_dataset(args, tube_report=tube)
+
+
+def test_half_phase_challenge_uses_the_same_candidate_conditioning_policy() -> None:
+    mod = _load_module()
+    raw = {
+        "centerline_gate_pass": False,
+        "branch_gate_pass": True,
+        "canonical_gate_pass": True,
+        "downstream_admission_gate_pass": True,
+        "sigma3_p05_m": 0.02,
+        "kappa_p95": 190.0,
+    }
+    margin = {"joint_margin_gate_pass": True}
+    admitted_args = mod.parse_args(
+        [
+            "--radial-job-gate-mode",
+            "candidate_policy",
+            "--conditioning-kappa-threshold",
+            "200",
+        ]
+    )
+    rejected_args = mod.parse_args(
+        [
+            "--radial-job-gate-mode",
+            "candidate_policy",
+            "--conditioning-kappa-threshold",
+            "150",
+        ]
+    )
+
+    admitted = mod.centerline_job_gate_decision(raw, margin, admitted_args)
+    rejected = mod.centerline_job_gate_decision(raw, margin, rejected_args)
+
+    assert admitted["job_gate_pass"] is True
+    assert admitted["candidate_conditioning_gate_pass"] is True
+    assert rejected["job_gate_pass"] is False
+
+
+def test_summary_authorizes_training_at_current_complete_frontier_independent_of_105_kpi(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_module()
+    args = mod.parse_args(["--out-dir", str(tmp_path)])
+    monkeypatch.setattr(
+        mod,
+        "ensure_audit_report",
+        lambda _args: {"formal_audit_gate_pass": True},
+    )
+    monkeypatch.setattr(
+        mod,
+        "ensure_radial_report",
+        lambda _args: {
+            "formal_radial_gate_pass": True,
+            "downstream_radial_admission_gate_pass": True,
+            "target_105_achieved": False,
+            "strict_geometry_rmax_mm": 102.5,
+            "exploratory_rescue_rmax_mm": 120.0,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "ensure_tube_report",
+        lambda _args: {
+            "formal_tube_gate_pass": True,
+            "strict_geometry_rmax_mm": 102.5,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "ensure_dataset_report",
+        lambda _args: {
+            "formal_dataset_gate_pass": True,
+            "challenge_gate_pass": True,
+            "holdout": {"validation_radius_mm": 95.0, "test_radius_mm": 102.5},
+        },
+    )
+
+    report = mod.phase_summary(args)
+
+    assert report["target_105_achieved"] is False
+    assert report["strict_upstream_gate_pass"] is True
+    assert report["model_training_authorized"] is True
+
+
+def test_nonformal_parent_resampling_keeps_physical_phase_and_reindexes_grid() -> None:
+    mod = _load_module()
+    parent = pd.DataFrame(
+        {
+            "angle_idx": np.arange(360),
+            "angle_rad": np.deg2rad(np.arange(360, dtype=float)),
+            "marker": np.arange(360),
+        }
+    )
+
+    sampled = mod.resample_parent_curve(parent, n_points=36)
+
+    assert sampled["angle_idx"].tolist() == list(range(36))
+    assert sampled["marker"].tolist() == list(range(0, 360, 10))
+    assert np.rad2deg(sampled["angle_rad"].to_numpy()) == pytest.approx(
+        np.arange(0, 360, 10)
+    )
+
+
+def test_tube_surface_initializer_is_vectorized_predictor_not_pointwise_ik(monkeypatch) -> None:
+    mod = _load_module()
+    lengths_m = np.full(31, 0.04, dtype=float)
+    p_end_local_m = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float)
+    angle = np.linspace(0.0, 2.0 * np.pi, 4, endpoint=False)
+    beta = np.zeros((4, 6), dtype=float)
+    beta[:, 4] = np.deg2rad(1.0 + 0.1 * np.sin(angle))
+    beta[:, 5] = np.deg2rad(-1.0 + 0.1 * np.cos(angle))
+    xyz = mod.v6_utils.atlas.fk_from_beta_batch(
+        beta,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+    )
+    centerline = pd.DataFrame(
+        {
+            "angle_idx": np.arange(4),
+            "angle_rad": angle,
+            "x_target_m": xyz[:, 0],
+            "y_target_m": xyz[:, 1],
+            "z_target_m": xyz[:, 2],
+            "x_m": xyz[:, 0],
+            "y_m": xyz[:, 1],
+            "z_m": xyz[:, 2],
+        }
+    )
+    for index, column in enumerate(mod.v6_utils.atlas.BETA_COLS):
+        centerline[column] = beta[:, index]
+    targets = mod.v6_utils.atlas.make_normal_tube_targets(
+        centerline, offsets_mm=(-1.0, 0.0, 1.0)
+    )
+    monkeypatch.setattr(
+        mod.v5_expansion,
+        "solve_tube_curve",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pointwise IK must not be used by the surface initializer")
+        ),
+    )
+
+    initial = mod._initial_tube_surface(
+        centerline=centerline,
+        tube_targets=targets,
+        offsets_mm=(-1.0, 0.0, 1.0),
+        bounds=mod._domain().bounds_rad,
+        lengths_m=lengths_m,
+        p_end_local_m=p_end_local_m,
+        theta_sign=-1.0,
+        max_nfev=5,
+    )
+
+    assert len(initial) == 4 * 9
+    assert np.isfinite(initial[mod.v6_utils.atlas.BETA_COLS]).all().all()
+    assert np.isfinite(initial["xyz_residual_mm"]).all()
+    center = initial[
+        np.isclose(initial["delta_n1_mm"], 0.0)
+        & np.isclose(initial["delta_n2_mm"], 0.0)
+    ].sort_values("angle_idx")
+    np.testing.assert_allclose(center[mod.v6_utils.atlas.BETA_COLS], beta)
+
+
+def test_challenge_centerline_is_extracted_from_final_tube_labels() -> None:
+    mod = _load_module()
+    rows = []
+    for angle in range(3):
+        for offset, is_centerline in (("center", True), ("outer", False)):
+            row = {
+                "angle_idx": angle,
+                "tube_offset_id": offset,
+                "is_centerline": is_centerline,
+                "sample_id": f"{angle}:{offset}",
+            }
+            row.update(
+                {
+                    column: float(angle + index + (0.0 if is_centerline else 10.0))
+                    for index, column in enumerate(mod.v6_utils.atlas.BETA_COLS)
+                }
+            )
+            rows.append(row)
+    tube = pd.DataFrame(rows)
+
+    centerline = mod.extract_tube_centerline(tube, expected_points=3)
+
+    assert centerline["angle_idx"].tolist() == [0, 1, 2]
+    assert centerline["is_centerline"].all()
+    assert centerline[mod.v6_utils.atlas.BETA_COLS[0]].tolist() == [0.0, 1.0, 2.0]
+
+
+def test_surface_stage_schedule_stops_at_first_complete_gate_pass() -> None:
+    mod = _load_module()
+    stages = ({"name": "one"}, {"name": "two"}, {"name": "three"})
+    calls = []
+
+    def solve_stage(surface, stage):
+        calls.append(stage["name"])
+        return surface + 1, {"stage": stage["name"]}
+
+    def assess_stage(surface, report, stage):
+        return {
+            **report,
+            "surface_value": surface,
+            "formal_tube_label_gate_pass": stage["name"] == "two",
+        }
+
+    surface, report, attempts = mod.run_surface_stage_schedule(
+        initial_surface=0,
+        stage_specs=stages,
+        solve_stage=solve_stage,
+        assess_stage=assess_stage,
+    )
+
+    assert calls == ["one", "two"]
+    assert surface == 2
+    assert report["stage"] == "two"
+    assert [attempt["stage"] for attempt in attempts] == ["one", "two"]

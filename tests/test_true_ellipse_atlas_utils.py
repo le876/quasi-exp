@@ -159,3 +159,74 @@ def test_centerline_gate_enforces_planned_seam_limit() -> None:
     assert gates["branch_gate_pass"] is False
     assert gates["canonical_gate_pass"] is False
     assert gates["centerline_gate_pass"] is False
+
+
+def test_centerline_gate_separates_legacy_strict_conditioning_from_downstream_admission() -> None:
+    mod = _load_utils()
+    report = {
+        "residual_p95_mm": 0.1,
+        "residual_max_mm": 0.2,
+        "delta_beta_p95_deg": 0.1,
+        "delta_beta_max_deg": 0.2,
+        "delta2_beta_p95_deg": 0.01,
+        "seam_beta_rms_deg": 0.03,
+        "sigma3_p05_m": 0.02,
+        "kappa_p95": 151.0,
+    }
+
+    gates = mod.evaluate_centerline_gates(report)
+
+    assert gates["conditioning_gate_pass"] is False
+    assert gates["strict_conditioning_gate_pass"] is False
+    assert gates["centerline_gate_pass"] is False
+    assert gates["downstream_admission_conditioning_gate_pass"] is True
+    assert gates["downstream_admission_gate_pass"] is True
+
+
+def test_conditioning_policy_sweep_changes_only_candidate_strict_decision() -> None:
+    mod = _load_utils()
+    report = {"sigma3_p05_m": 0.02, "kappa_p95": 234.0}
+
+    rejected = mod.evaluate_conditioning_policy(report, kappa_threshold=200.0)
+    admitted = mod.evaluate_conditioning_policy(report, kappa_threshold=250.0)
+
+    assert rejected["conditioning_policy_gate_pass"] is False
+    assert admitted["conditioning_policy_gate_pass"] is True
+    assert rejected["sigma3_gate_pass"] is True
+    assert admitted["sigma3_gate_pass"] is True
+
+
+def test_stage_selector_materializes_candidate_accepted_stage_not_last_tracking_stage() -> None:
+    mod = _load_utils()
+    first = pd.DataFrame({"stage_marker": [1]})
+    last = pd.DataFrame({"stage_marker": [2]})
+    outputs = [
+        (
+            "conservative_1",
+            first,
+            {
+                "centerline_gate_pass": False,
+                "branch_gate_pass": True,
+                "stage_acceptance_gate_pass": True,
+                "kappa_p95": 338.0,
+            },
+            np.zeros((1, 6)),
+        ),
+        (
+            "conservative_3",
+            last,
+            {
+                "centerline_gate_pass": False,
+                "branch_gate_pass": True,
+                "stage_acceptance_gate_pass": False,
+                "kappa_p95": 415.0,
+            },
+            np.ones((1, 6)),
+        ),
+    ]
+
+    selected = mod.select_trajectory_stage(outputs)
+
+    assert selected[0] == "conservative_1"
+    assert selected[1]["stage_marker"].tolist() == [1]
+    assert selected[2]["kappa_p95"] == 338.0

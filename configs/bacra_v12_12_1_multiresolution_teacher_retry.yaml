@@ -1,0 +1,20 @@
+extends: bacra_v12_12_independent_gold_set_holdout.yaml
+
+output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry2
+
+independent_holdout:
+  expected_source_sha256:
+    retry1_teacher_gate: 9e99d32f530500b265f0e9a873d7385387f48889cc31c030819261387c208294
+    coarse_teacher_gate: f0635d99514b62c33ed816e0f938b76987e451a059eee6cd9d62925122dcfc29
+    coarse_multiresolution_reference: 052914c27209be84e6bbeb5d43368d1416dff793a5c96b0d9f9582a6f00104ca
+    retry1_failed_family_report: 1250a858bb311c2025153e0901048c61dc3c1841aba909954df4f79411dcf6f0
+  teacher_retry:
+    method: independent_coarse_gold_cycle_multiresolution_lift
+    reuse_teacher_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry1
+    coarse_teacher_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_smoke
+    multiresolution_family_id: independent_core_01
+    student_prediction_used_as_teacher_seed: false
+    formal_gate_changes: false
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry2_smoke

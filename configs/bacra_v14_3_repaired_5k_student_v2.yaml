@@ -1,0 +1,141 @@
+schema_version: 1
+experiment_id: bacra_v14_3_repaired_5k_student_optimized_v2
+output_root: runs/bacra_v14_3_repaired_5k_student_optimized_v2
+robot_config: configs/robot_rods_only_standard_100k.yaml
+
+sources:
+  reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
+  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry6
+  v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry6.yaml
+  v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
+  original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+  retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
+  historical_final8_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
+  historical_final8_catalog: runs/bacra_v12_13_exploratory_expansion/06_final/new_family_catalog.parquet
+
+parallel:
+  patch_workers: 12
+  numerical_threads_per_worker: 1
+
+audit_execution:
+  logical_shard_count: 48
+  maximum_concurrent_workers: 12
+  assignment_strategy: cost_balanced_lpt
+  progress_every_schedules: 64
+  checkpoint_resume: true
+  screening_first: true
+  screening_fallback_to_full_audit: true
+
+pilot:
+  parent_cell_count: 5000
+  task_probe_count: 25000
+  root_count: 32
+  beam_width: 4
+  maximum_growth_waves: 16
+  minimum_chart_cells: 8
+  minimum_chart_fraction: 0.002
+  minimum_chart_spread_mm: 20.0
+  minimum_stitch_overlap_cells: 8
+  stitch_p95_max_deg: 0.5
+  stitch_max_deg: 1.0
+  minimum_boundary_transition_edges: 8
+  minimum_overlap_fraction: 0.002
+  minimum_overlap_spread_mm: 20.0
+  abstention_hops: 0
+  abstention_radius_mm: 10.0
+  labelable_measure_min: 0.30
+  labelable_measure_lcb_min: 0.28
+  largest_coherent_region_min: 0.20
+  unresolved_abstention_max: 0.70
+  require_all_x_tertiles: true
+  bootstrap_replicates: 2000
+  bootstrap_seed: 20260883
+  local_refinement:
+    enabled: true
+    maximum_rounds: 1
+    neighbor_count: 2
+    trigger_requires_valid_certificate: true
+    trigger_requires_coverage_failure: true
+
+audit_v2:
+  geometry_p95_max_deg: 0.5
+  geometry_max_deg: 1.0
+  repeat_p95_max_deg: 0.2
+  continuation_residual_max_mm: 3.0
+  repeats_per_direction: 3
+  repeat_perturbation_rad: 1.0e-8
+  retry_tiers:
+    - {tier_id: R0, maximum_step_mm: 5.0, maximum_iterations: 100, solver_chain: [predictor, bounded_ls]}
+    - {tier_id: R1, maximum_step_mm: 2.5, maximum_iterations: 200, solver_chain: [weighted_dls, bounded_ls]}
+    - {tier_id: R2, maximum_step_mm: 1.25, maximum_iterations: 400, solver_chain: [weighted_dls, bounded_ls, slsqp]}
+
+dataset:
+  minimum_unique_rows: 20000
+  target_unique_rows: 50000
+  maximum_unique_rows: 50000
+  row_padding: false
+  all_supervised_rows_count_toward_budget: true
+  macroblock_mm: 40
+  split_seed: 20260881
+  split_fractions: [0.70, 0.15, 0.15]
+  enrichment_seed: 20260884
+  multiparent_count: 2
+  multiparent_beta_gap_max_deg: 0.5
+  continuation_residual_max_mm: 3.0
+  wave_size: 4096
+  logical_shard_count: 48
+  maximum_attempt_rows: 100000
+
+student:
+  variants: [global_mlp, router_experts, selected_mlp_dls_1, selected_mlp_dls_2, knn_diagnostic]
+  hidden_units: [128, 128, 64]
+  router_hidden_units: [128, 64]
+  seeds: [20260881, 20260882, 20260883]
+  learning_rate: 0.001
+  max_steps: 200
+  validation_interval: 20
+  patience_intervals: 5
+  fk_p95_max_mm: 5.0
+  fk_p99_max_mm: 10.0
+  fk_p999_max_mm: 10.0
+  random_set_max_is_diagnostic_only: true
+  trajectory_count: 36
+  trajectory_waypoints: 100
+  capability_projection_max_mm: 5.0
+  trajectory_fk_max_mm: 10.0
+  cpu_batch1_warmup: 100
+  cpu_batch1_repeats: 1000
+  closed_loop_beta_return_max_deg: 1.0
+  chart_boundary_beta_jump_max_deg: 2.0
+
+stateful_trigger:
+  target_xyz_count: 50
+  arrival_paths_per_target: 4
+  repeats_per_path: 5
+  within_history_max_deg: 0.2
+  between_history_min_deg: 1.0
+  require_multiple_solver_budgets: true
+  require_static_failure_and_stateful_repair: true
+
+reach_round8:
+  seed_a: 20260865
+  seed_b: 20260866
+  sobol_power: 19
+  frontier_cell_budget: 128
+  frontier_starts_per_cell: 8
+  weighted_jaccard_min: 0.95
+  new_volume_ratio_max: 0.01
+  frontier_new_volume_ratio_max: 0.005
+  boundary_change_ratio_max: 0.02
+  lower_upper_measure_gap_max: 0.05
+  required_consecutive_rounds: 2
+
+formal_gate:
+  reach_required: true
+  labelable_measure_min: 0.80
+  labelable_measure_lcb_min: 0.78
+  unresolved_max: 0.20
+  maximum_n_min: 200000
+  exact_rows: 200000
+  row_padding: false
+  deployment_claim: false

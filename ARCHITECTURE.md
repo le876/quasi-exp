@@ -18,7 +18,7 @@ current-state selects one definition and points to one attempt
 pipeline supplies runtime lifecycle when one exists; it does not own science
 ```
 
-`spec/registry.yaml` 记录静态 executable experiment definitions；`docs/current-state.md` 单独记录当前选择、attempt 与 locator。两者都不执行阶段，也不拥有结果或授权。
+这条链只描述稳定的数据流；registry、current pointer、protocol 与 artifact 的完整 owner 边界见 [documentation map](docs/README.md)。
 
 ## Code layers and seams
 

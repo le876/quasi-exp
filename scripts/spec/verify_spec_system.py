@@ -89,7 +89,6 @@ RELEASE_MAPPING_KEYS = {
     "evidence",
 }
 RELEASE_EVIDENCE_KEYS = {"type", "url"}
-UNPUBLISHED_KEYS = {"scientific_source_sha", "status", "experiments"}
 BUDGET_KEYS = {
     "schema_version",
     "unit",
@@ -188,6 +187,22 @@ def _read_yaml(
         return None
     if not isinstance(value, Mapping):
         report.error("yaml.mapping", f"{label}: expected a YAML mapping in {path}")
+        return None
+    return value
+
+
+def _read_yaml_text(
+    text: str,
+    report: VerificationReport,
+    label: str,
+) -> Mapping[str, Any] | None:
+    try:
+        value = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        report.error("yaml.invalid", f"{label}: cannot parse YAML: {exc}")
+        return None
+    if not isinstance(value, Mapping):
+        report.error("yaml.mapping", f"{label}: expected a YAML mapping")
         return None
     return value
 
@@ -321,8 +336,7 @@ def validate_experiment(
     if not isinstance(protocols, list) or not protocols:
         report.error("registry.protocols", f"{label}.protocol_sources: expected a non-empty list")
         protocols = []
-    registered_protocols = {value for value in protocols if isinstance(value, str)}
-    if len(registered_protocols) != len(protocols):
+    if len({value for value in protocols if isinstance(value, str)}) != len(protocols):
         report.error("registry.protocols", f"{label}.protocol_sources must be unique strings")
     for index, value in enumerate(protocols):
         resolve_project_path(
@@ -330,38 +344,33 @@ def validate_experiment(
             value,
             report,
             f"{label}.protocol_sources[{index}]",
-            require_exists=True,
+            require_exists=False,
         )
 
-    resolved: dict[str, Path | None] = {}
     config_value = entry.get("config")
-    if config_value is None:
-        resolved["config"] = None
-    else:
-        resolved["config"] = resolve_project_path(
+    if config_value is not None:
+        resolve_project_path(
             root,
             config_value,
             report,
             f"{label}.config",
-            require_exists=True,
+            require_exists=False,
         )
-    resolved["runner"] = resolve_project_path(
+    resolve_project_path(
         root,
         entry.get("runner"),
         report,
         f"{label}.runner",
-        require_exists=True,
+        require_exists=False,
     )
     launcher = entry.get("launcher")
-    if launcher is None:
-        resolved["launcher"] = None
-    else:
-        resolved["launcher"] = resolve_project_path(
+    if launcher is not None:
+        resolve_project_path(
             root,
             launcher,
             report,
             f"{label}.launcher",
-            require_exists=True,
+            require_exists=False,
         )
 
     tests = entry.get("tests")
@@ -381,7 +390,7 @@ def validate_experiment(
                     value,
                     report,
                     f"{label}.tests.{tier}[{index}]",
-                    require_exists=True,
+                    require_exists=False,
                 )
 
     upstream = entry.get("upstream_experiments")
@@ -391,56 +400,6 @@ def validate_experiment(
         report.error(
             "registry.upstream",
             f"{label}.upstream_experiments must contain unique strings",
-        )
-
-    config_path = resolved.get("config")
-    if config_path is None or not config_path.is_file():
-        return
-    config = _read_yaml(config_path, report, f"{label}.config")
-    if config is None:
-        return
-    if "experiment_id" in config and config.get("experiment_id") != experiment_id:
-        report.error(
-            "registry.experiment_id",
-            f"{label}: config experiment_id {config.get('experiment_id')!r} does not match key",
-        )
-    robot_config = config.get("robot_config")
-    if robot_config is not None:
-        resolve_project_path(
-            root,
-            robot_config,
-            report,
-            f"{label}.config.robot_config",
-            require_exists=True,
-        )
-
-    source_inventory = config.get("sources")
-    if not isinstance(source_inventory, Mapping):
-        return
-
-    config_protocols: set[str] = set()
-    for source in _nested_strings(source_inventory):
-        if source.startswith(REPOSITORY_SOURCE_PREFIXES):
-            resolve_project_path(
-                root,
-                source,
-                report,
-                f"{label}.config.sources",
-                require_exists=True,
-            )
-        if source.startswith("docs/") and source.endswith(".md"):
-            config_protocols.add(source)
-    absent_from_registry = sorted(config_protocols - registered_protocols)
-    if absent_from_registry:
-        report.error(
-            "registry.protocol_binding",
-            f"{label}: config protocol sources absent from registry: {absent_from_registry}",
-        )
-    absent_from_inventory = sorted(registered_protocols - config_protocols)
-    if absent_from_inventory:
-        report.warning(
-            "scientific.protocol_inventory",
-            f"{label}: registry protocols absent from config source inventory: {absent_from_inventory}",
         )
 
 
@@ -516,7 +475,27 @@ def validate_fixed_point_bindings(
     if not isinstance(experiments, Mapping):
         return
     commit_validity: dict[str, bool] = {}
-    checked: set[tuple[str, str]] = set()
+    path_validity: dict[tuple[str, str], bool] = {}
+
+    def source_path_exists(
+        source_sha: str,
+        relative: str,
+        *,
+        label: str,
+        code: str,
+    ) -> bool:
+        key = (source_sha, relative)
+        if key not in path_validity:
+            result = _git(root, ["cat-file", "-e", source_sha + ":" + relative])
+            if result is None:
+                report.error("git.unavailable", f"cannot inspect {label} at {source_sha}")
+                path_validity[key] = False
+            else:
+                path_validity[key] = result.returncode == 0
+        if not path_validity[key]:
+            report.error(code, f"{label}: {relative} does not exist at scientific source {source_sha}")
+        return path_validity[key]
+
     for experiment_id, entry in experiments.items():
         if not isinstance(entry, Mapping):
             continue
@@ -533,25 +512,85 @@ def validate_fixed_point_bindings(
                 )
         if not commit_validity[source_sha]:
             continue
+        label = f"registry.experiments.{experiment_id}"
         for relative in sorted(_experiment_binding_paths(entry)):
-            key = (source_sha, relative)
-            if key not in checked:
-                checked.add(key)
-                result = _git(root, ["cat-file", "-e", source_sha + ":" + relative])
-                if result is None or result.returncode != 0:
-                    report.error(
-                        "git.binding_missing",
-                        f"{experiment_id}: {relative} does not exist at scientific source {source_sha}",
-                    )
-                    continue
-            result = _git(root, ["diff", "--quiet", source_sha, "--", relative])
-            if result is None or result.returncode > 1:
-                report.error("git.unavailable", f"cannot compare declared binding {relative}")
-            elif result.returncode == 1:
-                report.error(
-                    "git.binding_drift",
-                    f"{experiment_id}: declared binding {relative} differs from {source_sha}",
+            source_path_exists(
+                source_sha,
+                relative,
+                label=experiment_id,
+                code="git.binding_missing",
+            )
+
+        config_path = entry.get("config")
+        if not isinstance(config_path, str) or not path_validity.get((source_sha, config_path), False):
+            continue
+        shown = _git(root, ["show", source_sha + ":" + config_path])
+        if shown is None or shown.returncode != 0:
+            report.error("git.unavailable", f"{label}: cannot read source-bound config")
+            continue
+        config = _read_yaml_text(shown.stdout, report, f"{label}.config@{source_sha}")
+        if config is None:
+            continue
+        if "experiment_id" in config and config.get("experiment_id") != experiment_id:
+            report.error(
+                "registry.experiment_id",
+                f"{label}: source-bound config experiment_id {config.get('experiment_id')!r} does not match key",
+            )
+
+        robot_config = config.get("robot_config")
+        if robot_config is not None:
+            robot_path = resolve_project_path(
+                root,
+                robot_config,
+                report,
+                f"{label}.config.robot_config",
+                require_exists=False,
+            )
+            if robot_path is not None and isinstance(robot_config, str):
+                source_path_exists(
+                    source_sha,
+                    robot_config,
+                    label=f"{label}.config.robot_config",
+                    code="git.source_inventory_missing",
                 )
+
+        registered_protocols = {
+            value for value in entry.get("protocol_sources", []) if isinstance(value, str)
+        }
+        config_protocols: set[str] = set()
+        source_inventory = config.get("sources")
+        if isinstance(source_inventory, Mapping):
+            for source in _nested_strings(source_inventory):
+                if source.startswith(REPOSITORY_SOURCE_PREFIXES):
+                    source_path = resolve_project_path(
+                        root,
+                        source,
+                        report,
+                        f"{label}.config.sources",
+                        require_exists=False,
+                    )
+                    if source_path is not None:
+                        source_path_exists(
+                            source_sha,
+                            source,
+                            label=f"{label}.config.sources",
+                            code="git.source_inventory_missing",
+                        )
+                if source.startswith("docs/") and source.endswith(".md"):
+                    config_protocols.add(source)
+
+        absent_from_registry = sorted(config_protocols - registered_protocols)
+        if absent_from_registry:
+            report.error(
+                "registry.protocol_binding",
+                f"{label}: source-bound config protocols absent from registry: {absent_from_registry}",
+            )
+        absent_from_inventory = sorted(registered_protocols - config_protocols)
+        if absent_from_inventory:
+            report.warning(
+                "scientific.protocol_inventory",
+                f"{label}: registry protocols absent from source-bound config inventory: {absent_from_inventory}",
+            )
 
 
 def validate_release_map(
@@ -564,8 +603,8 @@ def validate_release_map(
         return None
     if set(release_map) != RELEASE_MAP_KEYS:
         report.error("release.schema", f"release-map fields must be exactly {sorted(RELEASE_MAP_KEYS)}")
-    if release_map.get("schema_version") != 1:
-        report.error("release.schema", "release-map.schema_version must be 1")
+    if release_map.get("schema_version") != 2:
+        report.error("release.schema", "release-map.schema_version must be 2")
     repository = release_map.get("public_repository")
     if not isinstance(repository, str) or not repository.startswith("https://"):
         report.error("release.repository", "public_repository must be an https URL")
@@ -584,6 +623,7 @@ def validate_release_map(
         mappings = []
     by_id: dict[str, Mapping[str, Any]] = {}
     released_sources: set[str] = set()
+    public_releases: set[str] = set()
     for index, item in enumerate(mappings):
         label = f"release-map.mappings[{index}]"
         if not isinstance(item, Mapping):
@@ -602,10 +642,16 @@ def validate_release_map(
         public_sha = item.get("public_release_sha")
         if not isinstance(source_sha, str) or SHA_RE.fullmatch(source_sha) is None:
             report.error("release.source_sha", f"{label}: invalid scientific source SHA")
+        elif source_sha in released_sources:
+            report.error("release.source_sha", f"{label}: duplicate scientific source SHA")
         else:
             released_sources.add(source_sha)
         if not isinstance(public_sha, str) or SHA_RE.fullmatch(public_sha) is None:
             report.error("release.public_sha", f"{label}: invalid public release SHA")
+        elif public_sha in public_releases:
+            report.error("release.public_sha", f"{label}: duplicate public release SHA")
+        else:
+            public_releases.add(public_sha)
         if source_sha == public_sha:
             report.error("release.identity", f"{label}: source and public SHA must differ")
         if item.get("status") != "verified":
@@ -631,40 +677,22 @@ def validate_release_map(
         report.error("release.unpublished", "unpublished_scientific_fixed_points must be a list")
         unpublished = []
     unpublished_sources: set[str] = set()
-    memberships: dict[str, set[str]] = {}
-    experiments = registry.get("experiments", {}) if isinstance(registry, Mapping) else {}
-    for index, item in enumerate(unpublished):
+    for index, source_sha in enumerate(unpublished):
         label = f"release-map.unpublished_scientific_fixed_points[{index}]"
-        if not isinstance(item, Mapping):
-            report.error("release.unpublished", f"{label}: expected a mapping")
-            continue
-        if set(item) != UNPUBLISHED_KEYS:
-            report.error("release.unpublished", f"{label}: invalid fields")
-        source_sha = item.get("scientific_source_sha")
         if not isinstance(source_sha, str) or SHA_RE.fullmatch(source_sha) is None:
             report.error("release.source_sha", f"{label}: invalid scientific source SHA")
             continue
         if source_sha in unpublished_sources:
             report.error("release.source_sha", f"{label}: duplicate source SHA")
         unpublished_sources.add(source_sha)
-        memberships[source_sha] = set()
-        if item.get("status") != "not_mapped_to_public_release":
-            report.error("release.status", f"{label}: invalid unpublished status")
-        values = item.get("experiments")
-        if not isinstance(values, list) or not values:
-            report.error("release.unpublished", f"{label}.experiments must be non-empty")
-            continue
-        if len({value for value in values if isinstance(value, str)}) != len(values):
-            report.error("release.unpublished", f"{label}.experiments must be unique strings")
-        for experiment_id in values:
-            if experiment_id not in experiments:
-                report.error("release.unpublished", f"{label}: unknown experiment {experiment_id!r}")
-                continue
-            memberships[source_sha].add(experiment_id)
-            entry = experiments.get(experiment_id)
-            if isinstance(entry, Mapping) and entry.get("scientific_source_fixed_point") != source_sha:
-                report.error("release.unpublished", f"{label}: source mismatch for {experiment_id}")
+    overlap = sorted(released_sources & unpublished_sources)
+    if overlap:
+        report.error(
+            "release.overlap",
+            f"scientific source SHA cannot be both released and unpublished: {overlap}",
+        )
 
+    experiments = registry.get("experiments", {}) if isinstance(registry, Mapping) else {}
     if isinstance(experiments, Mapping):
         known_sources = released_sources | unpublished_sources
         for experiment_id, entry in experiments.items():
@@ -675,11 +703,6 @@ def validate_release_map(
                 report.error(
                     "release.coverage",
                     f"experiment {experiment_id} source {source_sha!r} is not declared",
-                )
-            elif source_sha in unpublished_sources and experiment_id not in memberships.get(str(source_sha), set()):
-                report.error(
-                    "release.coverage",
-                    f"experiment {experiment_id} is omitted from its unpublished source entry",
                 )
     return release_map
 
@@ -767,8 +790,6 @@ def validate_current_state(
 def validate_doc_budgets(
     root: Path,
     report: VerificationReport,
-    *,
-    enforce: bool = True,
 ) -> None:
     budget = _read_yaml(root / BUDGET_PATH, report, "doc budgets")
     if budget is None:
@@ -801,8 +822,8 @@ def validate_doc_budgets(
 
     report.budget_rows = sorted(rows, key=lambda row: row.path)
     for row in report.budget_rows:
-        if enforce and row.used > row.ceiling:
-            report.error(
+        if row.used > row.ceiling:
+            report.warning(
                 "budget.exceeded",
                 f"{row.path}: {row.used} characters exceeds ceiling {row.ceiling}",
             )
@@ -1109,14 +1130,6 @@ def maintained_markdown_paths(
     registry: Mapping[str, Any] | None,
 ) -> list[Path]:
     values = {root / relative for relative in STANDING_MARKDOWN}
-    experiments = registry.get("experiments", {}) if isinstance(registry, Mapping) else {}
-    if isinstance(experiments, Mapping):
-        for entry in experiments.values():
-            if not isinstance(entry, Mapping):
-                continue
-            protocols = entry.get("protocol_sources")
-            if isinstance(protocols, list):
-                values.update(root / value for value in protocols if isinstance(value, str))
     for lifecycle in ("proposed", "implemented", "rejected"):
         values.update((root / ".agents/notes" / lifecycle).glob("*.md"))
     values.update((root / ".agents/skills").glob("*/SKILL.md"))
@@ -1201,11 +1214,6 @@ def persistence_paths(
         for pattern in ("[0-9]*-pro提问-*.md", "[0-9]*-pro回答-*.md")
         for path in (root / "docs").glob(pattern)
     )
-    experiments = registry.get("experiments", {}) if isinstance(registry, Mapping) else {}
-    if isinstance(experiments, Mapping):
-        for entry in experiments.values():
-            if isinstance(entry, Mapping):
-                paths.update(_experiment_binding_paths(entry))
     return {path for path in paths if isinstance(path, str)}
 
 
@@ -1333,7 +1341,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.root.resolve()
     if args.list_budgets:
         report = VerificationReport()
-        validate_doc_budgets(root, report, enforce=False)
+        validate_doc_budgets(root, report)
         for row in report.budget_rows:
             status = "ok" if row.used <= row.ceiling else "OVER"
             print(f"BUDGET {status} {row.path}: {row.used}/{row.ceiling} {row.kind}")

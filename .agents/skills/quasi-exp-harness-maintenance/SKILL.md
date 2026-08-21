@@ -20,12 +20,11 @@ description: Maintain quasi-exp authority, static experiment definitions, curren
 
 ## 维护边界
 
-- Registry 只记录静态 executable definitions 及其 upstream 关系，不记录当前选择、attempt、output、Gate 或结果。
-- docs/current-state.md 只记录当前 experiment、attempt 与可变 locator，包括可选的 GPT-5 Pro consultation locator；结果需要时直接读取 artifact。
+- Registry、current-state、release map、protocol 与 artifact 的边界只以 [authority matrix](../../../docs/README.md) 为准；本 Skill 不复制字段清单。
 - AGENTS.md 只保留常驻规则和按任务路由；详细 SOP 放入 Skill 或唯一 owner。
 - 普通实验执行和 ordinary scientific code/test change 不因本 Skill 自动增加 governance checks；是否需要 Note 只按 Agent Note rules 判断。
 - 精简时遵循 docs/AGENTS.md 的适用范围与排除项，并保留完整命题。
-- standing-doc budget 的范围、处理顺序和 raise 规则只以 [docs/AGENTS.md](../../../docs/AGENTS.md) 为准。
+- standing-doc budget 只用于发现膨胀；超限 warning 不阻塞 governance 或实验，结构错误仍失败。
 - Audit、review、diagnose 请求保持只读。
 
 ## 验证选择

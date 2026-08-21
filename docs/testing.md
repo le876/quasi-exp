@@ -24,7 +24,7 @@
 /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python scripts/spec/verify_spec_system.py
 ```
 
-它检查静态 experiment catalog、upstream 图、current pointer、路径、文档链接、显式列出的 standing-doc budgets、Agent Note/Skill 结构、已有 archive seals、declared release mapping，并比较 registry 明列的 protocol/config/runner/optional launcher/tests 是否仍等于各自 fixed point。它不要求 ignored `runs/` 存在，不读取 artifact 来认证科学结果。`--list-budgets` 是报告模式；`--strict-history` 是历史来源完整性审计；`--committed` 只证明 Git persistence；第一次真实归档由 `--seal-archive` 创建 manifest。
+它检查 catalog 在各 definition 的 source commit 内是否自洽、current pointer 结构及其余 repository-governance surfaces；不要求历史 binding 仍存在于当前 checkout，也不读取 ignored `runs/` 或认证科学结果。standing-doc 超预算只产生 warning，`--list-budgets` 显示 usage；`--strict-history` 是当前 checkout 的历史来源审计；`--committed` 只证明 Harness authority 与记录已持久化；第一次真实归档由 `--seal-archive` 创建 manifest。
 
 ## Contract, artifact and formal checks
 

@@ -204,6 +204,49 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _commit_fixture(root: Path) -> str:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Spec Test")
+    _git(root, "config", "user.email", "spec-test@example.invalid")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "scientific source")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _write_release_map(
+    root: Path,
+    unpublished: list[object],
+    *,
+    scientific_source_sha: str = "b" * 40,
+    public_release_sha: str = "c" * 40,
+) -> None:
+    module = _module()
+    (root / "spec").mkdir(parents=True, exist_ok=True)
+    value = {
+        "schema_version": 2,
+        "public_repository": "https://github.com/example/quasi-exp",
+        "current_public_release_id": "published",
+        "verified_at": "2026-08-21",
+        "mappings": [
+            {
+                "id": "published",
+                "status": "verified",
+                "scientific_source_sha": scientific_source_sha,
+                "public_release_sha": public_release_sha,
+                "evidence": {
+                    "type": "github_commit_message",
+                    "url": "https://github.com/example/quasi-exp/commit/" + public_release_sha,
+                },
+            }
+        ],
+        "unpublished_scientific_fixed_points": unpublished,
+    }
+    (root / "spec/release-map.yaml").write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def test_repository_governance_structure_is_valid() -> None:
     module = _module()
     report = module.verify_repository(ROOT)
@@ -321,8 +364,10 @@ def test_reverse_protocol_inventory_gap_is_scientific_advisory(tmp_path: Path) -
     extra = "docs/extra.md"
     (tmp_path / extra).write_text("# Extra\n", encoding="utf-8")
     entry["protocol_sources"].append(extra)
+    entry["scientific_source_fixed_point"] = _commit_fixture(tmp_path)
+    registry = {"schema_version": 3, "experiments": {"active": entry}}
     report = module.VerificationReport()
-    module.validate_experiment(tmp_path, "active", entry, report)
+    module.validate_fixed_point_bindings(tmp_path, registry, report)
     assert report.errors == ()
     assert "scientific.protocol_inventory" in {item.code for item in report.warnings}
 
@@ -348,23 +393,152 @@ def test_scientific_source_must_be_a_real_git_commit() -> None:
     assert "git.source_missing" in {item.code for item in report.errors}
 
 
-def test_release_map_covers_every_bound_experiment(tmp_path: Path) -> None:
+def test_historical_binding_is_valid_from_source_commit_after_worktree_drift(
+    tmp_path: Path,
+) -> None:
     module = _module()
-    registry = module.yaml.safe_load((ROOT / "spec/registry.yaml").read_text(encoding="utf-8"))
-    release_map = module.yaml.safe_load((ROOT / "spec/release-map.yaml").read_text(encoding="utf-8"))
-    experiment_id = next(iter(registry["experiments"]))
-    release_map["unpublished_scientific_fixed_points"][0]["experiments"].remove(experiment_id)
-    (tmp_path / "spec").mkdir()
-    (tmp_path / "spec/release-map.yaml").write_text(
-        module.yaml.safe_dump(release_map, allow_unicode=True, sort_keys=False),
+    entry = _write_binding(tmp_path, "historical")
+    entry["scientific_source_fixed_point"] = _commit_fixture(tmp_path)
+    (tmp_path / entry["config"]).write_text("not: the source config\n", encoding="utf-8")
+    (tmp_path / entry["runner"]).unlink()
+    registry = {"schema_version": 3, "experiments": {"historical": entry}}
+    report = module.VerificationReport()
+    module.validate_experiment(tmp_path, "historical", entry, report)
+    module.validate_fixed_point_bindings(tmp_path, registry, report)
+    assert report.errors == ()
+
+
+def test_source_commit_must_contain_every_declared_binding(tmp_path: Path) -> None:
+    module = _module()
+    entry = _write_binding(tmp_path, "historical")
+    entry["scientific_source_fixed_point"] = _commit_fixture(tmp_path)
+    entry["runner"] = "scripts/analysis/missing.py"
+    report = module.VerificationReport()
+    module.validate_fixed_point_bindings(
+        tmp_path,
+        {"schema_version": 3, "experiments": {"historical": entry}},
+        report,
+    )
+    assert "git.binding_missing" in {item.code for item in report.errors}
+
+
+@pytest.mark.parametrize(
+    ("config_text", "expected"),
+    [
+        (
+            "experiment_id: wrong\nsources:\n  protocol: docs/historical.md\n",
+            "registry.experiment_id",
+        ),
+        (
+            "experiment_id: historical\nsources:\n  protocol: docs/extra.md\n",
+            "registry.protocol_binding",
+        ),
+        (
+            "experiment_id: historical\n"
+            "sources:\n"
+            "  protocol: docs/historical.md\n"
+            "  helper: configs/missing.yaml\n",
+            "git.source_inventory_missing",
+        ),
+    ],
+)
+def test_source_bound_config_identity_and_protocol_inventory_are_enforced(
+    tmp_path: Path,
+    config_text: str,
+    expected: str,
+) -> None:
+    module = _module()
+    entry = _write_binding(tmp_path, "historical")
+    (tmp_path / "docs/extra.md").write_text("# Extra\n", encoding="utf-8")
+    (tmp_path / entry["config"]).write_text(config_text, encoding="utf-8")
+    entry["scientific_source_fixed_point"] = _commit_fixture(tmp_path)
+    report = module.VerificationReport()
+    module.validate_fixed_point_bindings(
+        tmp_path,
+        {"schema_version": 3, "experiments": {"historical": entry}},
+        report,
+    )
+    assert expected in {item.code for item in report.errors}
+
+
+def test_release_map_v2_covers_sources_without_experiment_membership(tmp_path: Path) -> None:
+    module = _module()
+    source_sha = "a" * 40
+    registry = {
+        "experiments": {
+            "first": {"scientific_source_fixed_point": source_sha},
+            "new_definition": {"scientific_source_fixed_point": source_sha},
+        }
+    }
+    _write_release_map(tmp_path, [source_sha])
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, registry, report)
+    assert report.errors == ()
+
+
+def test_release_map_v2_requires_source_coverage(tmp_path: Path) -> None:
+    module = _module()
+    registry = {"experiments": {"missing": {"scientific_source_fixed_point": "a" * 40}}}
+    _write_release_map(tmp_path, [])
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, registry, report)
+    assert "release.coverage" in {item.code for item in report.errors}
+
+
+@pytest.mark.parametrize(
+    ("unpublished", "expected"),
+    [
+        (["invalid"], "release.source_sha"),
+        (["a" * 40, "a" * 40], "release.source_sha"),
+        (["b" * 40], "release.overlap"),
+    ],
+)
+def test_release_map_v2_rejects_invalid_duplicate_or_overlapping_sources(
+    tmp_path: Path,
+    unpublished: list[object],
+    expected: str,
+) -> None:
+    module = _module()
+    _write_release_map(tmp_path, unpublished)
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert expected in {item.code for item in report.errors}
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected"),
+    [
+        ("scientific_source_sha", "release.source_sha"),
+        ("public_release_sha", "release.public_sha"),
+    ],
+)
+def test_release_map_v2_rejects_duplicate_released_shas(
+    tmp_path: Path,
+    field_name: str,
+    expected: str,
+) -> None:
+    module = _module()
+    _write_release_map(tmp_path, [])
+    path = tmp_path / "spec/release-map.yaml"
+    value = module.yaml.safe_load(path.read_text(encoding="utf-8"))
+    duplicate = dict(value["mappings"][0])
+    duplicate["id"] = "duplicate"
+    if field_name == "scientific_source_sha":
+        duplicate["public_release_sha"] = "d" * 40
+    else:
+        duplicate["scientific_source_sha"] = "d" * 40
+    duplicate["evidence"] = {
+        "type": "github_commit_message",
+        "url": value["public_repository"] + "/commit/" + duplicate["public_release_sha"],
+    }
+    value["mappings"].append(duplicate)
+    path.write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
     report = module.VerificationReport()
-    module.validate_release_map(tmp_path, registry, report)
-    assert any(
-        item.code == "release.coverage" and experiment_id in item.message
-        for item in report.errors
-    )
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert expected in {item.code for item in report.errors}
 
 
 def test_current_state_selects_registered_experiment_and_attempt(tmp_path: Path) -> None:
@@ -445,8 +619,9 @@ def test_budget_checks_only_manifest_listed_standing_docs(tmp_path: Path) -> Non
     )
     report = module.VerificationReport()
     module.validate_doc_budgets(tmp_path, report)
-    exceeded = [item.message for item in report.errors if item.code == "budget.exceeded"]
+    exceeded = [item.message for item in report.warnings if item.code == "budget.exceeded"]
     assert exceeded == ["AGENTS.md: 11 characters exceeds ceiling 10"]
+    assert report.errors == ()
     assert [row.path for row in report.budget_rows] == ["AGENTS.md"]
 
 
@@ -465,7 +640,36 @@ def test_budget_listing_reports_over_without_failure(
         encoding="utf-8",
     )
     assert module.main(["--root", str(tmp_path), "--list-budgets"]) == 0
-    assert "BUDGET OVER AGENTS.md: 11/10 standing document" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "BUDGET OVER AGENTS.md: 11/10 standing document" in output
+    assert "[WARNING] budget.exceeded" in output
+
+
+def test_invalid_budget_schema_still_fails(tmp_path: Path) -> None:
+    module = _module()
+    (tmp_path / "scripts/spec").mkdir(parents=True)
+    (tmp_path / "scripts/spec/doc-budgets.yaml").write_text(
+        "schema_version: 99\nunit: unicode_characters\nfiles: {}\n",
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_doc_budgets(tmp_path, report)
+    assert "budget.schema" in {item.code for item in report.errors}
+    assert module.main(["--root", str(tmp_path), "--list-budgets"]) == 1
+
+
+def test_historical_bindings_are_not_standing_or_persistence_paths(tmp_path: Path) -> None:
+    module = _module()
+    entry = _write_binding(tmp_path, "historical")
+    registry = {"schema_version": 3, "experiments": {"historical": entry}}
+    scientific_paths = module._experiment_binding_paths(entry)
+    maintained = {
+        path.relative_to(tmp_path).as_posix()
+        for path in module.maintained_markdown_paths(tmp_path, registry)
+    }
+    persisted = module.persistence_paths(tmp_path, registry)
+    assert entry["protocol_sources"][0] not in maintained
+    assert scientific_paths.isdisjoint(persisted)
 
 
 def test_skill_validation_auto_discovers_skills_and_allows_resources(tmp_path: Path) -> None:

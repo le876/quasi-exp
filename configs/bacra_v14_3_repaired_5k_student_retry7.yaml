@@ -1,21 +1,20 @@
 schema_version: 1
-experiment_id: bacra_v14_3_repaired_5k_student_optimized_v1
-output_root: runs/bacra_v14_3_repaired_5k_student_optimized_v1
+upstream_protocol_version: retry7
+experiment_id: bacra_v14_3_repaired_5k_student_retry7_abstention_retry4
+output_root: runs/bacra_v14_3_repaired_5k_student_retry7_abstention_retry4
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
-  reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
-  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry5
-  v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry5.yaml
+  reviewed_plan: docs/24-BACRA-V14.2R-retry7执行协议.md
+  v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4
+  v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry7.yaml
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
   original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
   retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
   historical_final8_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
   historical_final8_catalog: runs/bacra_v12_13_exploratory_expansion/06_final/new_family_catalog.parquet
 
-parallel:
-  patch_workers: 12
-  numerical_threads_per_worker: 1
+parallel: {patch_workers: 12, numerical_threads_per_worker: 1}
 
 audit_execution:
   logical_shard_count: 48
@@ -30,6 +29,8 @@ pilot:
   parent_cell_count: 5000
   task_probe_count: 25000
   root_count: 32
+  root_expansion_budgets: [8, 16, 24, 32]
+  root_expansion_measure_gain_stop: 0.01
   beam_width: 4
   maximum_growth_waves: 16
   minimum_chart_cells: 8
@@ -125,8 +126,8 @@ reach_round8:
   frontier_starts_per_cell: 8
   weighted_jaccard_min: 0.95
   new_volume_ratio_max: 0.01
-  frontier_new_volume_ratio_max: 0.005
-  boundary_change_ratio_max: 0.02
+  frontier_new_volume_ratio_max: 0.01
+  boundary_change_ratio_max: 0.05
   lower_upper_measure_gap_max: 0.05
   required_consecutive_rounds: 2
 

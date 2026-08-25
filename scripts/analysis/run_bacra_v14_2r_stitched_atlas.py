@@ -14,6 +14,8 @@ import math
 import os
 from pathlib import Path
 import random
+import resource
+import shutil
 import subprocess
 import sys
 import time
@@ -33,7 +35,13 @@ from scipy.sparse import lil_matrix
 from scipy.spatial import cKDTree
 
 from quasi_exp.teacher.canonical import beta_rms_deg
+from quasi_exp.teacher.canonical_gauge import (
+    CanonicalAnchorPolicy,
+    GaugeCorrectorPolicy,
+    gauge_locked_predictor_corrector,
+)
 from quasi_exp.teacher.audit_shards import (
+    add_schedule_waypoint_estimates,
     build_audit_shard_registry,
     build_shard_completion_report,
     merge_validated_audit_shards,
@@ -45,6 +53,11 @@ from quasi_exp.teacher.canonical_atlas import (
     ContinuationOutcome,
     make_predictor_corrector_continuation,
 )
+from quasi_exp.teacher.optimized_continuation import (
+    make_iterative_weighted_dls_continuation,
+    make_optimized_predictor_corrector_continuation,
+)
+from quasi_exp.teacher.optimized_forward import optimized_forward
 from quasi_exp.teacher.experiment import atomic_write_json, sha256_file
 from quasi_exp.teacher.section_atlas_repair import (
     AtlasRepairPolicy,
@@ -128,6 +141,14 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("V14.2R audit shards require one-shard heartbeat cadence")
     if int(audit_execution.get("progress_every_schedules", 0)) < 1:
         raise ValueError("V14.2R audit shard progress cadence must be positive")
+    if int(audit_execution.get("logical_shard_count", 12)) < 12:
+        raise ValueError("V14.2R optimized audits require at least twelve logical shards")
+    if int(audit_execution.get("maximum_concurrent_workers", 12)) != 12:
+        raise ValueError("V14.2R numerical concurrency remains frozen at twelve")
+    if str(audit_execution.get("assignment_strategy", "hash")) not in {
+        "hash", "cost_balanced_lpt"
+    }:
+        raise ValueError("unsupported V14.2R audit assignment strategy")
     retry_chains = {
         str(tier["tier_id"]): tuple(map(str, tier["solver_chain"]))
         for tier in config["audit_v2"]["retry_tiers"]
@@ -145,10 +166,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("V14.2R retry tier order is registered")
     if int(config["audit_v2"]["repeats_per_direction"]) != 3:
         raise ValueError("V14.2R requires three source-only repeats per direction")
-    if int(config["mechanism_gate"]["minimum_passing_patches"]) != 3:
-        raise ValueError("V14.2R four-patch Gate requires 3/4")
-    if int(config["reach_round7"]["seed_a"]) == int(config["reach_round7"]["seed_b"]):
-        raise ValueError("Reach Round 7 replicas require independent scramble seeds")
+    expected_passing_patches = (
+        4 if str(config.get("protocol_version", "retry6")) == "retry7" else 3
+    )
+    if int(config["mechanism_gate"]["minimum_passing_patches"]) != expected_passing_patches:
+        raise ValueError(
+            f"V14.2R {config.get('protocol_version', 'retry6')} four-patch Gate "
+            f"requires {expected_passing_patches}/4"
+        )
+    reach_key = "reach_round8" if config.get("protocol_version") == "retry7" else "reach_round7"
+    if int(config[reach_key]["seed_a"]) == int(config[reach_key]["seed_b"]):
+        raise ValueError(f"{reach_key} replicas require independent scramble seeds")
     return config
 
 
@@ -163,6 +191,8 @@ def _strict(value: Any) -> Any:
         return _strict(value.tolist())
     if isinstance(value, np.generic):
         return _strict(value.item())
+    if isinstance(value, Path):
+        return str(value)
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
@@ -183,8 +213,41 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
-    frame.to_parquet(temporary, index=False)
+    frame.to_parquet(temporary, index=False, compression="zstd")
     temporary.replace(path)
+
+
+def _report_records_frame(records: Sequence[Mapping[str, Any]]) -> pd.DataFrame:
+    """Return a stable, flat Parquet representation of JSON patch reports.
+
+    Patch reports intentionally keep structured JSON evidence.  Pandas exposes
+    those values as ``object`` columns, and PyArrow cannot infer a list element
+    type for heterogeneous scientific keys such as
+    ``[task_node_id, candidate_id]``.  The JSON files remain authoritative;
+    the aggregate Parquet table stores every structured value as canonical JSON
+    text so that its schema is deterministic across patches and PyArrow builds.
+    """
+
+    frame = pd.DataFrame.from_records(records)
+    for column in frame.columns:
+        if frame[column].map(
+            lambda value: isinstance(
+                value, (Mapping, list, tuple, set, frozenset, np.ndarray)
+            )
+        ).any():
+            frame[column] = frame[column].map(
+                lambda value: json.dumps(
+                    _strict(value),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if isinstance(
+                    value, (Mapping, list, tuple, set, frozenset, np.ndarray)
+                )
+                else value
+            )
+    return frame
 
 
 def _gate(path: Path, checks: Mapping[str, bool], **evidence: Any) -> dict[str, Any]:
@@ -328,6 +391,7 @@ def _audit_policy(config: Mapping[str, Any]) -> AuditV2Policy:
         continuation_residual_max_mm=float(row["continuation_residual_max_mm"]),
         repeats_per_direction=int(row["repeats_per_direction"]),
         repeat_perturbation_rad=float(row.get("repeat_perturbation_rad", 1.0e-8)),
+        directions=tuple(map(str, row.get("directions", ("forward", "reverse")))),
         retry_tiers=tuple(
             RetryTier(
                 str(tier["tier_id"]),
@@ -887,20 +951,32 @@ def _root_candidates_with_enrichment(
             )
             if all(beta_rms_deg(candidate.beta_rad, existing.beta_rad) > 0.5 for existing in roots):
                 roots.append(candidate)
-    ordered = list(roots)
-    random.Random(int(seed)).shuffle(ordered)
-    selected = tuple(ordered[:desired])
+    root_by_key = {candidate.key: candidate for candidate in roots}
+    anchors = [root_by_key[key] for key in root_keys if key in root_by_key]
+    anchor_keys = {candidate.key for candidate in anchors}
+    remaining = [candidate for candidate in roots if candidate.key not in anchor_keys]
+    random.Random(int(seed)).shuffle(remaining)
+    selected = tuple((anchors + remaining)[:desired])
     merged = tuple(candidates) + tuple(item for item in roots if item.key not in {row.key for row in candidates})
     return merged, tuple(item.key for item in selected), {
         "root_candidate_count_before_enrichment": before,
         "root_candidate_count_after_enrichment": len(roots),
         "requested_root_count": int(desired),
         "selected_root_count": len(selected),
-        "root_budget_saturated": len(selected) >= desired,
+        "root_budget_filled": len(selected) >= desired,
+        "canonical_anchor_key": list(root_keys[0]) if root_keys else None,
+        "canonical_anchor_retained": bool(root_keys and root_keys[0] in {item.key for item in selected}),
     }
 
 
-def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges: pd.DataFrame):
+def _registered_retry_adapter(
+    environment: Any,
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+    *,
+    gauge_policy: GaugeCorrectorPolicy | None = None,
+    anchor_beta_rad: np.ndarray | None = None,
+):
     nodes = atlas_nodes_from_frames(tasks, task_edges)
     node_by_id = {node.node_id: node for node in nodes}
     cell_by_node = {
@@ -916,22 +992,76 @@ def _registered_retry_adapter(environment: Any, tasks: pd.DataFrame, task_edges:
                 f"unregistered retry solver chain: {tier.tier_id}={tier.solver_chain}"
             )
         if tier.tier_id not in cache:
-            raw_base = make_predictor_corrector_continuation(
-                environment,
-                damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
-                max_corrector_iterations=tier.maximum_iterations,
-                residual_tolerance_mm=3.0,
-            )
-            bounded_chain = expected_chain[:2]
+            if gauge_policy is not None and tier.tier_id == "R0":
+                registered_raw = gauge_locked_predictor_corrector(
+                    environment,
+                    policy=replace(
+                        gauge_policy,
+                        cartesian_step_mm=float(tier.maximum_step_mm),
+                        maximum_iterations=int(tier.maximum_iterations),
+                    ),
+                    anchor_beta_rad=anchor_beta_rad,
+                )
+            else:
+                continuation_factory = (
+                    make_optimized_predictor_corrector_continuation
+                    if hasattr(environment, "fk_and_jacobian")
+                    else make_predictor_corrector_continuation
+                )
+                bounded_raw = continuation_factory(
+                    environment,
+                    damping={"R0": 1e-3, "R1": 2e-3, "R2": 5e-3}[tier.tier_id],
+                    max_corrector_iterations=tier.maximum_iterations,
+                    residual_tolerance_mm=3.0,
+                )
+                if tier.tier_id in {"R1", "R2"} and hasattr(
+                    environment, "fk_and_jacobian"
+                ):
+                    dls_raw = make_iterative_weighted_dls_continuation(
+                        environment,
+                        damping={"R1": 2e-3, "R2": 5e-3}[tier.tier_id],
+                        max_corrector_iterations=tier.maximum_iterations,
+                        residual_tolerance_mm=3.0,
+                    )
+
+                    def registered_raw(
+                        local_source: AtlasCandidate,
+                        local_target: AtlasTaskNode,
+                    ) -> ContinuationOutcome:
+                        dls = dls_raw(local_source, local_target)
+                        if dls.success:
+                            return replace(
+                                dls,
+                                status=(
+                                    "audit_solver_chain[weighted_dls]::"
+                                    f"{dls.status}"
+                                ),
+                            )
+                        bounded = bounded_raw(local_source, local_target)
+                        return replace(
+                            bounded,
+                            status=(
+                                "audit_solver_chain[weighted_dls>bounded_ls]::"
+                                f"{bounded.status}"
+                            ),
+                            corrector_iterations=(
+                                dls.corrector_iterations
+                                + bounded.corrector_iterations
+                            ),
+                        )
+                else:
+                    registered_raw = bounded_raw
 
             def base(
                 local_source: AtlasCandidate, local_target: AtlasTaskNode
             ) -> ContinuationOutcome:
-                outcome = raw_base(local_source, local_target)
+                outcome = registered_raw(local_source, local_target)
+                if outcome.status.startswith("audit_solver_chain["):
+                    return outcome
                 return replace(
                     outcome,
                     status=(
-                        f"audit_solver_chain[{'>'.join(bounded_chain)}]::"
+                        f"audit_solver_chain[{'>'.join(expected_chain[:2])}]::"
                         f"{outcome.status}"
                     ),
                 )
@@ -1105,12 +1235,18 @@ def _audit_bundle_artifacts(phase_directory: Path) -> tuple[dict[str, Any], ...]
     )
 
 
-def _audit_source_records() -> tuple[dict[str, Any], ...]:
+def _audit_source_records(
+    extra_paths: Sequence[Path] = (),
+) -> tuple[dict[str, Any], ...]:
     paths = (
         Path(__file__).resolve(),
+        SOURCE_ROOT / "src/quasi_exp/model/endpoint_kinematics.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/audit_shards.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/optimized_continuation.py",
+        SOURCE_ROOT / "src/quasi_exp/teacher/optimized_forward.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/section_atlas_repair.py",
         SOURCE_ROOT / "src/quasi_exp/teacher/section_first_atlas.py",
+        *tuple(Path(path).resolve() for path in extra_paths),
     )
     return tuple(
         {
@@ -1151,6 +1287,8 @@ def _validate_audit_bundle(
             "artifacts": artifacts,
             "source_records": source_records,
             "runtime_sha256": str(manifest.get("runtime_sha256", "")),
+            "gauge_policy": manifest.get("gauge_policy"),
+            "anchor_beta_rad": manifest.get("anchor_beta_rad"),
         }
     )
     if str(manifest.get("input_sha256", "")) != expected_input_sha:
@@ -1175,13 +1313,56 @@ def _run_audit_shard_worker(
     selected_edges = pd.read_parquet(phase_directory / "selected_edges.parquet")
     nodes = atlas_nodes_from_frames(tasks, task_edges)
     growth = section_growth_from_frames(nodes, hypotheses, selected_edges)
-    environment = legacy._EndpointOnlyForwardAdapter(
-        load_environment(project_root, _source_paths(config, project_root)["robot_config"])
+    reference_environment = load_environment(
+        project_root, _source_paths(config, project_root)["robot_config"]
     )
-    _nodes, continuation = legacy._segmented_continuation(
-        environment, tasks, task_edges
+    environment = (
+        optimized_forward(reference_environment)
+        if bool(config.get("optimization", {}).get("analytic_endpoint_kinematics", False))
+        else legacy._EndpointOnlyForwardAdapter(reference_environment)
     )
-    retry = _registered_retry_adapter(environment, tasks, task_edges)
+    gauge_payload = manifest.get("gauge_policy")
+    gauge_policy = (
+        GaugeCorrectorPolicy(**gauge_payload)
+        if isinstance(gauge_payload, Mapping)
+        else None
+    )
+    anchor_payload = manifest.get("anchor_beta_rad")
+    anchor_beta = (
+        np.asarray(anchor_payload, dtype=float).reshape(6)
+        if anchor_payload is not None
+        else None
+    )
+    if gauge_policy is None:
+        _nodes, continuation = legacy._segmented_continuation(
+            environment, tasks, task_edges
+        )
+    else:
+        node_by_id = {node.node_id: node for node in nodes}
+        cell_by_node = {
+            int(row.task_node_id): (
+                int(row.cell_level_mm), int(row.cell_ix),
+                int(row.cell_iy), int(row.cell_iz),
+            )
+            for row in tasks.itertuples(index=False)
+        }
+        continuation = make_segmented_continuation(
+            gauge_locked_predictor_corrector(
+                environment,
+                policy=gauge_policy,
+                anchor_beta_rad=anchor_beta,
+            ),
+            node_by_id,
+            cell_by_node,
+            step_max_mm=float(gauge_policy.cartesian_step_mm),
+        )
+    retry = _registered_retry_adapter(
+        environment,
+        tasks,
+        task_edges,
+        gauge_policy=gauge_policy,
+        anchor_beta_rad=anchor_beta,
+    )
     shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
     shard_directory.mkdir(parents=True, exist_ok=True)
     progress_path = shard_directory / "progress.json"
@@ -1212,13 +1393,26 @@ def _run_audit_shard_worker(
         )
         last_reported = completed_schedule_count
 
+    audit_policy = replace(
+        _audit_policy(config),
+        repeats_per_direction=int(
+            manifest.get("audit_policy", {}).get(
+                "repeats_per_direction", manifest["repeats_per_direction"]
+            )
+        ),
+        directions=tuple(
+            manifest.get("audit_policy", {}).get(
+                "directions", ("forward", "reverse")
+            )
+        ),
+    )
     report_progress(0, len(shard_registry))
     if len(shard_registry):
         executions = execute_audit_schedules(
             growth,
             shard_registry,
             continuation,
-            _audit_policy(config),
+            audit_policy,
             retry_continuation=retry,
             progress_callback=report_progress,
         )
@@ -1233,7 +1427,8 @@ def _run_audit_shard_worker(
         input_sha256=str(manifest["input_sha256"]),
         phase_id=str(manifest["phase_id"]),
         shard_id=int(shard_id),
-        repeats_per_direction=int(config["audit_v2"]["repeats_per_direction"]),
+        repeats_per_direction=audit_policy.repeats_per_direction,
+        directions=audit_policy.directions,
     )
     report["pid"] = os.getpid()
     report["executions_file_sha256"] = sha256_file(
@@ -1243,6 +1438,7 @@ def _run_audit_shard_worker(
     report["finished_at_unix_s"] = time.time()
     report["wall_time_s"] = report["finished_at_unix_s"] - worker_started_at
     report["cpu_time_s"] = time.process_time() - worker_cpu_started
+    report["synthetic_empty_shard"] = False
     _write_json(shard_directory / "report.json", report)
     _write_json(
         progress_path,
@@ -1277,6 +1473,9 @@ class _SubprocessAuditExecutor:
         patch_directory: Path,
         shard_count: int,
         token_pool: _AuditWorkerTokenPool | None = None,
+        maximum_concurrent_workers: int | None = None,
+        assignment_strategy: str = "hash",
+        worker_runner_path: Path | None = None,
     ) -> None:
         self.config = config
         self.project_root = project_root
@@ -1285,6 +1484,19 @@ class _SubprocessAuditExecutor:
         self.patch_directory = patch_directory
         self.shard_count = max(1, int(shard_count))
         self.token_pool = token_pool
+        self.maximum_concurrent_workers = max(
+            1,
+            min(
+                self.shard_count,
+                int(maximum_concurrent_workers or self.shard_count),
+            ),
+        )
+        self.assignment_strategy = str(assignment_strategy)
+        self.worker_runner_path = (
+            Path(__file__).resolve()
+            if worker_runner_path is None
+            else Path(worker_runner_path).resolve()
+        )
 
     def __call__(
         self,
@@ -1301,10 +1513,17 @@ class _SubprocessAuditExecutor:
         phase_directory = self.patch_directory / "_audit_checkpoints" / str(phase_id)
         phase_directory.mkdir(parents=True, exist_ok=True)
         frames = growth.frames()
+        registered_schedules = schedules
+        if self.assignment_strategy == "cost_balanced_lpt":
+            registered_schedules = add_schedule_waypoint_estimates(
+                schedules, self.tasks, maximum_step_mm=5.0
+            )
         registry = build_audit_shard_registry(
-            schedules,
+            registered_schedules,
             shard_count=self.shard_count,
             repeats_per_direction=policy.repeats_per_direction,
+            directions=policy.directions,
+            assignment_strategy=self.assignment_strategy,
         )
         _write_parquet(self.tasks, phase_directory / "task_nodes.parquet")
         _write_parquet(self.task_edges, phase_directory / "task_edges.parquet")
@@ -1314,12 +1533,14 @@ class _SubprocessAuditExecutor:
         _write_parquet(frames["selected_edges"], phase_directory / "selected_edges.parquet")
         _write_parquet(registry, phase_directory / "schedule_registry.parquet")
         artifacts = _audit_bundle_artifacts(phase_directory)
-        source_records = _audit_source_records()
+        source_records = _audit_source_records((self.worker_runner_path,))
         input_sha = _payload_sha256(
             {
                 "artifacts": artifacts,
                 "source_records": source_records,
                 "runtime_sha256": _runtime_sha256(),
+                "gauge_policy": self.config.get("_active_gauge_policy"),
+                "anchor_beta_rad": self.config.get("_active_anchor_beta_rad"),
             }
         )
         manifest = {
@@ -1332,6 +1553,29 @@ class _SubprocessAuditExecutor:
             "shard_count": self.shard_count,
             "schedule_count": len(registry),
             "repeats_per_direction": policy.repeats_per_direction,
+            "directions": list(policy.directions),
+            "audit_policy": {
+                "geometry_p95_max_deg": policy.geometry_p95_max_deg,
+                "geometry_max_deg": policy.geometry_max_deg,
+                "repeat_p95_max_deg": policy.repeat_p95_max_deg,
+                "continuation_residual_max_mm": policy.continuation_residual_max_mm,
+                "repeats_per_direction": policy.repeats_per_direction,
+                "repeat_perturbation_rad": policy.repeat_perturbation_rad,
+                "directions": list(policy.directions),
+                "retry_tiers": [
+                    {
+                        "tier_id": tier.tier_id,
+                        "maximum_step_mm": tier.maximum_step_mm,
+                        "maximum_iterations": tier.maximum_iterations,
+                        "solver_chain": list(tier.solver_chain),
+                    }
+                    for tier in policy.retry_tiers
+                ],
+            },
+            "assignment_strategy": self.assignment_strategy,
+            "maximum_concurrent_workers": self.maximum_concurrent_workers,
+            "gauge_policy": self.config.get("_active_gauge_policy"),
+            "anchor_beta_rad": self.config.get("_active_anchor_beta_rad"),
             "artifacts": artifacts,
             "source_records": source_records,
         }
@@ -1343,11 +1587,11 @@ class _SubprocessAuditExecutor:
             shard_directory = phase_directory / f"shard_{shard_id:02d}"
             report_path = shard_directory / "report.json"
             execution_path = shard_directory / "executions.parquet"
+            shard_registry = registry[registry["shard_id"].eq(shard_id)]
             if report_path.is_file() and execution_path.is_file():
                 try:
                     executions = pd.read_parquet(execution_path)
                     report = _read_json(report_path)
-                    shard_registry = registry[registry["shard_id"].eq(shard_id)]
                     valid = validate_shard_completion(
                         report,
                         shard_registry,
@@ -1358,6 +1602,7 @@ class _SubprocessAuditExecutor:
                         phase_id=str(phase_id),
                         shard_id=shard_id,
                         repeats_per_direction=policy.repeats_per_direction,
+                        directions=policy.directions,
                     )
                     file_hash_ok = str(report.get("executions_file_sha256", "")) == sha256_file(
                         execution_path
@@ -1367,6 +1612,53 @@ class _SubprocessAuditExecutor:
                         continue
                 except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                     pass
+            if shard_registry.empty:
+                shard_directory.mkdir(parents=True, exist_ok=True)
+                executions = pd.DataFrame(columns=AUDIT_EXECUTION_COLUMNS)
+                _write_parquet(executions, execution_path)
+                finished_at = time.time()
+                report = build_shard_completion_report(
+                    shard_registry,
+                    executions,
+                    source_sha=_git_sha(),
+                    config_sha256=str(manifest["config_sha256"]),
+                    input_sha256=input_sha,
+                    phase_id=str(phase_id),
+                    shard_id=shard_id,
+                    repeats_per_direction=policy.repeats_per_direction,
+                    directions=policy.directions,
+                )
+                report.update(
+                    {
+                        "pid": os.getpid(),
+                        "executions_file_sha256": sha256_file(execution_path),
+                        "started_at_unix_s": finished_at,
+                        "finished_at_unix_s": finished_at,
+                        "wall_time_s": 0.0,
+                        "cpu_time_s": 0.0,
+                        "synthetic_empty_shard": True,
+                    }
+                )
+                _write_json(report_path, report)
+                _write_json(
+                    shard_directory / "progress.json",
+                    {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "phase_id": str(phase_id),
+                        "shard_id": shard_id,
+                        "completed_schedule_count": 0,
+                        "total_schedule_count": 0,
+                        "execution_count": 0,
+                        "started_at_unix_s": finished_at,
+                        "finished_at_unix_s": finished_at,
+                        "wall_time_s": 0.0,
+                        "cpu_time_s": 0.0,
+                        "updated_at_unix_s": finished_at,
+                    },
+                )
+                completed[shard_id] = executions
+                continue
             missing.append(shard_id)
         reused_shard_count = len(completed)
 
@@ -1393,7 +1685,7 @@ class _SubprocessAuditExecutor:
 
         heartbeat()
         while missing or running:
-            while missing and len(running) < self.shard_count:
+            while missing and len(running) < self.maximum_concurrent_workers:
                 token = self.token_pool.try_acquire() if self.token_pool is not None else None
                 if self.token_pool is not None and token is None:
                     break
@@ -1403,7 +1695,7 @@ class _SubprocessAuditExecutor:
                 handle = (shard_directory / "worker.log").open("w", encoding="utf-8")
                 command = [
                     sys.executable,
-                    str(Path(__file__).resolve()),
+                    str(self.worker_runner_path),
                     "--config",
                     str(self.config["config_path"]),
                     "--audit-shard-bundle",
@@ -1466,6 +1758,7 @@ class _SubprocessAuditExecutor:
                     phase_id=str(phase_id),
                     shard_id=shard_id,
                     repeats_per_direction=policy.repeats_per_direction,
+                    directions=policy.directions,
                 )
                 if not valid["gate_pass"]:
                     raise RuntimeError(
@@ -1488,6 +1781,7 @@ class _SubprocessAuditExecutor:
             registry,
             completed,
             repeats_per_direction=policy.repeats_per_direction,
+            directions=policy.directions,
         )
         _write_parquet(merged, phase_directory / "executions.parquet")
         aggregate = _gate(
@@ -1495,12 +1789,14 @@ class _SubprocessAuditExecutor:
             {
                 "all_registered_shards_complete": len(completed) == self.shard_count,
                 "exact_execution_set": len(merged)
-                == len(registry) * 2 * policy.repeats_per_direction,
+                == len(registry) * len(policy.directions) * policy.repeats_per_direction,
             },
             phase_id=str(phase_id),
             schedule_count=len(registry),
             execution_count=len(merged),
             shard_count=self.shard_count,
+            maximum_concurrent_workers=self.maximum_concurrent_workers,
+            assignment_strategy=self.assignment_strategy,
             input_sha256=input_sha,
             executions_sha256=sha256_file(phase_directory / "executions.parquet"),
             resumed_shard_count=reused_shard_count,
@@ -1638,8 +1934,17 @@ def _variant_spec(name: str) -> tuple[int, int, int, bool, bool, bool]:
     specs = {
         "baseline": (4, 8, 20260871, False, False, False),
         "main_K1_R5": (1, 5, 20260871, False, False, False),
+        "K4_R5": (4, 5, 20260871, False, False, False),
+        "K1_R8": (1, 8, 20260871, False, False, False),
+        "K4_R8": (4, 8, 20260871, False, False, False),
+        "gauge_main_K1_R5": (1, 5, 20260871, False, False, False),
+        "gauge_K1_R8": (1, 8, 20260871, False, False, False),
+        "gauge_root_dropout": (1, 5, 20260871, False, True, False),
+        "gauge_meso_root_dropout": (1, 8, 20260871, False, True, False),
+        "gauge_root_order2": (1, 5, 20260871, False, False, False),
+        "gauge_task_graph_refined": (1, 5, 20260871, False, False, True),
         "root_dropout": (1, 5, 20260871, False, True, False),
-        "root_order2": (1, 5, 20260872, False, False, False),
+        "root_order2": (1, 5, 20260871, False, False, False),
         "consensus_patch07": (1, 5, 20260871, True, False, False),
         "task_graph_refined": (1, 5, 20260871, False, False, True),
         "meso_root_dropout": (4, 8, 20260871, False, True, False),
@@ -1647,6 +1952,47 @@ def _variant_spec(name: str) -> tuple[int, int, int, bool, bool, bool]:
     if name not in specs:
         raise ValueError(f"unknown V14.2R variant: {name}")
     return specs[name]
+
+
+def _apply_registered_root_variant(
+    root_keys: Sequence[tuple[int, str]],
+    *,
+    requested_root_count: int,
+    leave_one_out: bool,
+    reorder_nonanchors: bool,
+) -> tuple[tuple[tuple[int, str], ...], dict[str, Any]]:
+    """Apply root perturbations without ever changing the frozen anchor."""
+
+    selected = tuple(root_keys[: int(requested_root_count)])
+    metadata: dict[str, Any] = {
+        "selected_root_count": len(selected),
+        "root_budget_requested_count": int(requested_root_count),
+        "root_budget_filled": len(selected) >= int(requested_root_count),
+    }
+    if leave_one_out and selected:
+        anchor, nonanchors = selected[0], list(selected[1:])
+        if nonanchors:
+            nonanchors.pop()
+        selected = (anchor, *nonanchors)
+        metadata.update(
+            {
+                "leave_one_root_out": True,
+                "selected_root_count": len(selected),
+                "root_budget_requested_count": max(1, int(requested_root_count) - 1),
+                "root_budget_filled": len(selected)
+                >= max(1, int(requested_root_count) - 1),
+            }
+        )
+    if reorder_nonanchors and selected:
+        selected = (selected[0], *tuple(reversed(selected[1:])))
+        metadata.update(
+            {
+                "same_root_set_reordered": True,
+                "canonical_anchor_position_frozen": True,
+            }
+        )
+    metadata["canonical_anchor_retained"] = bool(selected and selected[0] == root_keys[0])
+    return selected, metadata
 
 
 def _refine_task_graph(tasks: pd.DataFrame, task_edges: pd.DataFrame) -> pd.DataFrame:
@@ -1671,6 +2017,68 @@ def _refine_task_graph(tasks: pd.DataFrame, task_edges: pd.DataFrame) -> pd.Data
     if not additions:
         return task_edges.copy()
     return pd.concat([task_edges, pd.DataFrame.from_records(additions)], ignore_index=True)
+
+
+def _pre_pruning_hypothesis_metrics(
+    growth_events: pd.DataFrame,
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Project proposal multiplicity before beam pruning onto physical nodes."""
+
+    columns = (
+        "chart_id",
+        "node_id",
+        "wave",
+        "reason",
+        "pre_pruning_proposal_count",
+        "pre_pruning_cluster_count",
+        "post_pruning_hypothesis_count",
+    )
+    if growth_events.empty:
+        return pd.DataFrame(columns=columns), {
+            "pre_pruning_proposal_count": 0,
+            "pre_pruning_cluster_count": 0,
+            "post_pruning_hypothesis_count": 0,
+            "alternative_hypothesis_node_count": 0,
+            "alternative_hypothesis_node_centrality_max": 0.0,
+        }
+    frame = growth_events.copy()
+    for name in columns[4:]:
+        if name not in frame:
+            frame[name] = 0
+    frame = frame.loc[:, list(columns)].copy()
+    degree: dict[int, int] = {
+        int(node_id): 0 for node_id in tasks["task_node_id"].astype(int)
+    }
+    for row in task_edges.itertuples(index=False):
+        left, right = int(row.left_node_id), int(row.right_node_id)
+        degree[left] = degree.get(left, 0) + 1
+        degree[right] = degree.get(right, 0) + 1
+    denominator = max(1, len(degree) - 1)
+    frame["alternative_hypothesis_node_centrality"] = frame["node_id"].map(
+        lambda node: degree.get(int(node), 0) / denominator
+    )
+    alternative = frame[frame["pre_pruning_cluster_count"].astype(int) > 1]
+    return frame, {
+        "pre_pruning_proposal_count": int(
+            frame["pre_pruning_proposal_count"].astype(int).sum()
+        ),
+        "pre_pruning_cluster_count": int(
+            frame["pre_pruning_cluster_count"].astype(int).sum()
+        ),
+        "post_pruning_hypothesis_count": int(
+            frame["post_pruning_hypothesis_count"].astype(int).sum()
+        ),
+        "alternative_hypothesis_node_count": int(
+            alternative["node_id"].astype(int).nunique()
+        ),
+        "alternative_hypothesis_node_centrality_max": (
+            float(alternative["alternative_hypothesis_node_centrality"].max())
+            if len(alternative)
+            else 0.0
+        ),
+    }
 
 
 def _strong_reference_primary(
@@ -1986,6 +2394,38 @@ def _load_validated_stage_result(
         return None
 
 
+def _selected_gauge_policy(
+    config: Mapping[str, Any], output_root: Path, variant: str
+) -> GaugeCorrectorPolicy | None:
+    if not str(variant).startswith("gauge_"):
+        return None
+    selection_path = output_root / "04_gauge_kernel_selection/selected_kernel.json"
+    if not selection_path.is_file():
+        raise FileNotFoundError(
+            f"gauge patch execution requires a sealed selected kernel: {selection_path}"
+        )
+    selected = _read_json(selection_path)
+    if not bool(selected.get("proceed_to_patch07_repair", selected.get("gate_pass", False))):
+        raise RuntimeError(
+            "selected gauge kernel is not authorized for registered patch repair"
+        )
+    if str(selected.get("kernel_id", "")) == "C0_baseline":
+        return None
+    return GaugeCorrectorPolicy(
+        mode=str(selected["mode"]),
+        gauge_gain=float(selected["gauge_gain"]),
+        maximum_gauge_step_deg=float(selected["maximum_gauge_step_deg"]),
+        anchor_weight=float(selected.get("anchor_weight", 0.0)),
+        cartesian_step_mm=float(selected["cartesian_step_mm"]),
+        maximum_iterations=int(selected["maximum_iterations"]),
+        damping=float(selected.get("damping", 1.0e-3)),
+        beta_weights=tuple(map(float, config["rooted_section"]["beta_weights"])),
+        residual_tolerance_mm=float(
+            config["audit_v2"]["continuation_residual_max_mm"]
+        ),
+    )
+
+
 def _execute_patch(
     config: Mapping[str, Any],
     project_root: Path,
@@ -1995,10 +2435,22 @@ def _execute_patch(
     directory: Path,
 ) -> dict[str, Any]:
     patch_started = time.time()
+    patch_cpu_started = time.process_time()
     directory.mkdir(parents=True, exist_ok=True)
     legacy_config = legacy.load_config(_source_paths(config, project_root)["legacy_config"])
     if patch_id == "patch_12":
         replacement = output_root / STAGE_DIRS["replacement_confirmation"]
+        if not (replacement / "patch12_task_nodes.parquet").is_file():
+            retry6_root = config.get("sources", {}).get("retry6_root")
+            if retry6_root is None:
+                raise FileNotFoundError(
+                    "patch_12 requires a sealed replacement-confirmation input"
+                )
+            replacement = (
+                project_root
+                / str(retry6_root)
+                / "01_replacement_confirmation"
+            )
         tasks = pd.read_parquet(replacement / "patch12_task_nodes.parquet").drop(columns=["patch_id"])
         task_edges = pd.read_parquet(replacement / "patch12_task_edges.parquet").drop(columns=["patch_id"])
         candidate_frame = pd.read_parquet(replacement / "patch12_candidate_clusters.parquet").drop(columns=["patch_id"])
@@ -2030,12 +2482,58 @@ def _execute_patch(
     if existing is not None:
         return existing
     candidates = legacy._candidates_from_frame(candidate_frame)
-    environment = legacy._EndpointOnlyForwardAdapter(
-        load_environment(project_root, _source_paths(config, project_root)["robot_config"])
+    reference_environment = load_environment(
+        project_root, _source_paths(config, project_root)["robot_config"]
     )
-    nodes, continuation = legacy._segmented_continuation(
-        environment, tasks, task_edges
+    environment = (
+        optimized_forward(reference_environment)
+        if bool(config.get("optimization", {}).get("analytic_endpoint_kinematics", False))
+        else legacy._EndpointOnlyForwardAdapter(reference_environment)
     )
+    gauge_policy = _selected_gauge_policy(config, output_root, variant)
+    preview_roots = legacy._root_keys(
+        tasks, assignments, candidates, max(1, max(8, root_count))
+    )
+    candidate_by_key = {candidate.key: candidate for candidate in candidates}
+    anchor_beta_rad = (
+        candidate_by_key[preview_roots[0]].beta_rad
+        if preview_roots and preview_roots[0] in candidate_by_key
+        else None
+    )
+    if isinstance(config, dict):
+        config["_active_gauge_policy"] = (
+            asdict(gauge_policy) if gauge_policy is not None else None
+        )
+        config["_active_anchor_beta_rad"] = (
+            anchor_beta_rad.tolist() if anchor_beta_rad is not None else None
+        )
+    if gauge_policy is None:
+        nodes, continuation = legacy._segmented_continuation(
+            environment, tasks, task_edges
+        )
+    else:
+        nodes = atlas_nodes_from_frames(tasks, task_edges)
+        node_by_id = {node.node_id: node for node in nodes}
+        cell_by_node = {
+            int(row.task_node_id): (
+                int(row.cell_level_mm),
+                int(row.cell_ix),
+                int(row.cell_iy),
+                int(row.cell_iz),
+            )
+            for row in tasks.itertuples(index=False)
+        }
+        raw_gauge = gauge_locked_predictor_corrector(
+            environment,
+            policy=gauge_policy,
+            anchor_beta_rad=anchor_beta_rad,
+        )
+        continuation = make_segmented_continuation(
+            raw_gauge,
+            node_by_id,
+            cell_by_node,
+            step_max_mm=float(gauge_policy.cartesian_step_mm),
+        )
     input_ready = time.time()
     growth_started = time.time()
     checkpoint = _load_growth_checkpoint(
@@ -2048,13 +2546,31 @@ def _execute_patch(
         variant=variant,
     )
     if checkpoint is None:
-        initial_roots = legacy._root_keys(tasks, assignments, candidates, max(1, root_count))
-        candidates, root_keys, root_report = _root_candidates_with_enrichment(
-            environment, tasks, candidates, initial_roots, root_count, seed
+        retry7 = str(config.get("protocol_version", "retry6")) == "retry7"
+        registry_root_count = max(8, root_count) if retry7 else root_count
+        initial_roots = legacy._root_keys(
+            tasks, assignments, candidates, max(1, registry_root_count)
         )
-        if leave_one_out and root_keys:
-            root_keys = root_keys[1:]
-            root_report["leave_one_root_out"] = True
+        candidates, root_keys, root_report = _root_candidates_with_enrichment(
+            environment,
+            tasks,
+            candidates,
+            initial_roots,
+            registry_root_count,
+            seed,
+        )
+        if retry7:
+            root_report["frozen_root_registry_count"] = len(root_keys)
+            root_report["frozen_root_registry"] = [list(key) for key in root_keys]
+            root_keys = root_keys[:root_count]
+            root_report["nested_root_prefix_contract"] = "R5_is_frozen_R8_prefix"
+        root_keys, root_variant_report = _apply_registered_root_variant(
+            root_keys,
+            requested_root_count=root_count,
+            leave_one_out=leave_one_out,
+            reorder_nonanchors=variant in {"root_order2", "gauge_root_order2"},
+        )
+        root_report.update(root_variant_report)
         if not root_keys:
             raise RuntimeError(f"no usable roots for {patch_id}/{variant}")
         growth = build_section_first_atlas(
@@ -2094,14 +2610,56 @@ def _execute_patch(
         else None
     )
     repair_started = time.time()
-    repaired = repair_rooted_section_atlas(
-        growth,
-        continuation,
-        patch_id=patch_id,
-        method=variant,
-        policy=_repair_policy(config),
-        retry_continuation=_registered_retry_adapter(environment, tasks, task_edges),
-        schedule_executor=_SubprocessAuditExecutor(
+    anchor_payload = root_report.get("canonical_anchor_key")
+    anchor_key = (
+        (int(anchor_payload[0]), str(anchor_payload[1]))
+        if isinstance(anchor_payload, (list, tuple)) and len(anchor_payload) == 2
+        else None
+    )
+    root_priority = tuple(
+        dict.fromkeys(
+            ([anchor_key] if anchor_key is not None else [])
+            + [chart.root_key for chart in growth.charts]
+        )
+    )
+    anchor_config = config.get("canonical_anchor", {})
+    anchor_policy = (
+        CanonicalAnchorPolicy(
+            ordered_anchor_root_keys=root_priority,
+            minimum_component_coverage=float(
+                anchor_config.get(
+                    "minimum_component_coverage",
+                    config["mechanism_gate"]["primary_label_coverage_min"],
+                )
+            ),
+            minimum_coherent_measure=float(
+                anchor_config.get(
+                    "minimum_coherent_measure",
+                    config["mechanism_gate"]["largest_stitched_component_min"],
+                )
+            ),
+            allow_stitchable_extensions=bool(
+                anchor_config.get("allow_stitchable_extensions", True)
+            ),
+            require_anchor_selected=bool(
+                anchor_config.get("require_anchor_selected", True)
+            ),
+        )
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else None
+    )
+    repair_arguments = {
+        "patch_id": patch_id,
+        "method": variant,
+        "policy": _repair_policy(config),
+        "retry_continuation": _registered_retry_adapter(
+            environment,
+            tasks,
+            task_edges,
+            gauge_policy=gauge_policy,
+            anchor_beta_rad=anchor_beta_rad,
+        ),
+        "schedule_executor": _SubprocessAuditExecutor(
             config=config,
             project_root=project_root,
             tasks=tasks,
@@ -2109,13 +2667,48 @@ def _execute_patch(
             patch_directory=directory,
             shard_count=int(config.get("_audit_shards_per_patch", 1)),
             token_pool=token_pool,
+            maximum_concurrent_workers=int(
+                config["audit_execution"].get("maximum_concurrent_workers", 12)
+            ),
+            assignment_strategy=str(
+                config["audit_execution"].get("assignment_strategy", "hash")
+            ),
+            worker_runner_path=(
+                Path(str(config["_runner_path"]))
+                if config.get("_runner_path")
+                else None
+            ),
         ),
+        "canonical_root_priority": root_priority,
+        "canonical_anchor_policy": anchor_policy,
+    }
+    screening_first = bool(
+        config["audit_execution"].get("screening_first", False)
     )
+    repaired = repair_rooted_section_atlas(
+        growth,
+        continuation,
+        **repair_arguments,
+        screening_first=screening_first,
+    )
+    screening_fallback_used = False
+    if (
+        screening_first
+        and bool(config["audit_execution"].get("screening_fallback_to_full_audit", True))
+        and not repaired.certificate_gate
+    ):
+        screening_fallback_used = True
+        repaired = repair_rooted_section_atlas(
+            growth,
+            continuation,
+            **{**repair_arguments, "method": f"{variant}_full_fallback"},
+            screening_first=False,
+        )
     repair_finished = time.time()
     strong_reference_required = bool(
         int(tasks["source_parent_node_id"].nunique()) <= 64
         and patch_id in set(map(str, config["diagnostic_patch_ids"]))
-        and variant in {"baseline", "main_K1_R5"}
+        and variant in {"baseline", "main_K1_R5", "gauge_main_K1_R5"}
     )
     strong_reference_started = time.time()
     strong_reference = (
@@ -2130,8 +2723,14 @@ def _execute_patch(
     strong_reference_finished = time.time()
     artifact_write_started = time.time()
     directory.mkdir(parents=True, exist_ok=True)
+    pre_pruning_frame, pre_pruning_metrics = _pre_pruning_hypothesis_metrics(
+        growth_frames["growth_events"], tasks, task_edges
+    )
     for name, frame in growth_frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
+    _write_parquet(
+        pre_pruning_frame, directory / "pre_pruning_hypotheses.parquet"
+    )
     for name, frame in repaired.frames.items():
         _write_parquet(frame, directory / f"{name}.parquet")
     _write_json(directory / "strong_reference.json", strong_reference)
@@ -2148,6 +2747,12 @@ def _execute_patch(
         any(value in {"recoverable_numerical", "persistent_numerical"} for value in values)
         for values in schedule_classification
     )
+    retry_tier_counts = {
+        str(key): int(value)
+        for key, value in executions["retry_tier"].value_counts().items()
+    }
+    executed_chains = executions["executed_solver_chain"].astype(str)
+    artifact_paths = [path for path in directory.rglob("*") if path.is_file()]
     parent_by_task = tasks.set_index("task_node_id")["source_parent_node_id"].astype(int).to_dict()
     primary_nodes_by_chart: dict[str, list[int]] = {}
     for node_id, chart_id in repaired.primary_chart_by_node.items():
@@ -2179,6 +2784,16 @@ def _execute_patch(
         "abstention_ratio": len(repaired.abstained_node_ids) / max(1, len(growth.task_nodes)),
         "qualified_chart_count": len(repaired.qualified_chart_ids),
         "selected_stitch_component": list(repaired.selected_stitch_component),
+        "canonical_anchor_root_key": (
+            list(repaired.canonical_anchor_root_key)
+            if repaired.canonical_anchor_root_key is not None
+            else None
+        ),
+        "canonical_anchor_qualified": repaired.canonical_anchor_qualified,
+        "canonical_anchor_component_selected": repaired.canonical_anchor_component_selected,
+        "canonical_anchor_component_coverage": repaired.canonical_anchor_component_coverage,
+        "canonical_anchor_fallback_reason": repaired.canonical_anchor_fallback_reason,
+        "selected_anchor_rank": repaired.selected_anchor_rank,
         "geometry_gate": repaired.geometry_gate,
         "solver_gate": repaired.solver_gate,
         "repeat_gate": repaired.repeat_gate,
@@ -2201,7 +2816,10 @@ def _execute_patch(
         "first_pass_solver_failure_count": int(first_pass_failure_count),
         "first_pass_solver_failure_is_diagnostic_only": True,
         "geometric_branch_disagreement_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_count"],
+        "geometric_branch_disagreement_execution_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_execution_count"],
+        "geometric_branch_disagreement_unique_entity_count": repaired.diagnostic.solver_metrics["geometric_branch_disagreement_unique_entity_count"],
         "alternative_hypothesis_ratio": alternative_ratio,
+        **pre_pruning_metrics,
         "tiny_chart_parent_threshold": tiny_parent_threshold,
         "tiny_primary_measure_ratio": tiny_nodes / max(1, len(repaired.primary_chart_by_node)),
         "primary_parent_count_by_chart": parent_count_by_chart,
@@ -2218,6 +2836,21 @@ def _execute_patch(
             if len(optimization) else math.inf
         ),
         "runtime_s": time.time() - patch_started,
+        "cpu_time_s": time.process_time() - patch_cpu_started,
+        "peak_rss_mb": float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        / 1024.0,
+        "continuation_execution_count": len(executions),
+        "retry_tier_counts": retry_tier_counts,
+        "bounded_ls_execution_count": int(
+            executed_chains.str.contains("bounded_ls", regex=False).sum()
+        ),
+        "slsqp_execution_count": int(
+            executed_chains.str.contains("slsqp", regex=False).sum()
+        ),
+        "artifact_file_count_before_completion": len(artifact_paths),
+        "artifact_total_bytes_before_completion": int(
+            sum(path.stat().st_size for path in artifact_paths)
+        ),
         "phase_runtime_s": {
             "input_load": input_ready - patch_started,
             "root_growth_or_resume": growth_finished - growth_started,
@@ -2226,7 +2859,14 @@ def _execute_patch(
             - strong_reference_started,
             "artifact_write": artifact_write_finished - artifact_write_started,
         },
+        "kinematics_counters": (
+            environment.performance_counters()
+            if hasattr(environment, "performance_counters")
+            else {"fk_row_count": None, "jacobian_row_count": None}
+        ),
         "growth_checkpoint_resumed": growth_checkpoint_resumed,
+        "screening_first": screening_first,
+        "screening_fallback_used": screening_fallback_used,
         **root_report,
     }
     mechanism = config["mechanism_gate"]
@@ -2242,7 +2882,11 @@ def _execute_patch(
         and report["strong_reference_gate"]
         and (report["repeat_p95_deg"] is not None and report["repeat_p95_deg"] <= float(mechanism["repeat_p95_max_deg"]))
         and report["persistent_numerical_count"] <= int(mechanism["unresolved_critical_edges_max"])
-        and report["root_budget_saturated"]
+        and report["root_budget_filled"]
+        and (
+            str(config.get("protocol_version", "retry6")) != "retry7"
+            or report["canonical_anchor_component_selected"]
+        )
     )
     _write_json(directory / "report.json", report)
     _write_patch_completion_manifest(
@@ -2256,7 +2900,12 @@ def _execute_patch(
 
 
 def _run_patch_jobs(
-    config: Mapping[str, Any], output_root: Path, stage_name: str, jobs: Sequence[tuple[str, str]]
+    config: Mapping[str, Any],
+    output_root: Path,
+    stage_name: str,
+    jobs: Sequence[tuple[str, str]],
+    *,
+    runner_path: Path | None = None,
 ) -> None:
     # A coordinator must recompute the physical input digest before accepting
     # a completion manifest.  Launching the lightweight coordinator for every
@@ -2266,9 +2915,21 @@ def _run_patch_jobs(
         return
     environment = _thread_limited_environment()
     patch_worker_limit = int(config["parallel"]["patch_workers"])
-    total_audit_workers = int(config["audit_execution"]["total_shard_workers"])
+    total_audit_workers = int(
+        config["audit_execution"].get(
+            "logical_shard_count", config["audit_execution"]["total_shard_workers"]
+        )
+    )
+    maximum_concurrent_workers = int(
+        config["audit_execution"].get("maximum_concurrent_workers", 12)
+    )
     token_pool_directory = (
         output_root / STAGE_DIRS[stage_name] / "_audit_worker_tokens"
+    )
+    effective_runner = (
+        Path(str(config["_runner_path"])).resolve()
+        if runner_path is None and config.get("_runner_path")
+        else (Path(__file__).resolve() if runner_path is None else runner_path)
     )
     while pending:
         batch = pending[:patch_worker_limit]
@@ -2279,7 +2940,8 @@ def _run_patch_jobs(
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("a", encoding="utf-8")
             command = [
-                sys.executable, str(Path(__file__).resolve()),
+                sys.executable,
+                str(effective_runner),
                 "--config", str(config["config_path"]),
                 "--output-root", str(output_root),
                 "--stage", stage_name,
@@ -2287,7 +2949,7 @@ def _run_patch_jobs(
                 "--variant", variant,
                 "--audit-shards-per-patch", str(total_audit_workers),
                 "--audit-token-pool", str(token_pool_directory),
-                "--audit-token-count", str(total_audit_workers),
+                "--audit-token-count", str(maximum_concurrent_workers),
             ]
             process = subprocess.Popen(
                 command, cwd=SOURCE_ROOT, env=environment,
@@ -2333,7 +2995,9 @@ def stage_rooted_baseline(config: Mapping[str, Any], project_root: Path, output_
     patches = tuple(map(str, config["diagnostic_patch_ids"]))
     _run_patch_jobs(config, output_root, "rooted_baseline", [(patch, "baseline") for patch in patches])
     reports = [_read_json(stage / patch / "baseline/report.json") for patch in patches]
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "baseline_patch_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports), stage / "baseline_patch_reports.parquet"
+    )
     return _gate(stage / "gate.json", {"four_patch_baseline_complete": len(reports) == 4}, patch_reports=reports)
 
 
@@ -2527,21 +3191,38 @@ def _frame_stability(
         "coverage_jaccard": len(common) / max(1, len(union)),
         "beta_p95_deg": float(np.percentile(gaps, 95)) if len(gaps) else math.inf,
         "beta_max_deg": float(np.max(gaps)) if len(gaps) else math.inf,
-        "assignment_change_ratio": float(np.mean(gaps > 1.0)) if len(gaps) else 1.0,
+        "beta_disagreement_ratio_gt_1deg": float(np.mean(gaps > 1.0)) if len(gaps) else 1.0,
         "compared_node_count": len(common),
     }
     if left_directory is not None and right_directory is not None:
         left_edges = _verified_edge_entities(left_directory, config)
         right_edges = _verified_edge_entities(right_directory, config)
         edge_union = left_edges | right_edges
-        report["verified_edge_change_ratio"] = len(left_edges ^ right_edges) / max(1, len(edge_union))
+        if (
+            right_directory is not None
+            and any(
+                str(part).endswith("task_graph_refined")
+                for part in right_directory.parts
+            )
+        ):
+            report["verified_edge_change_ratio"] = len(left_edges - right_edges) / max(
+                1, len(left_edges)
+            )
+            report["verified_edge_comparison_semantics"] = (
+                "registered_baseline_edge_regression_only"
+            )
+            report["verified_new_edge_count"] = len(right_edges - left_edges)
+        else:
+            report["verified_edge_change_ratio"] = len(left_edges ^ right_edges) / max(1, len(edge_union))
+            report["verified_edge_comparison_semantics"] = "symmetric_difference"
+            report["verified_new_edge_count"] = 0
     else:
         report["verified_edge_change_ratio"] = math.inf
     report["gate_pass"] = bool(
         report["coverage_jaccard"] >= float(policy["coverage_jaccard_min"])
         and report["beta_p95_deg"] <= float(policy["beta_p95_max_deg"])
         and report["beta_max_deg"] <= float(policy["beta_max_deg"])
-        and report["assignment_change_ratio"] <= float(policy["assignment_change_max"])
+        and report["beta_disagreement_ratio_gt_1deg"] <= float(policy["assignment_change_max"])
         and report["verified_edge_change_ratio"] <= float(policy["verified_edge_change_max"])
     )
     return report
@@ -2556,14 +3237,26 @@ def stage_search_stability(config: Mapping[str, Any], project_root: Path, output
     variants = ("main_K1_R5", "root_dropout", "root_order2", "task_graph_refined")
     patches = tuple(map(str, config["diagnostic_patch_ids"]))
     jobs = [(patch, variant) for patch in patches for variant in variants]
-    jobs.append(("patch_07", "consensus_patch07"))
     _run_patch_jobs(config, output_root, "search_stability", jobs)
+    patch07_main = _read_json(stage / "patch_07/main_K1_R5/report.json")
+    consensus_triggered = bool(
+        float(patch07_main["alternative_hypothesis_ratio"])
+        > float(config["search_stability"]["true_beam_alternative_ratio_trigger"])
+    )
+    if consensus_triggered:
+        _run_patch_jobs(
+            config, output_root, "search_stability", (("patch_07", "consensus_patch07"),)
+        )
     rows = []
     alternative_ratios = []
     for patch in patches:
         baseline_directory = output_root / STAGE_DIRS["rooted_baseline"] / patch / "baseline"
         baseline = pd.read_parquet(baseline_directory / "primary_atlas.parquet")
-        patch_variants = (*variants, "consensus_patch07") if patch == "patch_07" else variants
+        patch_variants = (
+            (*variants, "consensus_patch07")
+            if patch == "patch_07" and consensus_triggered
+            else variants
+        )
         for variant in patch_variants:
             directory = stage / patch / variant
             comparison = _frame_stability(
@@ -2593,7 +3286,11 @@ def stage_search_stability(config: Mapping[str, Any], project_root: Path, output
     refinement_gate = bool(
         frame.loc[frame["variant"].eq("task_graph_refined"), "gate_pass"].all()
     )
-    consensus_report = _read_json(stage / "patch_07/consensus_patch07/report.json")
+    consensus_report = (
+        _read_json(stage / "patch_07/consensus_patch07/report.json")
+        if consensus_triggered
+        else None
+    )
     return _gate(
         stage / "gate.json",
         {
@@ -2613,7 +3310,10 @@ def stage_search_stability(config: Mapping[str, Any], project_root: Path, output
             "patch07_consensus_only",
         ],
         full_factorial_search_executed=False,
-        patch07_consensus_gate=bool(consensus_report["gate_pass"]),
+        patch07_consensus_triggered=consensus_triggered,
+        patch07_consensus_gate=(
+            bool(consensus_report["gate_pass"]) if consensus_report is not None else None
+        ),
         selected_variant=selected_variant,
         selection_rule="least_complexity_among_scientifically_passing_and_stable_variants",
     )
@@ -2636,7 +3336,10 @@ def stage_mechanism_gate(config: Mapping[str, Any], project_root: Path, output_r
         row["search_stability_gate"] = bool(stable_by_patch.get(row["patch_id"], False))
         row["final_gate_pass"] = bool(row["gate_pass"] and row["search_stability_gate"])
     passing = sum(bool(row["final_gate_pass"]) for row in reports)
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "four_patch_mechanism_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports),
+        stage / "four_patch_mechanism_reports.parquet",
+    )
     return _gate(
         stage / "gate.json",
         {
@@ -2655,6 +3358,47 @@ def stage_mechanism_gate(config: Mapping[str, Any], project_root: Path, output_r
 def stage_reach_round7(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     _require(config, output_root, "inventory")
     stage = output_root / STAGE_DIRS["reach_round7"]
+    reuse_root = config.get("sources", {}).get("reach_round7_reuse_root")
+    if reuse_root:
+        source_root = project_root / str(reuse_root)
+        source_gate = source_root / STAGE_DIRS["reach_round7"] / "gate.json"
+        source_report = source_root / STAGE_DIRS["reach_round7"] / "reach_round7_report.json"
+        source_manifest = source_root / STAGE_DIRS["summary"] / "artifact_manifest.json"
+        if not all(path.is_file() for path in (source_gate, source_report, source_manifest)):
+            raise FileNotFoundError("registered Reach Round7 reuse artifacts are incomplete")
+        closure = _verify_upstream_artifact_manifest(source_manifest)
+        gate = _read_json(source_gate)
+        report = _read_json(source_report)
+        reused_files = (
+            "replica_a_slab_round7.parquet",
+            "replica_b_slab_round7.parquet",
+            "frontier_inverse_probes_round7.parquet",
+        )
+        for name in reused_files:
+            source = source_root / STAGE_DIRS["reach_round7"] / name
+            if not source.is_file():
+                raise FileNotFoundError(f"registered Reach Round7 payload is missing: {source}")
+            stage.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, stage / name)
+        _write_json(stage / "reach_round7_report.json", report)
+        return _gate(
+            stage / "gate.json",
+            {
+                "registered_round7_reused": bool(closure.get("artifact_count", 0)),
+                "source_reach_converged": bool(gate.get("gate_pass", False)),
+            },
+            reach_convergence_gate=bool(gate.get("gate_pass", False)),
+            source_gate_pass=bool(gate.get("gate_pass", False)),
+            scientific_reuse=True,
+            reused_source_root=str(source_root),
+            reused_source_gate_sha256=sha256_file(source_gate),
+            reused_source_report_sha256=sha256_file(source_report),
+            reused_source_manifest_sha256=sha256_file(source_manifest),
+            reused_artifact_count=int(closure.get("artifact_count", 0)),
+            reused_payload_sha256={
+                name: sha256_file(stage / name) for name in reused_files
+            },
+        )
     if (stage / "gate.json").is_file():
         raise FileExistsError(f"Reach Round 7 already sealed: {stage}")
     stage.mkdir(parents=True, exist_ok=True)
@@ -2821,7 +3565,9 @@ def stage_confirmation(config: Mapping[str, Any], project_root: Path, output_roo
             report = _read_json(stage / patch / selected_variant / "report.json")
         reports.append(report)
     frame = pd.DataFrame.from_records(reports)
-    _write_parquet(frame, stage / "confirmation_patch_reports.parquet")
+    _write_parquet(
+        _report_records_frame(reports), stage / "confirmation_patch_reports.parquet"
+    )
     development = frame[frame["patch_split"].eq("development")]
     confirmation = frame[frame["patch_split"].eq("confirmation")]
     gate = config["confirmation_gate"]
@@ -2830,7 +3576,7 @@ def stage_confirmation(config: Mapping[str, Any], project_root: Path, output_roo
         "confirmation_pass": int(confirmation["gate_pass"].sum()) >= int(gate["confirmation_pass_min"]),
         "median_largest_component": float(frame.loc[frame["gate_pass"], "largest_stitched_component_ratio"].median()) >= float(gate["largest_component_median_min"]),
         "retained_certificates": bool(frame.loc[frame["gate_pass"], "certificate_gate"].all()),
-        "root_budget_saturated": bool(frame["root_budget_saturated"].all()),
+        "root_budget_filled": bool(frame["root_budget_filled"].all()),
         "strong_reference_validated": bool(frame["strong_reference_gate"].all()),
         "tiny_charts_do_not_dominate": bool(
             frame["tiny_primary_measure_ratio"].le(float(gate["tiny_chart_ratio_max"])).all()
@@ -2882,9 +3628,20 @@ def stage_meso_bridge(
         task_edges = pd.read_parquet(legacy_paths["original_atlas_edges"])
         candidates = pd.read_parquet(legacy_paths["original_candidate_clusters"])
         historical = pd.read_parquet(legacy_paths["assignments"])
-        replacement = pd.read_parquet(
-            output_root / STAGE_DIRS["replacement_confirmation"] / "patch12_assignments.parquet"
+        replacement_path = (
+            output_root
+            / STAGE_DIRS["replacement_confirmation"]
+            / "patch12_assignments.parquet"
         )
+        if not replacement_path.is_file() and config.get("sources", {}).get(
+            "retry6_root"
+        ):
+            replacement_path = (
+                project_root
+                / str(config["sources"]["retry6_root"])
+                / "01_replacement_confirmation/patch12_assignments.parquet"
+            )
+        replacement = pd.read_parquet(replacement_path)
         excluded = set(historical["parent_node_id"].astype(int)) | set(
             replacement["parent_node_id"].astype(int)
         )
@@ -3020,14 +3777,24 @@ def stage_meso_bridge(
             },
         )
 
+    meso_main = (
+        "gauge_K1_R8"
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else "baseline"
+    )
+    meso_dropout = (
+        "gauge_meso_root_dropout"
+        if str(config.get("protocol_version", "retry6")) == "retry7"
+        else "meso_root_dropout"
+    )
     _run_patch_jobs(
         config,
         output_root,
         "meso_bridge",
-        [("meso_512", "baseline"), ("meso_512", "meso_root_dropout")],
+        [("meso_512", meso_main), ("meso_512", meso_dropout)],
     )
-    baseline_dir = stage / "meso_512/baseline"
-    dropout_dir = stage / "meso_512/meso_root_dropout"
+    baseline_dir = stage / "meso_512" / meso_main
+    dropout_dir = stage / "meso_512" / meso_dropout
     baseline_report = _read_json(baseline_dir / "report.json")
     dropout_report = _read_json(dropout_dir / "report.json")
     stability = _frame_stability(

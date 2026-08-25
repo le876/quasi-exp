@@ -34,6 +34,31 @@ from .canonical_atlas import (
 )
 
 
+SECTION_HYPOTHESIS_COLUMNS = (
+    "chart_id",
+    "root_node_id",
+    "root_candidate_id",
+    "task_node_id",
+    "candidate_id",
+    "selected",
+    "score",
+    "wave",
+    "boundary_risk",
+    "parent_node_ids",
+    "parent_candidate_ids",
+    "residual_mm",
+    "min_margin_deg",
+    "normalized_min_margin",
+    "posture_cost",
+    "condition_number",
+    "quality",
+    "solver_success",
+    "actual_bounds",
+    "cluster_id",
+    *(f"beta{index}_rad" for index in range(1, 7)),
+)
+
+
 @dataclass(frozen=True)
 class RootedSectionPolicy:
     """Registered growth, pruning, and local-consistency policy."""
@@ -110,6 +135,9 @@ class SectionGrowthEvent:
     endpoint_gap_deg: float | None = None
     candidate_count: int = 0
     retained_count: int = 0
+    pre_pruning_proposal_count: int = 0
+    pre_pruning_cluster_count: int = 0
+    post_pruning_hypothesis_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -271,7 +299,9 @@ class SectionGrowthResult:
         ]
         return MappingProxyType(
             {
-                "section_hypotheses": pd.DataFrame.from_records(hypotheses),
+                "section_hypotheses": pd.DataFrame.from_records(
+                    hypotheses, columns=SECTION_HYPOTHESIS_COLUMNS
+                ),
                 "section_charts": pd.DataFrame.from_records(sections),
                 "primary_section": pd.DataFrame.from_records(primary),
                 "growth_events": pd.DataFrame.from_records(events),
@@ -629,6 +659,9 @@ def _grow_chart(
                     tuple(sorted(parent_representatives)),
                     maximum_parent_gap,
                     len(proposals),
+                    len(retained),
+                    len(proposals),
+                    len(clustered),
                     len(retained),
                 )
             )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, replace
 import hashlib
 import json
 import math
@@ -31,18 +32,34 @@ from quasi_exp.teacher.canonical_atlas import (
     AtlasCandidate,
     AtlasTaskNode,
     deterministic_root_nodes,
-    make_predictor_corrector_continuation,
 )
+from quasi_exp.teacher.optimized_continuation import (
+    make_optimized_predictor_corrector_continuation,
+)
+from quasi_exp.teacher.optimized_forward import optimized_forward
 from quasi_exp.teacher.experiment import sha256_file
 from quasi_exp.teacher.region_growth import JACOBIAN_COLUMNS
 from quasi_exp.teacher.section_atlas_repair import (
     AtlasRepairPolicy,
+    AuditV2Policy,
+    RetryTier,
+    execute_audit_schedules,
     section_growth_from_frames,
     repair_rooted_section_atlas,
+)
+from quasi_exp.teacher.partial_relay import choose_macroblock_split
+from quasi_exp.teacher.retry8_progression import (
+    authorize_five_k_after_smoke,
+    map_frozen_lineage_roots,
+    select_balanced_smoke_domain,
 )
 from quasi_exp.teacher.section_first_atlas import RootedSectionPolicy, build_section_first_atlas
 from quasi_exp.teacher.student_tracking_tf import StudentGeometry
 from quasi_exp.teacher.workspace_atlas import RepresentationMode
+from quasi_exp.teacher.workspace_atlas_repair import (
+    atlas_nodes_from_frames,
+    make_segmented_continuation,
+)
 from quasi_exp.teacher.workspace_inverse import InverseQuery
 from quasi_exp.teacher.workspace_student import (
     WorkspaceStudentTrainingConfig,
@@ -50,6 +67,19 @@ from quasi_exp.teacher.workspace_student import (
     train_workspace_student,
 )
 from quasi_exp.teacher.workspace_trajectories import build_workspace_trajectory_suite
+from quasi_exp.teacher.workspace_experiment import (
+    ReachSamplingRoundSpec,
+    generate_independent_reach_samples,
+)
+from quasi_exp.teacher.workspace_reach import (
+    CellKey,
+    FrontierProbeEvidence,
+    ReachProxyBuilder,
+    ReachProxyConfig,
+    ReachReplica,
+    ReachReplicaRound,
+    measure_weighted_boundary_change_ratio,
+)
 
 import run_bacra_v14_2_section_first_atlas as legacy
 import run_bacra_v14_2r_stitched_atlas as v142r
@@ -59,6 +89,33 @@ from run_trajectory_canonical_teacher_v10 import load_environment, runtime_finge
 BETA_COLUMNS = tuple(f"beta{index}_rad" for index in range(1, 7))
 XYZ_COLUMNS = ("x_m", "y_m", "z_m")
 ROUTER_FEATURE_COLUMNS = XYZ_COLUMNS
+
+
+def _environment(project_root: Path, config: Mapping[str, Any]):
+    return optimized_forward(
+        load_environment(project_root, _sources(config, project_root)["robot_config"])
+    )
+
+
+def _segmented_continuation(
+    environment: Any, tasks: pd.DataFrame, task_edges: pd.DataFrame
+):
+    nodes = atlas_nodes_from_frames(tasks, task_edges)
+    base = make_optimized_predictor_corrector_continuation(
+        environment, residual_tolerance_mm=3.0
+    )
+    cell_by_node = {
+        int(row.task_node_id): (
+            int(row.cell_level_mm), int(row.cell_ix), int(row.cell_iy), int(row.cell_iz)
+        )
+        for row in tasks.itertuples(index=False)
+    }
+    return nodes, make_segmented_continuation(
+        base,
+        {node.node_id: node for node in nodes},
+        cell_by_node,
+        step_max_mm=5.0,
+    )
 STAGE_DIRS = {
     "inventory": "00_inventory",
     "pilot_registry": "01_pilot_registry",
@@ -67,8 +124,9 @@ STAGE_DIRS = {
     "fixed_budget_dataset": "04_fixed_budget_dataset",
     "students": "05_students",
     "representation_decision": "06_representation_decision",
-    "formal_admission": "07_formal_admission",
-    "summary": "08_summary",
+    "reach_update": "07_reach_update",
+    "formal_admission": "08_formal_admission",
+    "summary": "09_summary",
 }
 STAGE_ORDER = tuple(STAGE_DIRS)
 
@@ -86,17 +144,44 @@ def load_config(path: str | Path) -> dict[str, Any]:
     config["config_path"] = str(config_path)
     if config["parallel"] != {"patch_workers": 12, "numerical_threads_per_worker": 1}:
         raise ValueError("V14.3 requires exactly twelve single-threaded root workers")
+    audit = config.get("audit_execution", {})
+    if int(audit.get("logical_shard_count", 0)) < 12:
+        raise ValueError("V14.3 requires at least twelve logical audit shards")
+    if int(audit.get("maximum_concurrent_workers", 0)) != 12:
+        raise ValueError("V14.3 audit concurrency must remain exactly twelve workers")
+    if str(audit.get("assignment_strategy", "")) != "cost_balanced_lpt":
+        raise ValueError("V14.3 requires deterministic cost-balanced LPT sharding")
+    if not bool(audit.get("screening_first", False)):
+        raise ValueError("V14.3 requires the registered screening-first protocol")
     pilot = config["pilot"]
-    if (int(pilot["parent_cell_count"]), int(pilot["task_probe_count"]), int(pilot["root_count"])) != (5000, 25000, 32):
-        raise ValueError("V14.3 registers 5000 parent cells, 25000 probes, and 32 roots")
+    retry8 = str(config.get("upstream_protocol_version", "retry6")) == "retry8"
+    mode = str(config.get("execution_mode", "legacy_5k"))
+    expected = {
+        "smoke": (1000, 5000, 24),
+        "five_k": (5000, 25000, 24),
+        "legacy_5k": (5000, 25000, 32),
+    }
+    if mode not in expected or tuple(
+        map(int, (pilot["parent_cell_count"], pilot["task_probe_count"], pilot["root_count"]))
+    ) != expected[mode]:
+        raise ValueError(f"V14.3 {mode} registry must be {expected.get(mode)}")
+    if retry8 != (mode in {"smoke", "five_k"}):
+        raise ValueError("retry8 upstream must use Smoke or five_k execution mode")
     dataset = config["dataset"]
     if bool(dataset["row_padding"]):
         raise ValueError("V14.3 forbids supervision row padding")
-    if not (20000 <= int(dataset["minimum_unique_rows"]) <= int(dataset["maximum_unique_rows"]) <= 50000):
-        raise ValueError("V14.3 unique supervision budget must be within 20k-50k")
+    minimum_allowed = 3000 if retry8 else 20000
+    if not (
+        minimum_allowed
+        <= int(dataset["minimum_unique_rows"])
+        <= int(dataset["target_unique_rows"])
+        <= int(dataset["maximum_unique_rows"])
+        <= 50000
+    ):
+        raise ValueError("V14.3 unique supervision budget is outside the registered range")
     if tuple(ROUTER_FEATURE_COLUMNS) != ("x_m", "y_m", "z_m"):
         raise AssertionError("router inference contract must remain xyz-only")
-    if (
+    if not retry8 and (
         int(config["student"]["trajectory_count"]),
         int(config["student"]["trajectory_waypoints"]),
     ) != (36, 100):
@@ -110,7 +195,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
     row = config["sources"]
-    return {
+    result = {
         "plan": SOURCE_ROOT / str(row["reviewed_plan"]),
         "v14_2r": project_root / str(row["v14_2r_root"]),
         "v14_2r_config": SOURCE_ROOT / str(row["v14_2r_config"]),
@@ -120,6 +205,38 @@ def _sources(config: Mapping[str, Any], project_root: Path) -> dict[str, Path]:
         "historical_final8_teacher": project_root / str(row["historical_final8_teacher"]),
         "historical_final8_catalog": project_root / str(row["historical_final8_catalog"]),
         "robot_config": SOURCE_ROOT / str(config["robot_config"]),
+    }
+    if "smoke_root" in row:
+        result["smoke"] = project_root / str(row["smoke_root"])
+    if "retry7_root" in row:
+        result["retry7"] = project_root / str(row["retry7_root"])
+    return result
+
+
+def _upstream_stage_paths(
+    config: Mapping[str, Any], upstream_root: Path
+) -> dict[str, Path]:
+    protocol = str(config.get("upstream_protocol_version", "retry6"))
+    if protocol == "retry8":
+        return {
+            "authorization": upstream_root / "07_authorization/retry8_next_stage_authorization.json",
+            "labels": upstream_root / "06_seed_labels/primary_seed_supervision.parquet",
+            "lineage": upstream_root / "05_partial_certificate/primary_canonical_labels.parquet",
+            "summary": upstream_root / "08_summary/gate.json",
+            "manifest": upstream_root / "08_summary/retry8_artifact_manifest.json",
+        }
+    if protocol == "retry7":
+        return {
+            "confirmation": upstream_root / "08_twelve_patch_confirmation/gate.json",
+            "reach": upstream_root / "07_reach_round8/gate.json",
+            "meso": upstream_root / "09_meso_bridge/gate.json",
+            "manifest": upstream_root / "10_summary/retry7_artifact_manifest.json",
+        }
+    return {
+        "confirmation": upstream_root / "09_twelve_patch_confirmation/gate.json",
+        "reach": upstream_root / "08_reach_round7/gate.json",
+        "meso": upstream_root / "10_meso_bridge/gate.json",
+        "manifest": upstream_root / "11_summary/artifact_manifest.json",
     }
 
 
@@ -139,37 +256,261 @@ def _gate(path: Path, checks: Mapping[str, bool], **evidence: Any) -> dict[str, 
     return v142r._gate(path, checks, **evidence)
 
 
-def _require(output_root: Path, stage_name: str) -> dict[str, Any]:
-    path = output_root / STAGE_DIRS[stage_name] / "gate.json"
+def _require(
+    output_root: Path, stage_name: str, config: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    directory = output_root / STAGE_DIRS[stage_name]
+    if config is not None:
+        result = _load_validated_stage_result(
+            output_root, config=config, stage_name=stage_name
+        )
+        if result is None:
+            raise FileNotFoundError(
+                f"required V14.3 stage lacks a valid completion closure: {directory}"
+            )
+        return result
+    path = directory / "gate.json"
     if not path.is_file():
         raise FileNotFoundError(f"required V14.3 stage is not sealed: {path}")
     return _read_json(path)
 
 
+def _upstream_completion_sha256(output_root: Path, stage_name: str) -> str:
+    """Bind a stage completion to every earlier V14.3 completion manifest."""
+
+    stage_index = STAGE_ORDER.index(stage_name)
+    digest = hashlib.sha256()
+    for upstream_name in STAGE_ORDER[:stage_index]:
+        path = output_root / STAGE_DIRS[upstream_name] / "completion_manifest.json"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"missing upstream completion manifest for {stage_name}: {path}"
+            )
+        digest.update(upstream_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _write_stage_completion_manifest(
+    output_root: Path, *, config: Mapping[str, Any], stage_name: str
+) -> dict[str, Any]:
+    directory = output_root / STAGE_DIRS[stage_name]
+    upstream_completion_sha256 = _upstream_completion_sha256(
+        output_root, stage_name
+    )
+    manifest = v142r._write_stage_completion_manifest(
+        directory, config=config, stage_name=stage_name
+    )
+    manifest["upstream_completion_sha256"] = upstream_completion_sha256
+    _write_json(directory / "completion_manifest.json", manifest)
+    return manifest
+
+
+def _load_validated_stage_result(
+    output_root: Path, *, config: Mapping[str, Any], stage_name: str
+) -> dict[str, Any] | None:
+    directory = output_root / STAGE_DIRS[stage_name]
+    result = v142r._load_validated_stage_result(
+        directory, config=config, stage_name=stage_name
+    )
+    if result is None:
+        return None
+    try:
+        manifest = _read_json(directory / "completion_manifest.json")
+        expected = _upstream_completion_sha256(output_root, stage_name)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if str(manifest.get("upstream_completion_sha256", "")) != expected:
+        return None
+    return result
+
+
+def _audit_policy_from_manifest(manifest: Mapping[str, Any]) -> AuditV2Policy:
+    row = manifest["audit_policy"]
+    return AuditV2Policy(
+        geometry_p95_max_deg=float(row["geometry_p95_max_deg"]),
+        geometry_max_deg=float(row["geometry_max_deg"]),
+        repeat_p95_max_deg=float(row["repeat_p95_max_deg"]),
+        continuation_residual_max_mm=float(row["continuation_residual_max_mm"]),
+        repeats_per_direction=int(row["repeats_per_direction"]),
+        repeat_perturbation_rad=float(row["repeat_perturbation_rad"]),
+        directions=tuple(row.get("directions", ("forward", "reverse"))),
+        retry_tiers=tuple(
+            RetryTier(
+                str(tier["tier_id"]),
+                float(tier["maximum_step_mm"]),
+                int(tier["maximum_iterations"]),
+                tuple(map(str, tier["solver_chain"])),
+            )
+            for tier in row["retry_tiers"]
+        ),
+    )
+
+
+def _run_v143_audit_shard_worker(
+    config: Mapping[str, Any], project_root: Path, phase_directory: Path, shard_id: int
+) -> dict[str, Any]:
+    """Execute one immutable V14.3 audit micro-shard."""
+
+    started = time.time()
+    cpu_started = time.process_time()
+    manifest = _read_json(phase_directory / "input_manifest.json")
+    v142r._validate_audit_bundle(manifest, phase_directory, config)
+    registry = pd.read_parquet(phase_directory / "schedule_registry.parquet")
+    shard_registry = registry[registry["shard_id"].astype(int).eq(int(shard_id))].copy()
+    if not 0 <= int(shard_id) < int(manifest["shard_count"]):
+        raise ValueError(f"audit shard id outside registered range: {shard_id}")
+    tasks = pd.read_parquet(phase_directory / "task_nodes.parquet")
+    task_edges = pd.read_parquet(phase_directory / "task_edges.parquet")
+    hypotheses = pd.read_parquet(phase_directory / "section_hypotheses.parquet")
+    selected_edges = pd.read_parquet(phase_directory / "selected_edges.parquet")
+    nodes = legacy.atlas_nodes_from_frames(tasks, task_edges)
+    growth = section_growth_from_frames(nodes, hypotheses, selected_edges)
+    environment = _environment(project_root, config)
+    _nodes, continuation = _segmented_continuation(environment, tasks, task_edges)
+    retry = v142r._registered_retry_adapter(environment, tasks, task_edges)
+    policy = _audit_policy_from_manifest(manifest)
+    shard_directory = phase_directory / f"shard_{int(shard_id):02d}"
+    shard_directory.mkdir(parents=True, exist_ok=True)
+    progress_path = shard_directory / "progress.json"
+    progress_every = int(config["audit_execution"]["progress_every_schedules"])
+    last_reported = -progress_every
+
+    def report_progress(completed: int, total: int) -> None:
+        nonlocal last_reported
+        if completed != total and completed - last_reported < progress_every:
+            return
+        _write_json(
+            progress_path,
+            {
+                "schema_version": 1,
+                "status": "running",
+                "phase_id": str(manifest["phase_id"]),
+                "shard_id": int(shard_id),
+                "completed_schedule_count": int(completed),
+                "total_schedule_count": int(total),
+                "started_at_unix_s": started,
+                "updated_at_unix_s": time.time(),
+            },
+        )
+        last_reported = int(completed)
+
+    report_progress(0, len(shard_registry))
+    executions = (
+        execute_audit_schedules(
+            growth,
+            shard_registry,
+            continuation,
+            policy,
+            retry_continuation=retry,
+            progress_callback=report_progress,
+        )
+        if len(shard_registry)
+        else pd.DataFrame(columns=v142r.AUDIT_EXECUTION_COLUMNS)
+    )
+    execution_path = shard_directory / "executions.parquet"
+    _write_parquet(executions, execution_path)
+    report = v142r.build_shard_completion_report(
+        shard_registry,
+        executions,
+        source_sha=v142r._git_sha(),
+        config_sha256=sha256_file(Path(str(config["config_path"]))),
+        input_sha256=str(manifest["input_sha256"]),
+        phase_id=str(manifest["phase_id"]),
+        shard_id=int(shard_id),
+        repeats_per_direction=policy.repeats_per_direction,
+    )
+    report.update(
+        {
+            "pid": os.getpid(),
+            "executions_file_sha256": sha256_file(execution_path),
+            "started_at_unix_s": started,
+            "finished_at_unix_s": time.time(),
+            "wall_time_s": time.time() - started,
+            "cpu_time_s": time.process_time() - cpu_started,
+        }
+    )
+    _write_json(shard_directory / "report.json", report)
+    _write_json(
+        progress_path,
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "phase_id": str(manifest["phase_id"]),
+            "shard_id": int(shard_id),
+            "completed_schedule_count": len(shard_registry),
+            "total_schedule_count": len(shard_registry),
+            "execution_count": len(executions),
+            "started_at_unix_s": started,
+            "finished_at_unix_s": time.time(),
+            "wall_time_s": time.time() - started,
+            "cpu_time_s": time.process_time() - cpu_started,
+            "updated_at_unix_s": time.time(),
+        },
+    )
+    return report
+
+
 def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["inventory"]
     sources = _sources(config, project_root)
-    confirmation = sources["v14_2r"] / "09_twelve_patch_confirmation/gate.json"
-    reach = sources["v14_2r"] / "08_reach_round7/gate.json"
-    meso = sources["v14_2r"] / "10_meso_bridge/gate.json"
-    required = [
-        sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
-        sources["historical_final8_teacher"], sources["historical_final8_catalog"],
-        confirmation, reach, meso,
-    ]
+    upstream = _upstream_stage_paths(config, sources["v14_2r"])
+    upstream_manifest = upstream["manifest"]
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        required = [
+            sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
+            sources["historical_final8_teacher"], sources["historical_final8_catalog"],
+            upstream["authorization"], upstream["labels"], upstream["lineage"],
+            upstream["summary"], upstream_manifest,
+        ]
+        authorization = _read_json(upstream["authorization"])
+        summary_gate = _read_json(upstream["summary"])
+        upstream_authorized = bool(authorization.get("smoke_execution_authorized", False))
+        upstream_scientific = bool(summary_gate.get("partial_certificate_pass", False))
+        if str(config.get("execution_mode")) == "five_k":
+            smoke_authorization = (
+                sources["smoke"]
+                / "09_summary/retry8_next_stage_authorization.json"
+            )
+            if not smoke_authorization.is_file():
+                raise FileNotFoundError(
+                    f"retry8 Smoke authorization is missing: {smoke_authorization}"
+                )
+            required.append(smoke_authorization)
+            upstream_authorized = bool(
+                _read_json(smoke_authorization).get(
+                    "five_k_teacher_execution_authorized", False
+                )
+            )
+    else:
+        confirmation = upstream["confirmation"]
+        reach = upstream["reach"]
+        meso = upstream["meso"]
+        required = [
+            sources["plan"], sources["v14_2r_config"], sources["legacy_config"],
+            sources["historical_final8_teacher"], sources["historical_final8_catalog"],
+            confirmation, reach, meso, upstream_manifest,
+        ]
+        confirmation_gate = _read_json(confirmation)
+        meso_gate = _read_json(meso)
+        upstream_authorized = bool(confirmation_gate.get("gate_pass", False))
+        upstream_scientific = bool(meso_gate.get("gate_pass", False))
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"V14.3 source inventory incomplete: {missing}")
-    confirmation_gate = _read_json(confirmation)
-    meso_gate = _read_json(meso)
+    upstream_closure = v142r._verify_upstream_artifact_manifest(upstream_manifest)
     records = [{"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)} for path in required]
     _write_parquet(pd.DataFrame.from_records(records), stage / "source_inventory.parquet")
     report = {
         "source_sha": v142r._git_sha(),
         "working_tree_clean": v142r._tree_clean(),
         "runtime": runtime_fingerprint(),
-        "v14_2r_confirmation_gate": bool(confirmation_gate.get("gate_pass", False)),
-        "v14_2r_meso_bridge_gate": bool(meso_gate.get("gate_pass", False)),
+        "v14_2r_confirmation_gate": upstream_authorized,
+        "v14_2r_meso_bridge_gate": upstream_scientific,
+        "v14_2r_upstream_closure": upstream_closure,
         "source_records": records,
         "patch_workers": 12,
     }
@@ -178,6 +519,9 @@ def stage_inventory(config: Mapping[str, Any], project_root: Path, output_root: 
         "clean_fixed_point": report["working_tree_clean"],
         "v14_2r_confirmation": report["v14_2r_confirmation_gate"],
         "v14_2r_meso_bridge": report["v14_2r_meso_bridge_gate"],
+        "v14_2r_recursive_artifact_closure": bool(
+            upstream_closure.get("artifact_count", 0)
+        ),
         "source_inventory_complete": not missing,
     }, **report)
 
@@ -187,46 +531,143 @@ def _legacy_pilot_inputs(config: Mapping[str, Any], project_root: Path):
     return legacy._pilot_inputs(legacy_config, project_root)
 
 
+def _retry8_pilot_inputs(config: Mapping[str, Any], project_root: Path):
+    tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
+    upstream = _upstream_stage_paths(config, _sources(config, project_root)["v14_2r"])
+    frozen = pd.read_parquet(upstream["lineage"])
+    pilot = config["pilot"]
+    if str(config["execution_mode"]) == "smoke":
+        retry7_root = project_root / str(config["sources"]["retry7_root"])
+        hard_tasks = pd.read_parquet(
+            retry7_root / "09_meso_bridge/input/meso_task_nodes.parquet"
+        )
+        selected_parent_ids = set(
+            select_balanced_smoke_domain(
+                parents,
+                tasks,
+                frozen,
+                hard_parent_ids=set(hard_tasks["source_parent_node_id"].astype(int)),
+                parent_count=int(pilot["parent_cell_count"]),
+                hard_parent_target=int(pilot["hard_meso_parent_target"]),
+                hard_parent_maximum=int(pilot["hard_meso_parent_max"]),
+            )
+        )
+        tasks = tasks[tasks["source_parent_node_id"].astype(int).isin(selected_parent_ids)].copy()
+        node_ids = set(tasks["task_node_id"].astype(int))
+        edges = edges[
+            edges["left_node_id"].astype(int).isin(node_ids)
+            & edges["right_node_id"].astype(int).isin(node_ids)
+        ].copy()
+        candidates = candidates[candidates["task_node_id"].astype(int).isin(node_ids)].copy()
+        parents = parents[parents["node_id"].astype(int).isin(selected_parent_ids)].copy()
+    roots = map_frozen_lineage_roots(
+        frozen,
+        tasks,
+        root_count=int(pilot["root_count"]),
+    )
+    inherited_rows = []
+    next_cluster_by_node: dict[int, int] = {}
+    for row in roots.itertuples(index=False):
+        task_node_id = int(row.task_node_id)
+        if task_node_id not in next_cluster_by_node:
+            local_clusters = pd.to_numeric(
+                candidates.loc[
+                    candidates["task_node_id"].astype(int).eq(task_node_id),
+                    "cluster_id",
+                ],
+                errors="coerce",
+            ).dropna()
+            next_cluster_by_node[task_node_id] = (
+                int(local_clusters.max()) + 1 if not local_clusters.empty else 0
+            )
+        cluster_id = next_cluster_by_node[task_node_id]
+        next_cluster_by_node[task_node_id] += 1
+        inherited_rows.append(
+            {
+                "task_node_id": task_node_id,
+                "candidate_id": f"retry8_lineage_{int(row.root_index):03d}",
+                "cluster_id": cluster_id,
+                "source_candidate_ids": [str(row.candidate_id)],
+                "cluster_size": 1,
+                "quality": "Gold",
+                "solver_success": True,
+                "actual_bounds": True,
+                "residual_mm": float(getattr(row, "source_teacher_residual_mm", 0.0)),
+                "min_margin_deg": 1.0,
+                "normalized_min_margin": 0.1,
+                "posture_cost": float(
+                    np.linalg.norm([getattr(row, column) for column in BETA_COLUMNS])
+                ),
+                "condition_number": 1.0,
+                **{column: float(getattr(row, column)) for column in BETA_COLUMNS},
+            }
+        )
+    inherited = pd.DataFrame.from_records(inherited_rows).reindex(columns=candidates.columns)
+    candidates = pd.concat([candidates, inherited], ignore_index=True)
+    roots = roots.copy()
+    roots["candidate_id"] = roots["root_index"].map(
+        lambda value: f"retry8_lineage_{int(value):03d}"
+    )
+    return tasks, edges, candidates, parents, roots
+
+
 def stage_pilot_registry(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    inventory = _require(output_root, "inventory")
+    inventory = _require(output_root, "inventory", config)
     stage = output_root / STAGE_DIRS["pilot_registry"]
     if not inventory.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "v14_2r_confirmation_not_admitted")
-    tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        tasks, edges, candidates, parents, inherited_roots = _retry8_pilot_inputs(
+            config, project_root
+        )
+    else:
+        tasks, edges, candidates, parents = _legacy_pilot_inputs(config, project_root)
     pilot = config["pilot"]
     if len(parents) != int(pilot["parent_cell_count"]) or len(tasks) != int(pilot["task_probe_count"]):
         raise RuntimeError(
             f"frozen lower proxy registry drift: parents={len(parents)}, probes={len(tasks)}"
         )
-    representatives = tasks[tasks["is_representative"].astype(bool)]
-    root_nodes = tuple(
-        AtlasTaskNode(int(row.task_node_id), np.asarray([row.x_m, row.y_m, row.z_m]), ())
-        for row in representatives.itertuples(index=False)
-    )
-    selected_nodes = deterministic_root_nodes(root_nodes, count=int(pilot["root_count"]))
-    candidate_objects = legacy._candidates_from_frame(candidates)
-    by_node: dict[int, list[Any]] = {}
-    for candidate in candidate_objects:
-        by_node.setdefault(candidate.node_id, []).append(candidate)
-    registry_rows = []
-    for root_index, node_id in enumerate(selected_nodes):
-        ranked = sorted(
-            by_node.get(node_id, ()),
-            key=lambda item: (0 if item.is_gold else 1, item.posture_cost, -item.min_margin_deg, item.candidate_id),
+    if retry8:
+        registry = inherited_roots[
+            [
+                "root_index", "task_node_id", "candidate_id", "root_kind",
+                "canonical_lineage_id", "inherited_from_frozen_lineage",
+            ]
+        ].copy()
+    else:
+        representatives = tasks[tasks["is_representative"].astype(bool)]
+        root_nodes = tuple(
+            AtlasTaskNode(int(row.task_node_id), np.asarray([row.x_m, row.y_m, row.z_m]), ())
+            for row in representatives.itertuples(index=False)
         )
-        if not ranked:
-            raise RuntimeError(f"registered pilot root {node_id} lacks a feasible candidate")
-        registry_rows.append({"root_index": root_index, "task_node_id": node_id, "candidate_id": ranked[0].candidate_id})
-    registry = pd.DataFrame.from_records(registry_rows)
+        selected_nodes = deterministic_root_nodes(root_nodes, count=int(pilot["root_count"]))
+        candidate_objects = legacy._candidates_from_frame(candidates)
+        by_node: dict[int, list[Any]] = {}
+        for candidate in candidate_objects:
+            by_node.setdefault(candidate.node_id, []).append(candidate)
+        registry_rows = []
+        for root_index, node_id in enumerate(selected_nodes):
+            ranked = sorted(
+                by_node.get(node_id, ()),
+                key=lambda item: (0 if item.is_gold else 1, item.posture_cost, -item.min_margin_deg, item.candidate_id),
+            )
+            if not ranked:
+                raise RuntimeError(f"registered pilot root {node_id} lacks a feasible candidate")
+            registry_rows.append({"root_index": root_index, "task_node_id": node_id, "candidate_id": ranked[0].candidate_id})
+        registry = pd.DataFrame.from_records(registry_rows)
     _write_parquet(tasks, stage / "pilot_task_nodes.parquet")
     _write_parquet(edges, stage / "pilot_task_edges.parquet")
     _write_parquet(candidates, stage / "pilot_candidate_clusters.parquet")
     _write_parquet(parents, stage / "pilot_parent_cells.parquet")
     _write_parquet(registry, stage / "root_registry.parquet")
     return _gate(stage / "gate.json", {
-        "exact_parent_cells": len(parents) == 5000,
-        "exact_task_probes": len(tasks) == 25000,
-        "maximin_roots": len(registry) == 32,
+        "exact_parent_cells": len(parents) == int(pilot["parent_cell_count"]),
+        "exact_task_probes": len(tasks) == int(pilot["task_probe_count"]),
+        "maximin_roots": len(registry) == int(pilot["root_count"]),
+        "single_frozen_lineage_roots": bool(
+            not retry8 or registry["canonical_lineage_id"].astype(str).nunique() == 1
+        ),
     }, parent_cell_count=len(parents), task_probe_count=len(tasks), root_count=len(registry))
 
 
@@ -251,17 +692,33 @@ def _root_policy(config: Mapping[str, Any]) -> RootedSectionPolicy:
 def _execute_root(config: Mapping[str, Any], project_root: Path, output_root: Path, root_index: int) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["root_charts"]
     directory = stage / f"root_{root_index:03d}"
-    if (directory / "report.json").is_file():
-        return _read_json(directory / "report.json")
     registry_stage = output_root / STAGE_DIRS["pilot_registry"]
+    input_sha = v142r._payload_sha256(
+        {
+            "root_index": int(root_index),
+            "registry": sha256_file(registry_stage / "root_registry.parquet"),
+            "tasks": sha256_file(registry_stage / "pilot_task_nodes.parquet"),
+            "edges": sha256_file(registry_stage / "pilot_task_edges.parquet"),
+            "candidates": sha256_file(registry_stage / "pilot_candidate_clusters.parquet"),
+        }
+    )
+    existing = v142r._load_validated_patch_result(
+        directory,
+        config=config,
+        patch_id=f"root_{root_index:03d}",
+        variant="root_growth",
+        input_sha256=input_sha,
+    )
+    if existing is not None:
+        return existing
     registry = pd.read_parquet(registry_stage / "root_registry.parquet")
     root = registry[registry["root_index"].astype(int).eq(root_index)].iloc[0]
     tasks = pd.read_parquet(registry_stage / "pilot_task_nodes.parquet")
     edges = pd.read_parquet(registry_stage / "pilot_task_edges.parquet")
     candidate_frame = pd.read_parquet(registry_stage / "pilot_candidate_clusters.parquet")
     candidates = legacy._candidates_from_frame(candidate_frame)
-    environment = legacy._EndpointOnlyForwardAdapter(load_environment(project_root, _sources(config, project_root)["robot_config"]))
-    nodes, continuation = legacy._segmented_continuation(environment, tasks, edges)
+    environment = _environment(project_root, config)
+    nodes, continuation = _segmented_continuation(environment, tasks, edges)
     started = time.time()
     growth = build_section_first_atlas(
         nodes,
@@ -290,11 +747,26 @@ def _execute_root(config: Mapping[str, Any], project_root: Path, output_root: Pa
         "gate_pass": bool(len(growth.covered_node_ids) >= int(config["pilot"]["minimum_chart_cells"])),
     }
     _write_json(directory / "report.json", report)
+    v142r._write_patch_completion_manifest(
+        directory,
+        config=config,
+        patch_id=f"root_{root_index:03d}",
+        variant="root_growth",
+        input_sha256=input_sha,
+    )
     return report
 
 
-def _run_root_jobs(config: Mapping[str, Any], project_root: Path, output_root: Path) -> None:
-    pending = list(range(int(config["pilot"]["root_count"])))
+def _run_root_jobs(
+    config: Mapping[str, Any],
+    project_root: Path,
+    output_root: Path,
+    *,
+    start_index: int = 0,
+    stop_index: int | None = None,
+) -> None:
+    stop = int(config["pilot"]["root_count"]) if stop_index is None else int(stop_index)
+    pending = list(range(int(start_index), stop))
     running: list[tuple[int, subprocess.Popen[str], Any]] = []
     failures = []
     environment = os.environ.copy()
@@ -321,8 +793,6 @@ def _run_root_jobs(config: Mapping[str, Any], project_root: Path, output_root: P
         while pending and len(running) < 12:
             root_index = pending.pop(0)
             directory = output_root / STAGE_DIRS["root_charts"] / f"root_{root_index:03d}"
-            if (directory / "report.json").is_file():
-                continue
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("w", encoding="utf-8")
             command = [sys.executable, str(Path(__file__).resolve()), "--config", str(config["config_path"]), "--output-root", str(output_root), "--stage", "root_charts", "--root-index", str(root_index)]
@@ -333,20 +803,87 @@ def _run_root_jobs(config: Mapping[str, Any], project_root: Path, output_root: P
 
 
 def stage_root_charts(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    registry = _require(output_root, "pilot_registry")
+    registry = _require(output_root, "pilot_registry", config)
     stage = output_root / STAGE_DIRS["root_charts"]
     if not registry.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "pilot_registry_gate_failed")
     if config.get("_root_index") is not None:
         report = _execute_root(config, project_root, output_root, int(config["_root_index"]))
         return {"gate_pass": True, "worker_report": report}
-    _run_root_jobs(config, project_root, output_root)
-    reports = [_read_json(stage / f"root_{index:03d}/report.json") for index in range(32)]
-    _write_parquet(pd.DataFrame.from_records(reports), stage / "root_chart_reports.parquet")
+    budgets = tuple(
+        map(
+            int,
+            config["pilot"].get(
+                "root_expansion_budgets", [int(config["pilot"]["root_count"])]
+            ),
+        )
+    )
+    if not budgets or budgets[-1] != int(config["pilot"]["root_count"]):
+        raise RuntimeError("root expansion budgets must end at the frozen maximum")
+    previous_budget = 0
+    previous_coverage = 0.0
+    expansion_rows = []
+    executed_root_count = budgets[-1]
+    for budget in budgets:
+        _run_root_jobs(
+            config,
+            project_root,
+            output_root,
+            start_index=previous_budget,
+            stop_index=budget,
+        )
+        covered: set[int] = set()
+        for index in range(budget):
+            primary = pd.read_parquet(
+                stage / f"root_{index:03d}/primary_section.parquet"
+            )
+            covered.update(
+                map(
+                    int,
+                    primary.loc[
+                        ~primary["abstained"].astype(bool), "task_node_id"
+                    ],
+                )
+            )
+        coverage = len(covered) / max(1, int(config["pilot"]["task_probe_count"]))
+        gain = coverage - previous_coverage
+        expansion_rows.append(
+            {
+                "root_budget": budget,
+                "coverage_union_ratio": coverage,
+                "incremental_coverage_ratio": gain,
+            }
+        )
+        stop_threshold = float(
+            config["pilot"].get("root_expansion_measure_gain_stop", -1.0)
+        )
+        if (
+            previous_budget > 0
+            and gain < stop_threshold
+            and coverage >= float(config["pilot"]["labelable_measure_min"])
+        ):
+            executed_root_count = budget
+            break
+        previous_budget = budget
+        previous_coverage = coverage
+    reports = [
+        _read_json(stage / f"root_{index:03d}/report.json")
+        for index in range(executed_root_count)
+    ]
+    _write_parquet(
+        pd.DataFrame.from_records(expansion_rows),
+        stage / "root_expansion_history.parquet",
+    )
+    _write_parquet(
+        v142r._report_records_frame(reports), stage / "root_chart_reports.parquet"
+    )
     return _gate(stage / "gate.json", {
-        "all_roots_completed": len(reports) == 32,
+        "registered_root_expansion_completed": len(reports) == executed_root_count,
         "at_least_one_qualifiable_root": any(bool(row["gate_pass"]) for row in reports),
-    }, root_reports=reports, qualifiable_root_count=sum(bool(row["gate_pass"]) for row in reports),
+    }, root_reports=reports, executed_root_count=executed_root_count,
+       maximum_root_count=int(config["pilot"]["root_count"]),
+       root_expansion_history=expansion_rows,
+       qualifiable_root_count=sum(bool(row["gate_pass"]) for row in reports),
        bad_roots_are_removed_by_chart_qualification=True)
 
 
@@ -356,7 +893,8 @@ def _combined_growth(config: Mapping[str, Any], output_root: Path):
     edges = pd.read_parquet(registry_stage / "pilot_task_edges.parquet")
     nodes = legacy.atlas_nodes_from_frames(tasks, edges)
     hypothesis_parts, edge_parts = [], []
-    for index in range(32):
+    root_gate = _read_json(output_root / STAGE_DIRS["root_charts"] / "gate.json")
+    for index in range(int(root_gate["executed_root_count"])):
         directory = output_root / STAGE_DIRS["root_charts"] / f"root_{index:03d}"
         hypothesis_parts.append(pd.read_parquet(directory / "section_hypotheses.parquet"))
         edge_parts.append(pd.read_parquet(directory / "selected_edges.parquet"))
@@ -424,17 +962,87 @@ def _pilot_root_removal_stability(growth: Any, repaired: Any) -> tuple[bool, pd.
     return gate, frame
 
 
+def _add_local_refinement_edges(
+    tasks: pd.DataFrame,
+    task_edges: pd.DataFrame,
+    node_ids: Sequence[int],
+    *,
+    neighbor_count: int,
+) -> pd.DataFrame:
+    """Add deterministic local KNN edges without deleting any task edge."""
+
+    if not node_ids:
+        return task_edges.copy()
+    xyz = tasks.set_index("task_node_id").loc[:, XYZ_COLUMNS]
+    existing = {
+        tuple(sorted((int(row.left_node_id), int(row.right_node_id))))
+        for row in task_edges.itertuples(index=False)
+    }
+    additions: list[dict[str, Any]] = []
+    for node_id in sorted(set(map(int, node_ids))):
+        if node_id not in xyz.index:
+            continue
+        distances = np.linalg.norm(
+            xyz.to_numpy(float) - xyz.loc[node_id].to_numpy(float), axis=1
+        )
+        candidates = sorted(
+            (
+                (float(distance), int(other))
+                for distance, other in zip(distances, xyz.index, strict=True)
+                if int(other) != node_id
+            )
+        )
+        for _distance, other in candidates[: int(neighbor_count)]:
+            edge = tuple(sorted((node_id, other)))
+            if edge in existing:
+                continue
+            existing.add(edge)
+            additions.append(
+                {
+                    "left_node_id": edge[0],
+                    "right_node_id": edge[1],
+                    "adjacency": "registered_local_refinement",
+                }
+            )
+    if not additions:
+        return task_edges.copy()
+    columns = list(task_edges.columns)
+    added = pd.DataFrame.from_records(additions)
+    for column in columns:
+        if column not in added:
+            added[column] = None
+    return (
+        pd.concat([task_edges, added.loc[:, columns]], ignore_index=True)
+        .sort_values(["left_node_id", "right_node_id"], kind="stable")
+        .reset_index(drop=True)
+    )
+
+
 def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    roots = _require(output_root, "root_charts")
+    roots = _require(output_root, "root_charts", config)
     stage = output_root / STAGE_DIRS["stitched_atlas"]
     if not roots.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "root_chart_gate_failed")
     growth, tasks, edges, hypotheses = _combined_growth(config, output_root)
-    environment = legacy._EndpointOnlyForwardAdapter(load_environment(project_root, _sources(config, project_root)["robot_config"]))
-    _nodes, continuation = legacy._segmented_continuation(environment, tasks, edges)
+    environment = _environment(project_root, config)
+    _nodes, continuation = _segmented_continuation(environment, tasks, edges)
     pilot = config["pilot"]
+    registered_roots = pd.read_parquet(
+        output_root / STAGE_DIRS["pilot_registry"] / "root_registry.parquet"
+    ).sort_values("root_index", kind="stable")
+    canonical_root_priority = tuple(
+        (int(row.task_node_id), str(row.candidate_id))
+        for row in registered_roots.itertuples(index=False)
+    )
+    upstream_audit = (
+        v142r._audit_policy(config)
+        if str(config.get("upstream_protocol_version")) == "retry8"
+        else v142r._audit_policy(
+            v142r.load_config(_sources(config, project_root)["v14_2r_config"])
+        )
+    )
     policy = AtlasRepairPolicy(
-        audit=v142r._audit_policy(v142r.load_config(_sources(config, project_root)["v14_2r_config"])),
+        audit=upstream_audit,
         minimum_chart_cells=int(pilot["minimum_chart_cells"]),
         minimum_chart_fraction=float(pilot["minimum_chart_fraction"]),
         minimum_chart_spread_mm=float(pilot["minimum_chart_spread_mm"]),
@@ -447,14 +1055,107 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
         abstention_hops=int(pilot["abstention_hops"]),
         abstention_radius_mm=float(pilot["abstention_radius_mm"]),
     )
+    audit_executor = v142r._SubprocessAuditExecutor(
+        config=config,
+        project_root=project_root,
+        tasks=tasks,
+        task_edges=edges,
+        patch_directory=stage,
+        shard_count=int(config["audit_execution"]["logical_shard_count"]),
+        maximum_concurrent_workers=int(config["parallel"]["patch_workers"]),
+        assignment_strategy=str(config["audit_execution"]["assignment_strategy"]),
+        worker_runner_path=Path(__file__).resolve(),
+    )
+    repair_kwargs = {
+        "patch_id": "repaired_5k",
+        "method": "rooted_S4_R8",
+        "policy": policy,
+        "retry_continuation": v142r._registered_retry_adapter(environment, tasks, edges),
+        "schedule_executor": audit_executor,
+        "canonical_root_priority": canonical_root_priority,
+    }
     repaired = repair_rooted_section_atlas(
         growth,
         continuation,
-        patch_id="repaired_5k",
-        method="rooted_S4_R8",
-        policy=policy,
-        retry_continuation=v142r._registered_retry_adapter(environment, tasks, edges),
+        **repair_kwargs,
+        screening_first=bool(config["audit_execution"]["screening_first"]),
     )
+    screening_fallback_used = False
+    if (
+        bool(config["audit_execution"]["screening_first"])
+        and bool(config["audit_execution"]["screening_fallback_to_full_audit"])
+        and not repaired.certificate_gate
+    ):
+        screening_fallback_used = True
+        repaired = repair_rooted_section_atlas(
+            growth,
+            continuation,
+            **{**repair_kwargs, "method": "rooted_S4_R8_full_fallback"},
+            screening_first=False,
+        )
+    local_refinement_used = False
+    refinement = pilot["local_refinement"]
+    if (
+        bool(refinement["enabled"])
+        and int(refinement["maximum_rounds"]) == 1
+        and repaired.certificate_gate
+        and repaired.coverage_ratio < float(pilot["labelable_measure_min"])
+        and repaired.abstained_node_ids
+    ):
+        local_refinement_used = True
+        refined_edges = _add_local_refinement_edges(
+            tasks,
+            edges,
+            sorted(repaired.abstained_node_ids),
+            neighbor_count=int(refinement["neighbor_count"]),
+        )
+        _write_parquet(refined_edges, stage / "registered_local_refinement_edges.parquet")
+        refined_nodes = legacy.atlas_nodes_from_frames(tasks, refined_edges)
+        candidate_frame = pd.read_parquet(
+            output_root / STAGE_DIRS["pilot_registry"] / "pilot_candidate_clusters.parquet"
+        )
+        candidates = legacy._candidates_from_frame(candidate_frame)
+        root_keys = tuple(
+            chart.root_key
+            for chart in growth.charts
+            if chart.chart_id in repaired.selected_stitch_component
+        )
+        _refined_nodes, refined_continuation = _segmented_continuation(
+            environment, tasks, refined_edges
+        )
+        refined_growth = build_section_first_atlas(
+            refined_nodes,
+            candidates,
+            refined_continuation,
+            root_keys=root_keys,
+            policy=replace(_root_policy(config), root_count=max(1, len(root_keys))),
+        )
+        refined_executor = v142r._SubprocessAuditExecutor(
+            config=config,
+            project_root=project_root,
+            tasks=tasks,
+            task_edges=refined_edges,
+            patch_directory=stage / "local_refinement",
+            shard_count=int(config["audit_execution"]["logical_shard_count"]),
+            maximum_concurrent_workers=int(config["parallel"]["patch_workers"]),
+            assignment_strategy=str(config["audit_execution"]["assignment_strategy"]),
+            worker_runner_path=Path(__file__).resolve(),
+        )
+        refined = repair_rooted_section_atlas(
+            refined_growth,
+            refined_continuation,
+            patch_id="repaired_5k_local_refinement",
+            method="rooted_S4_R8_local_refinement",
+            policy=policy,
+            retry_continuation=v142r._registered_retry_adapter(environment, tasks, refined_edges),
+            schedule_executor=refined_executor,
+            screening_first=False,
+            canonical_root_priority=canonical_root_priority,
+        )
+        if refined.certificate_gate and refined.coverage_ratio >= repaired.coverage_ratio:
+            repaired = refined
+            growth = refined_growth
+            edges = refined_edges
     stage.mkdir(parents=True, exist_ok=True)
     for name, frame in repaired.frames.items():
         filename = {
@@ -604,13 +1305,14 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
     root_stability, root_stability_frame = _pilot_root_removal_stability(growth, repaired)
     _write_parquet(root_stability_frame, stage / "root_removal_stability.parquet")
     optimization = repaired.frames["primary_optimization"]
-    checks = {
+    exploratory_checks = {
         "labelable_measure": labelable_measure >= float(pilot["labelable_measure_min"]),
         "labelable_measure_lcb": labelable_lcb >= float(pilot["labelable_measure_lcb_min"]),
         "largest_coherent_region": largest_coherent_measure >= float(pilot["largest_coherent_region_min"]),
         "unresolved_abstention": unresolved_abstention <= float(pilot["unresolved_abstention_max"]),
         "mutually_exclusive_measure_decomposition": abs(sum(measures.values()) - 1.0) <= 1e-12,
-        "all_x_tertiles": len(label_bins) == 3,
+        "all_x_tertiles": len(label_bins)
+        >= int(pilot.get("minimum_x_tertiles", 3)),
         "retained_geometry_certificate": repaired.certificate_gate,
         "root_search_stability": root_stability,
         "primary_optimization_finite": bool(
@@ -619,8 +1321,29 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
             and int(optimization["selected"].astype(bool).sum()) == 1
         ),
     }
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    checks = (
+        {
+            "partial_certificate": bool(repaired.certificate_gate),
+            "nonempty_unique_primary": bool(
+                len(labels) and not labels["task_node_id"].duplicated().any()
+            ),
+            "mutually_exclusive_measure_decomposition": exploratory_checks[
+                "mutually_exclusive_measure_decomposition"
+            ],
+        }
+        if retry8
+        else exploratory_checks
+    )
     return _gate(stage / "gate.json", checks,
-        scientific_gate_pass=bool(all(checks.values())),
+        scientific_gate_pass=bool(all(exploratory_checks.values())),
+        partial_certificate_pass=bool(repaired.certificate_gate),
+        data_legality_gate=bool(all(checks.values())),
+        global_coverage_gate_pass=bool(
+            exploratory_checks["labelable_measure"]
+            and exploratory_checks["largest_coherent_region"]
+        ),
+        exploratory_checks=exploratory_checks,
         labelable_measure_ratio=labelable_measure,
         labelable_measure_bootstrap_lcb95=labelable_lcb,
         labelable_measure_bootstrap_ucb95=labelable_ucb,
@@ -644,6 +1367,10 @@ def stage_stitched_atlas(config: Mapping[str, Any], project_root: Path, output_r
         audited_fundamental_cycle_count=repaired.audited_fundamental_cycle_count,
         cycle_coverage_ratio=repaired.cycle_coverage_ratio,
         xyz_only_primary_hypothesis_retained=True,
+        chart_screening_enabled=bool(config["audit_execution"]["screening_first"]),
+        full_audit_fallback_used=screening_fallback_used,
+        local_refinement_used=local_refinement_used,
+        local_refinement_round_count=int(local_refinement_used),
         primary_optimization_objective_spread=(
             float(optimization["objective"].max() - optimization["objective"].min())
             if len(optimization) else math.inf
@@ -666,24 +1393,41 @@ def _split_role(row: Any, config: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _execute_dataset_shard(
-    config: Mapping[str, Any], project_root: Path, output_root: Path, shard_index: int
+    config: Mapping[str, Any], project_root: Path, output_root: Path, shard_index: int,
+    wave_index: int,
 ) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["fixed_budget_dataset"]
-    directory = stage / "multiparent_shards" / f"shard_{shard_index:02d}"
+    wave_directory = stage / "multiparent_waves" / f"wave_{wave_index:03d}"
+    directory = wave_directory / f"shard_{shard_index:03d}"
     report_path = directory / "report.json"
-    if report_path.is_file():
-        return _read_json(report_path)
-    targets = pd.read_parquet(stage / "multiparent_targets.parquet")
+    targets_path = wave_directory / "multiparent_targets.parquet"
+    sources_path = output_root / STAGE_DIRS["stitched_atlas"] / "primary_canonical_labels.parquet"
+    input_sha = v142r._payload_sha256(
+        {
+            "wave_index": int(wave_index),
+            "shard_index": int(shard_index),
+            "targets_sha256": sha256_file(targets_path),
+            "sources_sha256": sha256_file(sources_path),
+        }
+    )
+    existing = v142r._load_validated_patch_result(
+        directory,
+        config=config,
+        patch_id=f"dataset_wave_{wave_index:03d}_shard_{shard_index:03d}",
+        variant="multiparent",
+        input_sha256=input_sha,
+    )
+    if existing is not None:
+        return existing
+    targets = pd.read_parquet(targets_path)
     targets = targets[targets["shard_index"].astype(int).eq(shard_index)].copy()
     sources = pd.read_parquet(
         output_root / STAGE_DIRS["stitched_atlas"] / "primary_canonical_labels.parquet"
     ).sort_values("task_node_id", kind="stable")
     source_xyz = sources.loc[:, XYZ_COLUMNS].to_numpy(float)
     tree = cKDTree(source_xyz)
-    environment = legacy._EndpointOnlyForwardAdapter(
-        load_environment(project_root, _sources(config, project_root)["robot_config"])
-    )
-    continuation = make_predictor_corrector_continuation(
+    environment = _environment(project_root, config)
+    continuation = make_optimized_predictor_corrector_continuation(
         environment,
         damping=2.0e-3,
         max_corrector_iterations=400,
@@ -784,11 +1528,22 @@ def _execute_dataset_shard(
         "gate_pass": True,
     }
     _write_json(report_path, report)
+    v142r._write_patch_completion_manifest(
+        directory,
+        config=config,
+        patch_id=f"dataset_wave_{wave_index:03d}_shard_{shard_index:03d}",
+        variant="multiparent",
+        input_sha256=input_sha,
+    )
     return report
 
 
-def _run_dataset_shards(config: Mapping[str, Any], output_root: Path) -> None:
-    pending = list(range(12))
+def _run_dataset_shards(
+    config: Mapping[str, Any], output_root: Path, wave_index: int
+) -> None:
+    logical_count = int(config["dataset"]["logical_shard_count"])
+    worker_limit = int(config["parallel"]["patch_workers"])
+    pending = list(range(logical_count))
     running: list[tuple[int, subprocess.Popen[str], Any]] = []
     failures: list[dict[str, Any]] = []
     environment = os.environ.copy()
@@ -818,11 +1573,9 @@ def _run_dataset_shards(config: Mapping[str, Any], output_root: Path) -> None:
             for _shard, process, handle in running:
                 process.terminate(); process.wait(timeout=30); handle.close()
             raise RuntimeError(f"V14.3 multiparent shard failures: {failures}")
-        while pending and len(running) < 12:
+        while pending and len(running) < worker_limit:
             shard_index = pending.pop(0)
-            directory = output_root / STAGE_DIRS["fixed_budget_dataset"] / "multiparent_shards" / f"shard_{shard_index:02d}"
-            if (directory / "report.json").is_file():
-                continue
+            directory = output_root / STAGE_DIRS["fixed_budget_dataset"] / "multiparent_waves" / f"wave_{wave_index:03d}" / f"shard_{shard_index:03d}"
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "worker.log").open("w", encoding="utf-8")
             command = [
@@ -832,6 +1585,7 @@ def _run_dataset_shards(config: Mapping[str, Any], output_root: Path) -> None:
                 "--output-root", str(output_root),
                 "--stage", "fixed_budget_dataset",
                 "--dataset-shard", str(shard_index),
+                "--dataset-wave", str(wave_index),
             ]
             process = subprocess.Popen(
                 command, cwd=SOURCE_ROOT, env=environment,
@@ -843,18 +1597,65 @@ def _run_dataset_shards(config: Mapping[str, Any], output_root: Path) -> None:
 
 
 def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    pilot = _require(output_root, "stitched_atlas")
+    pilot = _require(output_root, "stitched_atlas", config)
     stage = output_root / STAGE_DIRS["fixed_budget_dataset"]
     if not pilot.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "repaired_5k_pilot_gate_failed")
     if config.get("_dataset_shard") is not None:
         report = _execute_dataset_shard(
-            config, project_root, output_root, int(config["_dataset_shard"])
+            config, project_root, output_root, int(config["_dataset_shard"]),
+            int(config["_dataset_wave"]),
         )
         return {"gate_pass": True, "worker_report": report}
     labels = pd.read_parquet(output_root / STAGE_DIRS["stitched_atlas"] / "primary_canonical_labels.parquet").sort_values("task_node_id", kind="stable")
+    labels["label_quality"] = "Gold"
+    retry8 = str(config.get("upstream_protocol_version")) == "retry8"
+    if retry8:
+        upstream = _upstream_stage_paths(
+            config, _sources(config, project_root)["v14_2r"]
+        )
+        seed = pd.read_parquet(upstream["labels"])
+        task_meta = pd.read_parquet(
+            output_root / STAGE_DIRS["pilot_registry"] / "pilot_task_nodes.parquet"
+        )
+        representatives = task_meta[task_meta["is_representative"].astype(bool)].copy()
+        tree = cKDTree(representatives.loc[:, XYZ_COLUMNS].to_numpy(float))
+        distance, nearest = tree.query(seed.loc[:, XYZ_COLUMNS].to_numpy(float), k=1)
+        nearest_rows = representatives.iloc[np.asarray(nearest, dtype=int)].reset_index(drop=True)
+        cell_diagonal = (
+            pd.to_numeric(nearest_rows["cell_level_mm"], errors="coerce").to_numpy(float)
+            / 1000.0
+            * math.sqrt(3.0)
+        )
+        seed = seed.loc[np.asarray(distance) <= cell_diagonal + 1.0e-12].reset_index(drop=True)
+        nearest_rows = nearest_rows.loc[np.asarray(distance) <= cell_diagonal + 1.0e-12].reset_index(drop=True)
+        first_node = int(task_meta["task_node_id"].max()) + 1
+        seed_labels = pd.DataFrame(
+            {
+                "task_node_id": np.arange(first_node, first_node + len(seed), dtype=int),
+                "physical_point_id": seed["physical_point_id"].astype(str),
+                "x_m": seed["x_m"].astype(float),
+                "y_m": seed["y_m"].astype(float),
+                "z_m": seed["z_m"].astype(float),
+                "source_parent_node_id": nearest_rows["source_parent_node_id"].astype(int),
+                "cell_level_mm": nearest_rows["cell_level_mm"].astype(int),
+                "cell_ix": nearest_rows["cell_ix"].astype(int),
+                "cell_iy": nearest_rows["cell_iy"].astype(int),
+                "cell_iz": nearest_rows["cell_iz"].astype(int),
+                "chart_id": "retry8_primary",
+                "abstained": False,
+                "label_quality": seed["label_quality"].astype(str),
+                **{column: seed[column].astype(float) for column in BETA_COLUMNS},
+            }
+        )
+        labels = pd.concat([labels, seed_labels], ignore_index=True, sort=False)
+        labels["_xyz_key"] = labels.loc[:, XYZ_COLUMNS].round(12).astype(str).agg("|".join, axis=1)
+        labels = labels.sort_values(
+            ["_xyz_key", "label_quality"], kind="stable"
+        ).drop_duplicates("_xyz_key", keep="first").drop(columns="_xyz_key")
     budget = config["dataset"]
     labels = labels.iloc[: int(budget["maximum_unique_rows"])].copy()
+    existing_certified_row_count = int(len(labels))
     if labels["task_node_id"].duplicated().any():
         raise RuntimeError("primary canonical dataset contains duplicate physical task points")
     desired_new = max(0, int(budget["target_unique_rows"]) - len(labels))
@@ -871,65 +1672,89 @@ def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, ou
         representative = task_meta[task_meta["is_representative"].astype(bool)].set_index(
             "source_parent_node_id"
         )
-        cell_cycle = np.resize(cells["source_parent_node_id"].to_numpy(dtype=int), desired_new)
-        sobol_power = int(math.ceil(math.log2(max(1, desired_new))))
+        maximum_attempts = int(budget["maximum_attempt_rows"])
+        cell_cycle = np.resize(cells["source_parent_node_id"].to_numpy(dtype=int), maximum_attempts)
+        sobol_power = int(math.ceil(math.log2(max(1, maximum_attempts))))
         unit = qmc.Sobol(
             d=3, scramble=True, seed=int(budget["enrichment_seed"])
-        ).random_base2(sobol_power)[:desired_new]
-        targets = []
+        ).random_base2(sobol_power)[:maximum_attempts]
         first_id = int(task_meta["task_node_id"].max()) + 1
-        for index, (parent_id, offset) in enumerate(zip(cell_cycle, unit, strict=True)):
-            parent = representative.loc[int(parent_id)]
-            level_m = float(parent.cell_level_mm) / 1000.0
-            xyz = (
-                np.asarray([parent.cell_ix, parent.cell_iy, parent.cell_iz], dtype=float)
-                + np.asarray(offset, dtype=float)
-            ) * level_m
-            digest = hashlib.sha256(np.asarray(xyz, dtype="<f8").tobytes()).hexdigest()[:24]
-            targets.append(
-                {
+        accepted_parts: list[pd.DataFrame] = []
+        result_parts: list[pd.DataFrame] = []
+        attempted = 0
+        wave_index = 0
+        while len(labels) + sum(len(part) for part in accepted_parts) < int(budget["target_unique_rows"]) and attempted < maximum_attempts:
+            wave_size = min(int(budget["wave_size"]), maximum_attempts - attempted)
+            targets = []
+            for local_index in range(wave_size):
+                index = attempted + local_index
+                parent_id, offset = int(cell_cycle[index]), unit[index]
+                parent = representative.loc[parent_id]
+                level_m = float(parent.cell_level_mm) / 1000.0
+                xyz = (
+                    np.asarray([parent.cell_ix, parent.cell_iy, parent.cell_iz], dtype=float)
+                    + np.asarray(offset, dtype=float)
+                ) * level_m
+                digest = hashlib.sha256(np.asarray(xyz, dtype="<f8").tobytes()).hexdigest()[:24]
+                targets.append({
                     "task_node_id": first_id + index,
                     "physical_point_id": f"v14_3_sobol_{digest}",
-                    "source_parent_node_id": int(parent_id),
+                    "source_parent_node_id": parent_id,
                     "cell_level_mm": int(parent.cell_level_mm),
-                    "cell_ix": int(parent.cell_ix),
-                    "cell_iy": int(parent.cell_iy),
-                    "cell_iz": int(parent.cell_iz),
+                    "cell_ix": int(parent.cell_ix), "cell_iy": int(parent.cell_iy), "cell_iz": int(parent.cell_iz),
                     "x_m": float(xyz[0]), "y_m": float(xyz[1]), "z_m": float(xyz[2]),
-                    "shard_index": index % 12,
-                }
-            )
-        target_frame = pd.DataFrame.from_records(targets)
-        _write_parquet(target_frame, stage / "multiparent_targets.parquet")
-        _run_dataset_shards(config, output_root)
-        results = pd.concat(
-            [
-                pd.read_parquet(
-                    stage / "multiparent_shards" / f"shard_{index:02d}/multiparent_results.parquet"
-                )
-                for index in range(12)
-            ],
-            ignore_index=True,
-        )
+                    "shard_index": index % int(budget["logical_shard_count"]),
+                })
+            wave_directory = stage / "multiparent_waves" / f"wave_{wave_index:03d}"
+            _write_parquet(pd.DataFrame.from_records(targets), wave_directory / "multiparent_targets.parquet")
+            _run_dataset_shards(config, output_root, wave_index)
+            wave_results = pd.concat([
+                pd.read_parquet(wave_directory / f"shard_{index:03d}" / "multiparent_results.parquet")
+                for index in range(int(budget["logical_shard_count"]))
+            ], ignore_index=True)
+            result_parts.append(wave_results)
+            accepted_parts.append(wave_results[wave_results["accepted"].astype(bool)].copy())
+            attempted += wave_size
+            wave_index += 1
+        results = pd.concat(result_parts, ignore_index=True) if result_parts else pd.DataFrame()
         _write_parquet(results, stage / "multiparent_audit.parquet")
-        accepted = results[results["accepted"].astype(bool)].copy()
+        accepted = pd.concat(accepted_parts, ignore_index=True) if accepted_parts else pd.DataFrame()
         labels = pd.concat(
             [labels, accepted[[*labels.columns]]], ignore_index=True
         ).iloc[: int(budget["maximum_unique_rows"])]
     else:
         results = pd.DataFrame()
-    environment = legacy._EndpointOnlyForwardAdapter(load_environment(project_root, _sources(config, project_root)["robot_config"]))
+    environment = _environment(project_root, config)
+    beta_matrix = labels.loc[:, BETA_COLUMNS].to_numpy(float)
+    jacobian_matrix = environment.fk_and_jacobian(beta_matrix)[1]
     rows = []
-    for row in labels.itertuples(index=False):
-        beta = np.asarray([getattr(row, name) for name in BETA_COLUMNS])
-        jacobian = np.asarray(environment.jacobian(beta), dtype=float).reshape(3, 6)
-        split_role, macroblock = _split_role(row, config)
+    split = None
+    if retry8:
+        split = choose_macroblock_split(
+            labels,
+            block_sizes_mm=tuple(map(int, budget["macroblock_sizes_mm"])),
+            split_seed=int(budget["split_seed"]),
+            split_fractions=tuple(map(float, budget["split_fractions"])),
+            minimum_train_blocks=int(budget["minimum_train_blocks"]),
+            minimum_validation_blocks=int(budget["minimum_validation_blocks"]),
+            minimum_test_blocks=int(budget["minimum_test_blocks"]),
+            minimum_rows_per_split=int(budget["minimum_rows_per_split"]),
+        )
+        split_by_point = split.frame.set_index("physical_point_id")[["split_role", "macroblock"]]
+    for row_index, row in enumerate(labels.itertuples(index=False)):
+        jacobian = jacobian_matrix[row_index]
+        if split is None:
+            split_role, macroblock = _split_role(row, config)
+        else:
+            split_role = str(split_by_point.loc[str(row.physical_point_id), "split_role"])
+            macroblock = str(split_by_point.loc[str(row.physical_point_id), "macroblock"])
         rows.append({
             "record_id": f"v14_3_{int(row.task_node_id):07d}",
             "task_node_id": int(row.task_node_id),
             "physical_point_id": str(row.physical_point_id),
             "kind": "static", "split_role": split_role,
             "chart_id": str(row.chart_id), "is_primary": True, "sample_weight": 1.0,
+            "label_quality": str(getattr(row, "label_quality", "Gold")),
             **{name: float(getattr(row, name)) for name in XYZ_COLUMNS},
             **{name: float(getattr(row, name)) for name in BETA_COLUMNS},
             **{name: float(jacobian.reshape(-1)[index]) for index, name in enumerate(JACOBIAN_COLUMNS)},
@@ -965,10 +1790,13 @@ def stage_fixed_budget_dataset(config: Mapping[str, Any], project_root: Path, ou
     return _gate(stage / "gate.json", checks,
         supervision_row_count=len(frame), split_counts=counts, padding_count=0,
         all_supervised_rows_count_toward_budget=True,
-        existing_certified_row_count=int(len(labels) - (int(results["accepted"].sum()) if len(results) else 0)),
+        existing_certified_row_count=existing_certified_row_count,
         multiparent_target_count=int(len(results)),
         multiparent_accepted_count=int(results["accepted"].sum()) if len(results) else 0,
         alternative_branches_used_for_xyz_only_supervision=False,
+        gold_label_count=int(frame["label_quality"].eq("Gold").sum()),
+        silver_label_count=int(frame["label_quality"].eq("Silver").sum()),
+        adaptive_macroblock_mm=(int(split.block_size_mm) if split is not None else int(budget["macroblock_mm"])),
     )
 
 
@@ -1054,8 +1882,46 @@ def _dls_metrics(environment: Any, beta: np.ndarray, xyz: np.ndarray) -> dict[st
     return output
 
 
+def _dls_candidates(
+    environment: Any, beta: np.ndarray, xyz: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    corrected = np.asarray(beta, dtype=float).copy()
+    outputs: list[np.ndarray] = []
+    bounds = np.asarray(environment.bounds, dtype=float)
+    for _step in (1, 2):
+        current_xyz, jacobians = environment.fk_and_jacobian(corrected)
+        error = np.asarray(xyz, dtype=float) - current_xyz
+        for index in range(len(corrected)):
+            proposal = corrected[index] + weighted_damped_pinv(
+                jacobians[index],
+                damping=1e-3,
+                weights=np.asarray([4, 4, 2, 2, 1, 1], dtype=float),
+            ) @ error[index]
+            if np.all(proposal >= bounds[:, 0]) and np.all(proposal <= bounds[:, 1]):
+                corrected[index] = proposal
+        outputs.append(corrected.copy())
+    return outputs[0], outputs[1]
+
+
+def _student_pass_mask(metrics: pd.DataFrame, student: Mapping[str, Any]) -> pd.Series:
+    return (
+        metrics["training_error"].isna()
+        & metrics["fk_p95_mm"].le(float(student["fk_p95_max_mm"]))
+        & metrics["fk_p99_mm"].le(float(student["fk_p99_max_mm"]))
+        & metrics["fk_p999_mm"].le(float(student["fk_p999_max_mm"]))
+        & metrics["trajectory_fk_max_mm"].le(float(student["trajectory_fk_max_mm"]))
+        & metrics["closed_loop_beta_return_max_deg"].le(
+            float(student["closed_loop_beta_return_max_deg"])
+        )
+        & metrics["chart_boundary_beta_jump_max_deg"].le(
+            float(student["chart_boundary_beta_jump_max_deg"])
+        )
+        & metrics["trajectory_suite_coverage"].ge(1.0)
+    )
+
+
 def stage_students(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    dataset_gate = _require(output_root, "fixed_budget_dataset")
+    dataset_gate = _require(output_root, "fixed_budget_dataset", config)
     stage = output_root / STAGE_DIRS["students"]
     if not dataset_gate.get("gate_pass", False):
         return v142r.write_scientific_skip(stage, "unique_supervision_budget_gate_failed")
@@ -1063,7 +1929,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
     train = frame[frame["split_role"].eq("train_core")].copy()
     validation = frame[frame["split_role"].eq("validation")].copy()
     test = frame[frame["split_role"].eq("test")].copy()
-    environment = legacy._EndpointOnlyForwardAdapter(load_environment(project_root, _sources(config, project_root)["robot_config"]))
+    environment = _environment(project_root, config)
     geometry = _student_geometry(environment)
     student = config["student"]
     sources = _sources(config, project_root)
@@ -1112,7 +1978,13 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
         },
     )
     reports = []
+    predictions: dict[tuple[str, int], tuple[np.ndarray, np.ndarray, np.ndarray | None]] = {}
+    trained_modes: list[RepresentationMode] = []
     for mode in (RepresentationMode.XYZ_GLOBAL, RepresentationMode.XYZ_ROUTER_EXPERTS):
+        if mode is RepresentationMode.XYZ_ROUTER_EXPERTS:
+            global_frame = pd.DataFrame.from_records(reports)
+            if len(global_frame) and _student_pass_mask(global_frame, student).any():
+                break
         if mode is RepresentationMode.XYZ_ROUTER_EXPERTS:
             common = set(train["chart_id"].astype(str)) & set(validation["chart_id"].astype(str)) & set(test["chart_id"].astype(str))
             mode_train = train[train["chart_id"].astype(str).isin(common)]
@@ -1122,6 +1994,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
                 continue
         else:
             mode_train, mode_validation, mode_test = train, validation, test
+        trained_modes.append(mode)
         for seed in map(int, student["seeds"]):
             try:
                 training = train_workspace_student(
@@ -1151,6 +2024,11 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
                     trajectory_targets,
                     accepted=np.asarray(trajectory_prediction.accepted, dtype=bool),
                 )
+                predictions[(mode.value, seed)] = (
+                    beta.copy(),
+                    np.asarray(trajectory_prediction.beta_rad, dtype=float).copy(),
+                    np.asarray(trajectory_prediction.accepted, dtype=bool).copy(),
+                )
 
                 def tf_predict(point: np.ndarray) -> np.ndarray:
                     try:
@@ -1172,7 +2050,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
                         warmup=int(student["cpu_batch1_warmup"]),
                         repeats=int(student["cpu_batch1_repeats"]),
                     ),
-                    **_dls_metrics(environment, beta, xyz), "training_error": None,
+                    "training_error": None,
                 })
             except Exception as error:
                 reports.append({
@@ -1189,21 +2067,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
     x_test = test.loc[:, XYZ_COLUMNS].to_numpy(float); y_test_xyz = test.loc[:, XYZ_COLUMNS].to_numpy(float)
     baselines = []
     from sklearn.neighbors import KNeighborsRegressor
-    from sklearn.neural_network import MLPRegressor
-    baselines.append(("sklearn_mlp", MLPRegressor(hidden_layer_sizes=(128, 128, 64), max_iter=300, random_state=20260881, early_stopping=True)))
-    baselines.append(("knn", KNeighborsRegressor(n_neighbors=8, weights="distance", n_jobs=12)))
-    try:
-        from lightgbm import LGBMRegressor
-        baselines.append(("lgbm", LGBMRegressor(n_estimators=300, num_leaves=64, learning_rate=0.05, n_jobs=12, random_state=20260881, verbosity=-1)))
-    except Exception as error:
-        reports.append({
-            "model": "lgbm", "training_error": f"import:{type(error).__name__}:{error}",
-            "fk_p95_mm": math.inf, "fk_p99_mm": math.inf, "fk_p999_mm": math.inf,
-            "fk_max_mm": math.inf, "trajectory_fk_max_mm": math.inf,
-            "closed_loop_beta_return_max_deg": math.inf,
-            "chart_boundary_beta_jump_max_deg": math.inf,
-            "trajectory_suite_coverage": 0.0,
-        })
+    baselines.append(("knn_diagnostic", KNeighborsRegressor(n_neighbors=8, weights="distance", n_jobs=12)))
     for name, model in baselines:
         try:
             model.fit(x_train, y_train)
@@ -1212,6 +2076,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
             metrics.pop("fk_residual_mm")
             trajectory_xyz = trajectory_targets.loc[:, XYZ_COLUMNS].to_numpy(float)
             trajectory_beta = np.asarray(model.predict(trajectory_xyz), dtype=float)
+            predictions[(name, 20260881)] = (beta.copy(), trajectory_beta.copy(), None)
             reports.append({
                 "model": name, "seed": 20260881, "train_rows": len(train), "test_rows": len(test),
                 **metrics,
@@ -1225,6 +2090,7 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
                     repeats=int(student["cpu_batch1_repeats"]),
                 ),
                 "training_error": None,
+                "diagnostic_only": True,
             })
         except Exception as error:
             reports.append({
@@ -1237,8 +2103,58 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
                 "trajectory_suite_coverage": 0.0,
             })
     metrics = pd.DataFrame.from_records(reports)
+    if "diagnostic_only" not in metrics:
+        metrics["diagnostic_only"] = False
+    else:
+        metrics["diagnostic_only"] = metrics["diagnostic_only"].fillna(False).astype(bool)
+    eligible = metrics[~metrics["diagnostic_only"]].copy()
+    eligible_pass = _student_pass_mask(eligible, student)
+    if len(eligible) and not eligible_pass.any():
+        selected_index = eligible.sort_values(
+            ["fk_p95_mm", "trajectory_fk_max_mm", "model", "seed"], kind="stable"
+        ).index[0]
+        selected = metrics.loc[selected_index]
+        key = (str(selected["model"]), int(selected["seed"]))
+        if key in predictions:
+            test_beta, trajectory_beta, trajectory_accepted = predictions[key]
+            test_xyz = test.loc[:, XYZ_COLUMNS].to_numpy(float)
+            trajectory_xyz = trajectory_targets.loc[:, XYZ_COLUMNS].to_numpy(float)
+            test_steps = _dls_candidates(environment, test_beta, test_xyz)
+            trajectory_steps = _dls_candidates(environment, trajectory_beta, trajectory_xyz)
+            correction_rows = []
+            for step, (corrected_test, corrected_trajectory) in enumerate(
+                zip(test_steps, trajectory_steps, strict=True), start=1
+            ):
+                corrected_metrics = _fk_metrics(environment, corrected_test, test_xyz)
+                corrected_metrics.pop("fk_residual_mm")
+                correction_rows.append({
+                    "model": f"selected_mlp_dls_{step}",
+                    "base_model": key[0],
+                    "seed": key[1],
+                    "train_rows": int(selected.get("train_rows", 0)),
+                    "test_rows": len(test),
+                    "accepted_fraction": float(selected.get("accepted_fraction", 1.0)),
+                    **corrected_metrics,
+                    **_trajectory_metrics(
+                        environment,
+                        corrected_trajectory,
+                        trajectory_targets,
+                        accepted=trajectory_accepted,
+                    ),
+                    "cpu_batch1_latency_ms": math.nan,
+                    "training_error": None,
+                    "diagnostic_only": False,
+                    "dls_steps": step,
+                })
+                candidate_frame = pd.DataFrame.from_records([correction_rows[-1]])
+                if _student_pass_mask(candidate_frame, student).iloc[0]:
+                    break
+            if correction_rows:
+                metrics = pd.concat(
+                    [metrics, pd.DataFrame.from_records(correction_rows)], ignore_index=True
+                )
     _write_parquet(metrics, stage / "student_metrics.parquet")
-    successful = metrics[metrics["training_error"].isna()]
+    successful = metrics[metrics["training_error"].isna() & ~metrics["diagnostic_only"]]
     passing = (
         successful["fk_p95_mm"].le(float(student["fk_p95_max_mm"]))
         & successful["fk_p99_mm"].le(float(student["fk_p99_max_mm"]))
@@ -1252,6 +2168,23 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
         )
         & successful["trajectory_suite_coverage"].ge(1.0)
     )
+    physical_pass = _student_pass_mask(successful, student)
+    base_models = successful.get(
+        "base_model", pd.Series(index=successful.index, dtype=object)
+    ).fillna("")
+    global_family = successful["model"].eq(
+        RepresentationMode.XYZ_GLOBAL.value
+    ) | base_models.eq(RepresentationMode.XYZ_GLOBAL.value)
+    global_raw_pass = bool(
+        (physical_pass & successful["model"].eq(RepresentationMode.XYZ_GLOBAL.value)).any()
+    )
+    global_dls_pass = bool(
+        (
+            physical_pass
+            & global_family
+            & successful["model"].astype(str).str.startswith("selected_mlp_dls_")
+        ).any()
+    )
     return _gate(stage / "gate.json", {"at_least_one_student_passes": bool(len(passing) and passing.any())},
         scientific_gate_pass=bool(len(passing) and passing.any()), model_count=len(metrics),
         router_features=list(ROUTER_FEATURE_COLUMNS), router_oracle_chart_input=False,
@@ -1259,34 +2192,33 @@ def stage_students(config: Mapping[str, Any], project_root: Path, output_root: P
         fixed_trajectory_count=int(student["trajectory_count"]),
         fixed_trajectory_waypoints=int(student["trajectory_waypoints"]),
         batch1_latency_device="CPU",
-        global_xyz_only_pass=bool(
-            (
-                (successful["model"] == RepresentationMode.XYZ_GLOBAL.value)
-                & successful["fk_p95_mm"].le(float(student["fk_p95_max_mm"]))
-                & successful["fk_p999_mm"].le(float(student["fk_p999_max_mm"]))
-                & successful["trajectory_fk_max_mm"].le(float(student["trajectory_fk_max_mm"]))
-                & successful["closed_loop_beta_return_max_deg"].le(
-                    float(student["closed_loop_beta_return_max_deg"])
-                )
-                & successful["chart_boundary_beta_jump_max_deg"].le(
-                    float(student["chart_boundary_beta_jump_max_deg"])
-                )
-                & successful["trajectory_suite_coverage"].ge(1.0)
-            ).any()
+        staged_training_order=[mode.value for mode in trained_modes],
+        router_skipped_after_global_pass=(
+            RepresentationMode.XYZ_ROUTER_EXPERTS not in trained_modes
         ),
+        knn_is_diagnostic_only=True,
+        sklearn_mlp_and_lightgbm_removed=True,
+        global_xyz_only_pass=bool(global_raw_pass or global_dls_pass),
+        global_xyz_only_raw_pass=global_raw_pass,
+        global_xyz_only_dls_pass=global_dls_pass,
     )
 
 
 def stage_representation_decision(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    student = _require(output_root, "students")
-    pilot = _require(output_root, "stitched_atlas")
+    student = _require(output_root, "students", config)
+    pilot = _require(output_root, "stitched_atlas", config)
     stage = output_root / STAGE_DIRS["representation_decision"]
     overlaps = pd.read_parquet(output_root / STAGE_DIRS["stitched_atlas"] / "chart_overlap_audit.parquet")
     nonstitchable = overlaps[(~overlaps.get("stitchable", False).astype(bool)) & pd.to_numeric(overlaps.get("beta_max_deg"), errors="coerce").gt(1.0)] if not overlaps.empty else overlaps
     global_pass = bool(student.get("global_xyz_only_pass", False))
     primary_abstention_required = float(pilot.get("abstention_measure_ratio", 0.0)) > 0.0
     if global_pass:
-        representation = "global_xyz_only"
+        representation = (
+            "global_xyz_only_with_dls"
+            if bool(student.get("global_xyz_only_dls_pass", False))
+            and not bool(student.get("global_xyz_only_raw_pass", False))
+            else "global_xyz_only"
+        )
     elif student.get("scientific_gate_pass", False):
         representation = "xyz_only_router_experts"
     elif primary_abstention_required and float(pilot.get("unresolved_abstention_ratio", 1.0)) <= 0.70:
@@ -1310,13 +2242,226 @@ def stage_representation_decision(config: Mapping[str, Any], project_root: Path,
     return _gate(stage / "gate.json", {"representation_decided": representation != "blocked_pending_paired_history_experiment"}, **report)
 
 
+def stage_reach_update(
+    config: Mapping[str, Any], project_root: Path, output_root: Path
+) -> dict[str, Any]:
+    """Conditionally run the one registered Reach Round 8 and never a Round 9."""
+
+    representation = _require(output_root, "representation_decision", config)
+    pilot = _require(output_root, "stitched_atlas", config)
+    dataset = _require(output_root, "fixed_budget_dataset", config)
+    students = _require(output_root, "students", config)
+    stage = output_root / STAGE_DIRS["reach_update"]
+    sources = _sources(config, project_root)
+    upstream_root = sources["v14_2r"]
+    protocol = str(config.get("upstream_protocol_version", "retry6"))
+    if protocol in {"retry7", "retry8"}:
+        reach_root = upstream_root if protocol == "retry7" else sources["retry7"]
+        round8 = _read_json(
+            reach_root / "07_reach_round8/gate.json"
+        )
+        return _gate(
+            stage / "gate.json",
+            {"reach_converged": bool(round8.get("gate_pass", False))},
+            reach_source="retry7_round8",
+            round8_executed_upstream=True,
+            round9_forbidden=True,
+            upstream_reach_gate=round8,
+        )
+    round7_path = upstream_root / "08_reach_round7/gate.json"
+    round7 = _read_json(round7_path)
+    formal = config["formal_gate"]
+    nonreach_checks = {
+        "labelable_measure": float(pilot.get("labelable_measure_ratio", 0.0))
+        >= float(formal["labelable_measure_min"]),
+        "labelable_measure_lcb": float(
+            pilot.get("labelable_measure_bootstrap_lcb95", 0.0)
+        )
+        >= float(formal["labelable_measure_lcb_min"]),
+        "unresolved_plus_abstention": float(
+            pilot.get("unresolved_abstention_ratio", 1.0)
+        )
+        <= float(formal["unresolved_max"]),
+        "student": bool(students.get("gate_pass", False)),
+        "representation": bool(representation.get("gate_pass", False)),
+        "budget": int(dataset.get("supervision_row_count", 10**12))
+        <= int(formal["maximum_n_min"]),
+    }
+    if bool(round7.get("gate_pass", False)):
+        return _gate(
+            stage / "gate.json",
+            {"reach_converged": True},
+            reach_source="round7",
+            round8_executed=False,
+            round9_forbidden=True,
+            nonreach_checks=nonreach_checks,
+        )
+    if not all(nonreach_checks.values()):
+        return _gate(
+            stage / "gate.json",
+            {"reach_converged": False},
+            reach_source="round7_failed_round8_skipped_nonreach_impossible",
+            round8_executed=False,
+            round9_forbidden=True,
+            nonreach_checks=nonreach_checks,
+        )
+
+    reach = config["reach_round8"]
+    v142 = upstream_root
+    round7_a = pd.read_parquet(v142 / "08_reach_round7/replica_a_slab_round7.parquet")
+    round7_b = pd.read_parquet(v142 / "08_reach_round7/replica_b_slab_round7.parquet")
+    round7_report = _read_json(v142 / "08_reach_round7/reach_round7_report.json")
+    chunk = 2 ** int(reach["sobol_power"])
+    round6_a, round6_b = round7_a.iloc[:-chunk], round7_b.iloc[:-chunk]
+    round5_a, round5_b = round6_a.iloc[:-chunk], round6_b.iloc[:-chunk]
+    seeds_a = tuple(map(int, round7_report["replica_a_seed_lineage"]))
+    seeds_b = tuple(map(int, round7_report["replica_b_seed_lineage"]))
+    legacy_config = legacy.load_config(_sources(config, project_root)["legacy_config"])
+    legacy_paths = legacy._paths(legacy_config, project_root)
+    grid = legacy._workspace_grid(legacy_paths)
+    environment = _environment(project_root, config)
+    spec = ReachSamplingRoundSpec(
+        int(reach["sobol_power"]), int(reach["seed_a"]), int(reach["seed_b"])
+    )
+    generated = generate_independent_reach_samples(
+        environment,
+        np.asarray(environment.bounds, dtype=float),
+        grid=grid,
+        rounds=(spec,),
+        chunk_rows=65536,
+    )
+
+    def new_frame(xyz: np.ndarray, beta: np.ndarray, source: str) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "x_m": xyz[:, 0], "y_m": xyz[:, 1], "z_m": xyz[:, 2],
+                **{name: beta[:, index] for index, name in enumerate(BETA_COLUMNS)},
+                "source": source,
+            }
+        )
+
+    final_a = pd.concat(
+        [round7_a, new_frame(generated.xyz_a, generated.beta_a, "replica_a_round_8")],
+        ignore_index=True,
+    )
+    final_b = pd.concat(
+        [round7_b, new_frame(generated.xyz_b, generated.beta_b, "replica_b_round_8")],
+        ignore_index=True,
+    )
+    xyz_columns = ["x_m", "y_m", "z_m"]
+    rounds = (
+        ReachReplicaRound(6, ReachReplica("A", seeds_a[:-1], round6_a[xyz_columns].to_numpy(float)), ReachReplica("B", seeds_b[:-1], round6_b[xyz_columns].to_numpy(float))),
+        ReachReplicaRound(7, ReachReplica("A", seeds_a, round7_a[xyz_columns].to_numpy(float)), ReachReplica("B", seeds_b, round7_b[xyz_columns].to_numpy(float))),
+        ReachReplicaRound(8, ReachReplica("A", (*seeds_a, spec.seed_a), final_a[xyz_columns].to_numpy(float)), ReachReplica("B", (*seeds_b, spec.seed_b), final_b[xyz_columns].to_numpy(float))),
+    )
+    builder = ReachProxyBuilder(ReachProxyConfig(
+        grid=grid,
+        minimum_weighted_jaccard=float(reach["weighted_jaccard_min"]),
+        maximum_new_volume_ratio=float(reach["new_volume_ratio_max"]),
+        maximum_boundary_change_ratio=1.0,
+        maximum_frontier_new_volume_ratio=float(reach["frontier_new_volume_ratio_max"]),
+        required_consecutive_rounds=int(reach["required_consecutive_rounds"]),
+    ))
+    frontier_evidence: list[FrontierProbeEvidence] = []
+    for frontier_path in (
+        legacy_paths["original_frontier"],
+        legacy_paths["retry4_frontier"],
+        v142 / "08_reach_round7/frontier_inverse_probes_round7.parquet",
+    ):
+        if frontier_path.is_file():
+            frame = pd.read_parquet(frontier_path)
+            frontier_evidence.extend(
+                FrontierProbeEvidence(
+                    CellKey(int(row.cell_level_mm), int(row.cell_ix), int(row.cell_iy), int(row.cell_iz)),
+                    bool(row.found_valid_inverse),
+                    round_id=int(row.round_id),
+                )
+                for row in frame.itertuples(index=False)
+            )
+    domain = pd.read_parquet(legacy_paths["original_domain_cells"])
+    supplemental = tuple(
+        CellKey(int(row.cell_level_mm), int(row.cell_ix), int(row.cell_iy), int(row.cell_iz))
+        for row in domain[
+            domain["cell_level_mm"].eq(grid.convergence_level_mm)
+            & (domain["registered_pool_support"].astype(bool) | domain["tip_pool_support"].astype(bool))
+        ].itertuples(index=False)
+    )
+    preliminary = builder.build(
+        rounds,
+        frontier_evidence=frontier_evidence,
+        supplemental_supported_cells=supplemental,
+    )
+    frontier_cells = legacy.frontier_candidates(
+        preliminary.proxy_upper_cells,
+        grid=grid,
+        maximum_count=int(reach["frontier_cell_budget"]),
+    )
+    seed_xyz = np.vstack([final_a[xyz_columns].to_numpy(float), final_b[xyz_columns].to_numpy(float)])
+    seed_beta = np.vstack([final_a.loc[:, BETA_COLUMNS].to_numpy(float), final_b.loc[:, BETA_COLUMNS].to_numpy(float)])
+    new_frontier, frontier_frame = legacy._frontier_probe_round(
+        environment,
+        frontier_cells,
+        grid=grid,
+        seed_xyz=seed_xyz,
+        seed_beta=seed_beta,
+        starts=int(reach["frontier_starts_per_cell"]),
+        round_id=8,
+    )
+    frontier_evidence.extend(new_frontier)
+    result = builder.build(rounds, frontier_evidence=frontier_evidence, supplemental_supported_cells=supplemental)
+    level = grid.convergence_level_mm
+    unions = [grid.cells_for_points(pair.replica_a.xyz_m, level_mm=level) | grid.cells_for_points(pair.replica_b.xyz_m, level_mm=level) for pair in rounds]
+    boundary = {
+        7: measure_weighted_boundary_change_ratio(unions[1], unions[0]),
+        8: measure_weighted_boundary_change_ratio(unions[2], unions[1]),
+    }
+    metrics = [asdict(item) for item in result.replica_metrics]
+    recent = metrics[-2:]
+    checks = [
+        bool(
+            row["volume_weighted_jaccard"] >= float(reach["weighted_jaccard_min"])
+            and row["new_volume_ratio"] <= float(reach["new_volume_ratio_max"])
+            and row["frontier_new_volume_ratio"] <= float(reach["frontier_new_volume_ratio_max"])
+            and boundary[int(row["round_id"])] <= float(reach["boundary_change_ratio_max"])
+        )
+        for row in recent
+    ]
+    gap = (len(result.proxy_upper_cells) - len(result.proxy_lower_cells)) / max(1, len(result.proxy_upper_cells))
+    convergence = bool(all(checks) and gap <= float(reach["lower_upper_measure_gap_max"]))
+    _write_parquet(final_a, stage / "replica_a_slab_round8.parquet")
+    _write_parquet(final_b, stage / "replica_b_slab_round8.parquet")
+    _write_parquet(frontier_frame, stage / "frontier_inverse_probes_round8.parquet")
+    report = {
+        "reach_convergence_gate": convergence,
+        "metrics_round6_8": metrics,
+        "measure_weighted_boundary_change_ratio": boundary,
+        "recent_round_checks": checks,
+        "proxy_lower_cell_count": len(result.proxy_lower_cells),
+        "proxy_upper_cell_count": len(result.proxy_upper_cells),
+        "lower_upper_measure_gap_ratio": gap,
+        "replica_a_seed_lineage": [*seeds_a, spec.seed_a],
+        "replica_b_seed_lineage": [*seeds_b, spec.seed_b],
+        "frontier_round8_probe_count": len(frontier_frame),
+        "frontier_round8_found_count": int(frontier_frame.get("found_valid_inverse", pd.Series(dtype=bool)).sum()),
+    }
+    _write_json(stage / "reach_round8_report.json", report)
+    return _gate(
+        stage / "gate.json",
+        {"reach_converged": convergence},
+        reach_source="round8",
+        round8_executed=True,
+        round9_forbidden=True,
+        nonreach_checks=nonreach_checks,
+        **report,
+    )
+
+
 def stage_formal_admission(config: Mapping[str, Any], project_root: Path, output_root: Path) -> dict[str, Any]:
-    pilot = _require(output_root, "stitched_atlas")
-    dataset = _require(output_root, "fixed_budget_dataset")
-    students = _require(output_root, "students")
-    representation = _require(output_root, "representation_decision")
-    reach_path = _sources(config, project_root)["v14_2r"] / "08_reach_round7/gate.json"
-    reach = _read_json(reach_path)
+    pilot = _require(output_root, "stitched_atlas", config)
+    dataset = _require(output_root, "fixed_budget_dataset", config)
+    students = _require(output_root, "students", config)
+    representation = _require(output_root, "representation_decision", config)
+    reach = _require(output_root, "reach_update", config)
     formal = config["formal_gate"]
     checks = {
         "reach": bool(reach.get("gate_pass", False)),
@@ -1355,6 +2500,45 @@ def stage_summary(config: Mapping[str, Any], project_root: Path, output_root: Pa
         "selected_representation": gates.get("representation_decision", {}).get("selected_representation"),
         "formal_generation_authorized": bool(gates.get("formal_admission", {}).get("gate_pass", False)),
     }
+    if str(config.get("upstream_protocol_version")) == "retry8":
+        dataset = gates.get("fixed_budget_dataset", {})
+        students = gates.get("students", {})
+        student_metrics_path = output_root / STAGE_DIRS["students"] / "student_metrics.parquet"
+        metrics = (
+            pd.read_parquet(student_metrics_path)
+            if student_metrics_path.is_file()
+            else pd.DataFrame()
+        )
+        implementation_failure = bool(
+            metrics.empty
+            or (
+                "training_error" in metrics
+                and metrics["training_error"].notna().all()
+            )
+        )
+        progression = authorize_five_k_after_smoke(
+            smoke_pipeline_operationally_complete=bool(
+                gates.get("inventory", {}).get("gate_pass", False)
+                and gates.get("pilot_registry", {}).get("gate_pass", False)
+                and gates.get("root_charts", {}).get("gate_pass", False)
+                and gates.get("stitched_atlas", {}).get("data_legality_gate", False)
+                and dataset.get("gate_pass", False)
+                and not metrics.empty
+            ),
+            teacher_label_integrity_failure=not bool(dataset.get("gate_pass", False)),
+            unresolved_training_implementation_failure=implementation_failure,
+            smoke_student_quality_pass=bool(students.get("gate_pass", False)),
+        )
+        report.update(
+            {
+                **progression,
+                "smoke_student_quality_pass": bool(students.get("gate_pass", False)),
+                "teacher_label_integrity_failure": not bool(dataset.get("gate_pass", False)),
+                "unresolved_training_implementation_failure": implementation_failure,
+                "quality_miss_does_not_block_five_k": True,
+            }
+        )
+        _write_json(stage / "retry8_next_stage_authorization.json", progression)
     _write_json(stage / "summary_report.json", report)
     return _gate(stage / "gate.json", {"manifest_nonempty": bool(artifacts)}, **report)
 
@@ -1367,6 +2551,7 @@ STAGE_RUNNERS = {
     "fixed_budget_dataset": stage_fixed_budget_dataset,
     "students": stage_students,
     "representation_decision": stage_representation_decision,
+    "reach_update": stage_reach_update,
     "formal_admission": stage_formal_admission,
     "summary": stage_summary,
 }
@@ -1374,23 +2559,54 @@ STAGE_RUNNERS = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=str(SOURCE_ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml"))
+    parser.add_argument(
+        "--config",
+        default=str(SOURCE_ROOT / "configs/bacra_v14_3_repaired_5k_student.yaml"),
+    )
     parser.add_argument("--output-root")
-    parser.add_argument("--stage", choices=STAGE_ORDER, required=True)
+    parser.add_argument("--stage", choices=STAGE_ORDER)
+    parser.add_argument("--validate-stage", choices=STAGE_ORDER)
     parser.add_argument("--root-index", type=int)
     parser.add_argument("--dataset-shard", type=int)
+    parser.add_argument("--dataset-wave", type=int)
+    parser.add_argument("--audit-shard-bundle")
+    parser.add_argument("--audit-shard-id", type=int)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
-    config["_root_index"] = args.root_index
-    config["_dataset_shard"] = args.dataset_shard
     project_root = project_root_from(SOURCE_ROOT)
     output_root = Path(args.output_root).resolve() if args.output_root else project_root / str(config["output_root"])
+    if args.validate_stage:
+        result = _load_validated_stage_result(
+            output_root, config=config, stage_name=args.validate_stage
+        )
+        return 0 if result is not None else 1
+    if args.stage is None and not args.audit_shard_bundle:
+        raise SystemExit("--stage is required unless --validate-stage or --audit-shard-bundle is used")
+    if args.audit_shard_bundle:
+        if args.audit_shard_id is None:
+            raise SystemExit("--audit-shard-id is required with --audit-shard-bundle")
+        result = _run_v143_audit_shard_worker(
+            config,
+            project_root,
+            Path(args.audit_shard_bundle).resolve(),
+            int(args.audit_shard_id),
+        )
+        print(json.dumps(v142r._strict(result), ensure_ascii=False, sort_keys=True))
+        return 0
+    config["_root_index"] = args.root_index
+    config["_dataset_shard"] = args.dataset_shard
+    config["_dataset_wave"] = args.dataset_wave
     output_root.mkdir(parents=True, exist_ok=True)
+    assert args.stage is not None
     result = STAGE_RUNNERS[args.stage](config, project_root, output_root)
+    if args.root_index is None and args.dataset_shard is None:
+        _write_stage_completion_manifest(
+            output_root, config=config, stage_name=args.stage
+        )
     print(json.dumps(v142r._strict(result), ensure_ascii=False, sort_keys=True))
     return 0
 

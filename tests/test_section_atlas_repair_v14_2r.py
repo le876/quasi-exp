@@ -7,9 +7,11 @@ from quasi_exp.teacher.canonical_atlas import (
     AtlasTaskNode,
     ContinuationOutcome,
 )
+from quasi_exp.teacher.canonical_gauge import CanonicalAnchorPolicy
 from quasi_exp.teacher.section_atlas_repair import (
     AtlasRepairPolicy,
     AuditV2Policy,
+    _primary_growth,
     compare_stitched_primary_atlases,
     diagnose_rooted_section_artifacts,
     execute_audit_schedules,
@@ -106,6 +108,131 @@ def test_missing_solver_execution_is_not_a_geometry_failure_but_blocks_certifica
     assert audit.geometry_metrics["missing_count"] == 1
 
 
+def test_canonical_root_priority_is_invariant_to_chart_order() -> None:
+    first = _growth((0.0, 8.0))
+    second = build_section_first_atlas(
+        first.task_nodes,
+        tuple(
+            chart.selected_by_node[0].candidate
+            for chart in reversed(first.charts)
+        ),
+        _affine,
+        root_keys=tuple(chart.root_key for chart in reversed(first.charts)),
+        policy=RootedSectionPolicy(root_count=2, beam_width=2, maximum_growth_waves=16),
+    )
+    anchor = first.charts[0].root_key
+    left = repair_rooted_section_atlas(
+        first,
+        _affine,
+        patch_id="left",
+        method="anchor",
+        canonical_root_priority=(anchor,),
+    )
+    right = repair_rooted_section_atlas(
+        second,
+        _affine,
+        patch_id="right",
+        method="anchor",
+        canonical_root_priority=(anchor,),
+    )
+    comparison = compare_stitched_primary_atlases(left, right)
+
+    assert left.growth.charts[int(left.selected_stitch_component[0].split("_")[-1])].root_key == anchor
+    assert right.growth.charts[int(right.selected_stitch_component[0].split("_")[-1])].root_key == anchor
+    assert comparison.gate_pass is True
+
+
+def test_qualified_canonical_anchor_cannot_be_replaced_by_higher_coverage_branch() -> None:
+    growth = _growth((0.0, 8.0), count=10)
+    anchor_chart, alternative_chart = growth.charts
+    object.__setattr__(
+        anchor_chart,
+        "selected_by_node",
+        type(anchor_chart.selected_by_node)(
+            {
+                node: item
+                for node, item in anchor_chart.selected_by_node.items()
+                if node < 9
+            }
+        ),
+    )
+    anchor = anchor_chart.root_key
+
+    repaired = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_anchor_lock",
+        method="anchor_lock",
+        policy=AtlasRepairPolicy(
+            audit=AuditV2Policy(repeats_per_direction=1),
+            minimum_chart_cells=8,
+            abstention_hops=0,
+        ),
+        canonical_root_priority=(anchor,),
+        canonical_anchor_policy=CanonicalAnchorPolicy(
+            ordered_anchor_root_keys=(anchor,),
+            minimum_component_coverage=0.9,
+            minimum_coherent_measure=0.6,
+            allow_stitchable_extensions=True,
+            require_anchor_selected=True,
+        ),
+    )
+
+    selected_roots = {
+        growth.charts[int(chart_id.split("_")[-1])].root_key
+        for chart_id in repaired.selected_stitch_component
+    }
+    assert anchor in selected_roots
+    assert alternative_chart.root_key not in selected_roots
+    assert repaired.canonical_anchor_component_selected is True
+    assert repaired.canonical_anchor_root_key == anchor
+    assert repaired.canonical_anchor_component_coverage == 0.9
+
+
+def test_unqualified_required_anchor_blocks_primary_instead_of_silent_fallback() -> None:
+    growth = _growth((0.0, 8.0), count=10)
+    anchor_chart = growth.charts[0]
+    object.__setattr__(
+        anchor_chart,
+        "selected_by_node",
+        type(anchor_chart.selected_by_node)(
+            {
+                node: item
+                for node, item in anchor_chart.selected_by_node.items()
+                if node < 8
+            }
+        ),
+    )
+    anchor = anchor_chart.root_key
+
+    repaired = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_anchor_required",
+        method="anchor_required",
+        policy=AtlasRepairPolicy(
+            audit=AuditV2Policy(repeats_per_direction=1),
+            minimum_chart_cells=8,
+            abstention_hops=0,
+        ),
+        canonical_root_priority=(anchor,),
+        canonical_anchor_policy=CanonicalAnchorPolicy(
+            ordered_anchor_root_keys=(anchor,),
+            minimum_component_coverage=0.9,
+            minimum_coherent_measure=0.6,
+            require_anchor_selected=True,
+        ),
+    )
+
+    assert repaired.canonical_anchor_qualified is False
+    assert repaired.canonical_anchor_component_selected is False
+    assert repaired.canonical_anchor_fallback_reason == (
+        "no_registered_anchor_component_qualified"
+    )
+    assert repaired.selected_stitch_component == ()
+    assert repaired.certificate_gate is False
+
+
 def test_repeat_only_failure_blocks_chart_and_certificate() -> None:
     growth = _growth((0.0,))
     audit = diagnose_rooted_section_artifacts(
@@ -192,6 +319,53 @@ def test_repeat_only_failure_triggers_fragment_reaudit() -> None:
     assert phases[0] == "chart_initial"
     assert "fragment_reaudit" in phases
     assert phases[-1] == "primary_certificate"
+
+
+def test_unlocalized_long_path_failure_does_not_cut_every_path_edge() -> None:
+    growth = _growth((0.0,))
+    phases: list[str] = []
+
+    def executor(
+        local_growth,
+        schedules,
+        continuation,
+        audit_policy,
+        retry_continuation,
+        phase_id,
+    ):
+        phases.append(phase_id)
+        rows = execute_audit_schedules(
+            local_growth,
+            schedules,
+            continuation,
+            audit_policy,
+            retry_continuation=retry_continuation,
+        )
+        if phase_id == "chart_initial":
+            failed = set(
+                schedules.loc[
+                    schedules["audit_kind"].eq("root_path"), "schedule_id"
+                ].astype(str)
+            )
+            rows.loc[rows["schedule_id"].astype(str).isin(failed), "geometry_gap_deg"] = 2.0
+            rows.loc[rows["schedule_id"].astype(str).isin(failed), "classification"] = (
+                "geometric_branch_disagreement"
+            )
+        return rows
+
+    repaired = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_unlocalized_path",
+        method="unlocalized_path",
+        policy=AtlasRepairPolicy(audit=AuditV2Policy(repeats_per_direction=1)),
+        schedule_executor=executor,
+    )
+
+    assert "fragment_reaudit" not in phases
+    assert "fragment_screening" not in phases
+    assert repaired.selected_stitch_component == ()
+    assert repaired.certificate_gate is False
 
 
 def test_two_nonstitchable_full_charts_choose_one_static_singleton_primary() -> None:
@@ -297,7 +471,7 @@ def test_stability_compares_physical_beta_not_chart_identifier() -> None:
 
     assert stability.gate_pass is True
     assert stability.beta_p95_deg == 0.0
-    assert stability.assignment_change_ratio == 0.0
+    assert stability.beta_disagreement_ratio_gt_1deg == 0.0
 
 
 def test_registered_retry_only_advances_failed_schedules_and_never_uses_oracle() -> None:
@@ -324,6 +498,35 @@ def test_registered_retry_only_advances_failed_schedules_and_never_uses_oracle()
     assert set(executions["classification"]) == {"recoverable_numerical"}
     assert not executions["oracle_used_for_pass"].any()
     assert "R2" not in calls
+
+
+def test_geometric_disagreement_advances_registered_kernel_without_oracle_seed() -> None:
+    growth = _growth((0.0,))
+    calls: list[str] = []
+
+    def retry(source: AtlasCandidate, target: AtlasTaskNode, tier) -> ContinuationOutcome:
+        calls.append(tier.tier_id)
+        if tier.tier_id == "R0":
+            beta = source.beta_rad.copy()
+            beta[0] = target.xyz_m[0]
+            beta[5] += np.radians(3.0)
+            return ContinuationOutcome(beta, 0.0, True, True, 1, "wrong_fiber")
+        return _affine(source, target)
+
+    repaired = repair_rooted_section_atlas(
+        growth,
+        _affine,
+        patch_id="patch_geometric_retry",
+        method="geometry_retry",
+        policy=AtlasRepairPolicy(audit=AuditV2Policy(repeats_per_direction=1)),
+        retry_continuation=retry,
+    )
+
+    executions = repaired.frames["audit_v2_executions"]
+    assert set(executions["retry_tier"]) == {"R1"}
+    assert set(executions["classification"]) == {"recoverable_geometric"}
+    assert not executions["oracle_used_for_pass"].any()
+    assert "R0" in calls and "R1" in calls
 
 
 def test_parquet_safe_section_frames_rehydrate_the_same_selected_beta() -> None:
@@ -355,6 +558,23 @@ def test_parquet_safe_section_frames_rehydrate_the_same_selected_beta() -> None:
             assert left_candidate.posture_cost == right_candidate.posture_cost
             assert left_candidate.condition_number == right_candidate.condition_number
             assert left_candidate.quality == right_candidate.quality
+
+
+def test_empty_primary_section_frames_keep_the_rehydration_schema() -> None:
+    original = _growth((0.0,))
+    empty = _primary_growth(original, {}, original.chart_by_id)
+    frames = empty.frames()
+
+    restored = section_growth_from_frames(
+        empty.task_nodes,
+        frames["section_hypotheses"],
+        frames["selected_edges"],
+        policy=empty.policy,
+    )
+
+    assert frames["section_hypotheses"].empty
+    assert restored.charts == ()
+    assert restored.covered_node_ids == frozenset()
 
 
 def test_persistent_failed_edge_splits_and_reaudits_nontrivial_fragments() -> None:
@@ -560,3 +780,49 @@ def test_phase_executor_preserves_serial_audit_semantics() -> None:
         right[columns].reset_index(drop=True)
     )
     assert serial.certificate_gate == delegated.certificate_gate
+
+
+def test_screening_is_lighter_but_primary_certificate_remains_full_and_fresh() -> None:
+    phases: list[tuple[str, int, int, set[str]]] = []
+
+    def executor(
+        local_growth,
+        schedules,
+        continuation,
+        audit_policy,
+        retry_continuation,
+        phase_id,
+    ):
+        phases.append(
+            (
+                phase_id,
+                len(schedules),
+                audit_policy.repeats_per_direction,
+                set(schedules["audit_kind"].astype(str)),
+            )
+        )
+        return execute_audit_schedules(
+            local_growth,
+            schedules,
+            continuation,
+            audit_policy,
+            retry_continuation=retry_continuation,
+        )
+
+    repaired = repair_rooted_section_atlas(
+        _growth((0.0,)),
+        _affine,
+        patch_id="patch_screen",
+        method="screened",
+        policy=AtlasRepairPolicy(audit=AuditV2Policy(repeats_per_direction=3)),
+        schedule_executor=executor,
+        screening_first=True,
+    )
+
+    assert repaired.certificate_gate is True
+    assert phases[0][0] == "chart_screening"
+    assert phases[0][2] == 1
+    assert phases[0][3] <= {"edge", "fundamental_cycle"}
+    assert phases[-1][0] == "primary_certificate"
+    assert phases[-1][2] == 3
+    assert "root_path" in phases[-1][3]

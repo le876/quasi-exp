@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
+
+from quasi_exp.teacher.canonical_atlas import AtlasTaskNode
+from quasi_exp.teacher.section_first_atlas import RootedSectionPolicy, SectionGrowthResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +42,58 @@ def test_v14_2r_config_freezes_twelve_single_threaded_workers_and_gates() -> Non
     assert [tier["tier_id"] for tier in config["audit_v2"]["retry_tiers"]] == ["R0", "R1", "R2"]
     assert config["chart_repair"]["minimum_chart_fraction"] > 0
     assert config["meso_bridge"]["parent_cell_count"] == 512
+
+
+def test_retry6_freezes_canonical_anchor_and_optimized_audit_contract() -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry6.yaml")
+
+    assert config["optimization"]["analytic_endpoint_kinematics"] is True
+    assert config["audit_execution"]["logical_shard_count"] == 48
+    assert config["audit_execution"]["maximum_concurrent_workers"] == 12
+    assert config["audit_execution"]["assignment_strategy"] == "cost_balanced_lpt"
+    assert config["audit_execution"]["screening_first"] is True
+    assert config["sources"]["reach_round7_reuse_root"].endswith("retry4")
+    assert module._variant_spec("main_K1_R5")[2] == module._variant_spec("root_order2")[2]
+
+
+def test_patch_report_frame_serializes_heterogeneous_canonical_anchor_key(
+    tmp_path,
+) -> None:
+    module = _module()
+    reports = [
+        {
+            "patch_id": "patch_00",
+            "canonical_anchor_key": [240, "teacher_n000048_c008"],
+            "selected_stitch_component": ["chart_000"],
+            "phase_runtime_s": {"root_growth_or_resume": 1.25},
+            "gate_pass": True,
+        },
+        {
+            "patch_id": "patch_03",
+            "canonical_anchor_key": [8490, "teacher_n000448_c013"],
+            "selected_stitch_component": ["chart_001", "chart_003"],
+            "phase_runtime_s": {"root_growth_or_resume": 2.5},
+            "gate_pass": True,
+        },
+    ]
+
+    frame = module._report_records_frame(reports)
+    target = tmp_path / "baseline_patch_reports.parquet"
+    module._write_parquet(frame, target)
+    restored = pd.read_parquet(target)
+
+    assert json.loads(restored.loc[0, "canonical_anchor_key"]) == [
+        240,
+        "teacher_n000048_c008",
+    ]
+    assert json.loads(restored.loc[1, "selected_stitch_component"]) == [
+        "chart_001",
+        "chart_003",
+    ]
+    assert json.loads(restored.loc[0, "phase_runtime_s"]) == {
+        "root_growth_or_resume": 1.25
+    }
 
 
 def test_v14_2r_unknown_retry_solver_chain_fails_closed(tmp_path) -> None:
@@ -96,8 +153,108 @@ def test_frame_stability_selects_beta_columns_without_pandas_tuple_indexing(
     assert report["coverage_jaccard"] == 1.0
     assert report["beta_p95_deg"] == 0.0
     assert report["beta_max_deg"] == 0.0
-    assert report["assignment_change_ratio"] == 0.0
+    assert report["beta_disagreement_ratio_gt_1deg"] == 0.0
     assert report["verified_edge_change_ratio"] == 0.0
+
+
+def test_refined_graph_stability_does_not_penalize_new_verified_edges(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    frame = pd.DataFrame(
+        {
+            "task_node_id": [10, 11],
+            "abstained": [False, False],
+            **{name: [0.0, 0.0] for name in module.BETA_COLUMNS},
+        }
+    )
+    baseline = tmp_path / "baseline"
+    refined = tmp_path / "task_graph_refined"
+    baseline.mkdir()
+    refined.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_verified_edge_entities",
+        lambda directory, _config: (
+            {"edge:10:11"}
+            if directory == baseline
+            else {"edge:10:11", "edge:11:12"}
+        ),
+    )
+    config = {
+        "search_stability": {
+            "coverage_jaccard_min": 0.95,
+            "beta_p95_max_deg": 1.0,
+            "beta_max_deg": 2.0,
+            "assignment_change_max": 0.05,
+            "verified_edge_change_max": 0.05,
+        }
+    }
+
+    report = module._frame_stability(
+        frame,
+        frame,
+        config,
+        left_directory=baseline,
+        right_directory=refined,
+    )
+
+    assert report["gate_pass"] is True
+    assert report["verified_edge_change_ratio"] == 0.0
+    assert report["verified_new_edge_count"] == 1
+    assert report["verified_edge_comparison_semantics"] == (
+        "registered_baseline_edge_regression_only"
+    )
+
+
+def test_gauge_prefixed_refined_graph_uses_baseline_edge_regression_semantics(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    frame = pd.DataFrame(
+        {
+            "task_node_id": [10, 11],
+            "abstained": [False, False],
+            **{name: [0.0, 0.0] for name in module.BETA_COLUMNS},
+        }
+    )
+    baseline = tmp_path / "gauge_main_K1_R5"
+    refined = tmp_path / "gauge_task_graph_refined"
+    baseline.mkdir()
+    refined.mkdir()
+    monkeypatch.setattr(
+        module,
+        "_verified_edge_entities",
+        lambda directory, _config: (
+            {"edge:10:11"}
+            if directory == baseline
+            else {"edge:10:11", "edge:11:12"}
+        ),
+    )
+    config = {
+        "search_stability": {
+            "coverage_jaccard_min": 0.95,
+            "beta_p95_max_deg": 1.0,
+            "beta_max_deg": 2.0,
+            "assignment_change_max": 0.05,
+            "verified_edge_change_max": 0.05,
+        }
+    }
+
+    report = module._frame_stability(
+        frame,
+        frame,
+        config,
+        left_directory=baseline,
+        right_directory=refined,
+    )
+
+    assert report["gate_pass"] is True
+    assert report["verified_edge_change_ratio"] == 0.0
+    assert report["verified_new_edge_count"] == 1
+    assert report["verified_edge_comparison_semantics"] == (
+        "registered_baseline_edge_regression_only"
+    )
 
 
 def test_patch_jobs_register_full_shard_sets_against_one_global_token_pool(
@@ -236,6 +393,76 @@ def test_real_schedule_subprocess_shards_are_exact_and_resumable(tmp_path) -> No
         progress = module._read_json(path)
         assert progress["status"] == "complete"
         assert progress["completed_schedule_count"] == progress["total_schedule_count"]
+
+
+def test_empty_audit_registry_seals_logical_shards_without_spawning_workers(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas_retry6.yaml")
+    config["audit_execution"]["progress_every_schedules"] = 1
+    node = AtlasTaskNode(0, np.zeros(3, dtype=float), ())
+    growth = SectionGrowthResult(
+        task_nodes=(node,),
+        charts=(),
+        primary_chart_by_node={0: None},
+        abstained_node_ids=frozenset({0}),
+        events=(),
+        cap_hit_events=(),
+        policy=RootedSectionPolicy(root_count=1),
+        continuation_attempt_count=0,
+        rejected_continuation_count=0,
+    )
+    tasks = pd.DataFrame.from_records(
+        [{"task_node_id": 0, "x_m": 0.0, "y_m": 0.0, "z_m": 0.0}]
+    )
+    task_edges = pd.DataFrame(
+        columns=("left_node_id", "right_node_id")
+    )
+    schedules = pd.DataFrame(
+        columns=("schedule_id", "audit_kind", "path_node_ids")
+    )
+
+    def unexpected_spawn(*_args, **_kwargs):
+        raise AssertionError("an empty audit registry must not spawn a worker")
+
+    monkeypatch.setattr(module, "_runtime_sha256", lambda: "runtime-test")
+    monkeypatch.setattr(module, "_git_sha", lambda: "source-test")
+    monkeypatch.setattr(module.subprocess, "Popen", unexpected_spawn)
+    executor = module._SubprocessAuditExecutor(
+        config=config,
+        project_root=ROOT,
+        tasks=tasks,
+        task_edges=task_edges,
+        patch_directory=tmp_path,
+        shard_count=2,
+        maximum_concurrent_workers=2,
+        assignment_strategy="cost_balanced_lpt",
+    )
+
+    executions = executor(
+        growth,
+        schedules,
+        None,
+        module._audit_policy(config),
+        object(),
+        "primary_certificate",
+    )
+
+    assert executions.empty
+    assert set(module.AUDIT_EXECUTION_COLUMNS).issubset(executions.columns)
+    reports = [
+        module._read_json(
+            tmp_path
+            / "_audit_checkpoints"
+            / "primary_certificate"
+            / f"shard_{shard_id:02d}"
+            / "report.json"
+        )
+        for shard_id in range(2)
+    ]
+    assert all(report["gate_pass"] for report in reports)
+    assert all(report["synthetic_empty_shard"] for report in reports)
 
 
 def test_growth_checkpoint_rehydrates_only_under_the_same_input_closure(tmp_path) -> None:

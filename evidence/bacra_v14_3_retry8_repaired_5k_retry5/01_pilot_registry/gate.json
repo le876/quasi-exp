@@ -1,0 +1,1 @@
+{"checks":{"exact_parent_cells":true,"exact_task_probes":true,"maximin_roots":true,"single_frozen_lineage_roots":true},"gate_pass":true,"parent_cell_count":5000,"root_count":24,"task_probe_count":25000}

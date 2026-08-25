@@ -1,0 +1,7 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1787264735.497561 2250724 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+I0000 00:00:1787264735.555584 2250724 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1787264737.792497 2250724 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+{"gate_pass": true, "worker_report": {"alternative_hypothesis_ratio": 0.0, "coverage_ratio": 0.16372, "covered_node_count": 4093, "gate_pass": true, "raw_cap_hit": true, "root_candidate_id": "retry8_lineage_007", "root_index": 7, "root_task_node_id": 10372, "runtime_s": 1212.0328958034515}}

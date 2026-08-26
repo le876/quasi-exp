@@ -43,6 +43,7 @@ class DenseSamplingPolicy:
     max_tetrahedron_edge_mm: float | None = None
     target_support_max_mm: float | None = None
     canonical_barycentric_retraction: bool = False
+    metric_version: str = "legacy_weighted_v0"
     seed: int = 20260735
     candidate_policy: TeacherPolicy = TeacherPolicy()
 
@@ -61,6 +62,11 @@ class DenseSamplingPolicy:
                 not math.isfinite(float(value)) or float(value) <= 0.0
             ):
                 raise ValueError(f"{name} must be finite and positive")
+        if self.metric_version not in {
+            "legacy_weighted_v0",
+            "normalized_weighted_v1",
+        }:
+            raise ValueError("unsupported dense beta metric version")
 
 
 @dataclass(frozen=True)
@@ -89,6 +95,7 @@ def weighted_beta_gap_deg(
     right: np.ndarray,
     *,
     weights: Sequence[float] = (4.0, 4.0, 2.0, 2.0, 1.0, 1.0),
+    metric_version: str = "legacy_weighted_v0",
 ) -> float:
     """Weighted RMS beta gap used by chart agreement checks."""
 
@@ -98,9 +105,15 @@ def weighted_beta_gap_deg(
     weight = np.asarray(weights, dtype=float).reshape(6)
     if np.any(weight <= 0.0):
         raise ValueError("weights must be positive")
-    return float(
-        np.rad2deg(np.sqrt(np.sum(weight * np.square(delta)) / np.sum(weight)))
-    )
+    if metric_version == "legacy_weighted_v0":
+        value = np.sqrt(np.sum(weight * np.square(delta)) / np.sum(weight))
+    elif metric_version == "normalized_weighted_v1":
+        value = np.sqrt(
+            np.sum(np.square(weight * delta)) / np.sum(np.square(weight))
+        )
+    else:
+        raise ValueError("unsupported dense beta metric version")
+    return float(np.rad2deg(value))
 
 
 def _predict_from_anchor(
@@ -371,6 +384,7 @@ def solve_dense_attempts(
             corrected[0],
             corrected[1],
             weights=policy.candidate_policy.beta_weights,
+            metric_version=policy.metric_version,
         )
         canonical_gap_deg = 0.0
         canonical_success = True
@@ -402,6 +416,7 @@ def solve_dense_attempts(
                     chosen,
                     value,
                     weights=policy.candidate_policy.beta_weights,
+                    metric_version=policy.metric_version,
                 )
                 for value in corrected
             )

@@ -4,7 +4,11 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .worktrees/
-.agents
+.agents/*
+!.agents/notes/
+!.agents/notes/**
+!.agents/skills/
+!.agents/skills/**
 .codex
 *.egg-info/
 .ipynb_checkpoints/

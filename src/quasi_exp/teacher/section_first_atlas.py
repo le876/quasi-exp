@@ -72,6 +72,7 @@ class RootedSectionPolicy:
     reverse_return_max_deg: float = 0.5
     minimum_alternative_chart_cells: int = 8
     beta_weights: tuple[float, ...] = (4.0, 4.0, 2.0, 2.0, 1.0, 1.0)
+    metric_version: str = "legacy_weighted_v0"
     posture_weight: float = 0.05
     margin_weight: float = 0.01
     online_cycle_repair: bool = False
@@ -86,6 +87,11 @@ class RootedSectionPolicy:
             raise ValueError("section-first integer budgets must be positive")
         if len(self.beta_weights) != 6 or any(float(value) <= 0 for value in self.beta_weights):
             raise ValueError("section-first beta_weights must contain six positive values")
+        if self.metric_version not in {
+            "legacy_weighted_v0",
+            "normalized_weighted_v1",
+        }:
+            raise ValueError("unsupported section-first beta metric version")
         thresholds = (
             self.parent_consensus_gold_deg,
             self.parent_consensus_silver_deg,
@@ -886,10 +892,20 @@ def _proposal_consensus_score(
 ) -> float:
     weights = np.asarray(policy.beta_weights, dtype=float)
     gaps = [
-        _weighted_beta_rms_deg(proposal.beta_rad, item.beta_rad, weights)
+        _weighted_beta_rms_deg(
+            proposal.beta_rad,
+            item.beta_rad,
+            weights,
+            metric_version=policy.metric_version,
+        )
         for item in cluster
     ]
-    posture = _weighted_beta_rms_deg(proposal.beta_rad, root.beta_rad, weights)
+    posture = _weighted_beta_rms_deg(
+        proposal.beta_rad,
+        root.beta_rad,
+        weights,
+        metric_version=policy.metric_version,
+    )
     margin_penalty = 1.0 / max(1e-6, proposal.minimum_margin_deg)
     return float(
         np.mean(gaps)
@@ -907,15 +923,34 @@ def _unary_score(
 ) -> float:
     weights = np.asarray(policy.beta_weights, dtype=float)
     return float(
-        policy.posture_weight * _weighted_beta_rms_deg(beta, root.beta_rad, weights)
+        policy.posture_weight
+        * _weighted_beta_rms_deg(
+            beta,
+            root.beta_rad,
+            weights,
+            metric_version=policy.metric_version,
+        )
         + policy.margin_weight / max(candidate.min_margin_deg, 1e-6)
         + 1e-3 * candidate.residual_mm
     )
 
 
-def _weighted_beta_rms_deg(left: np.ndarray, right: np.ndarray, weights: np.ndarray) -> float:
+def _weighted_beta_rms_deg(
+    left: np.ndarray,
+    right: np.ndarray,
+    weights: np.ndarray,
+    *,
+    metric_version: str = "legacy_weighted_v0",
+) -> float:
     delta_deg = np.degrees(np.asarray(left, dtype=float) - np.asarray(right, dtype=float))
-    return float(np.sqrt(np.mean(np.square(weights * delta_deg))))
+    numerator = float(np.sum(np.square(weights * delta_deg)))
+    if metric_version == "legacy_weighted_v0":
+        denominator = float(len(weights))
+    elif metric_version == "normalized_weighted_v1":
+        denominator = float(np.sum(np.square(weights)))
+    else:
+        raise ValueError("unsupported section-first beta metric version")
+    return float(np.sqrt(numerator / denominator))
 
 
 def _endpoint_candidate(
@@ -975,7 +1010,10 @@ def _endpoint_candidate_from_values(
         min_margin_deg=float(margin_deg),
         normalized_min_margin=max(0.0, float(margin_deg)) / 180.0,
         posture_cost=_weighted_beta_rms_deg(
-            beta, root.beta_rad, np.asarray(policy.beta_weights, dtype=float)
+            beta,
+            root.beta_rad,
+            np.asarray(policy.beta_weights, dtype=float),
+            metric_version=policy.metric_version,
         ),
         condition_number=root.condition_number,
         quality="Gold" if margin_deg >= 1.5 else "Silver",

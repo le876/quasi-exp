@@ -74,6 +74,8 @@ class WorkspaceStudentTrainingConfig:
     loss_weights: WorkspaceStudentLossWeights = field(
         default_factory=WorkspaceStudentLossWeights
     )
+    beta_coordinate_weights: tuple[float, ...] | None = None
+    beta_loss_only: bool = False
 
     def __post_init__(self) -> None:
         units = tuple(int(value) for value in self.hidden_units)
@@ -88,12 +90,31 @@ class WorkspaceStudentTrainingConfig:
             raise ValueError("max_steps and validation_interval must be positive")
         if int(self.patience_intervals) < 1:
             raise ValueError("patience_intervals must be positive")
+        beta_coordinate_weights = self.beta_coordinate_weights
+        if beta_coordinate_weights is not None:
+            beta_coordinate_weights = tuple(float(value) for value in beta_coordinate_weights)
+            if (
+                len(beta_coordinate_weights) != 6
+                or any(
+                    not math.isfinite(value) or value <= 0.0
+                    for value in beta_coordinate_weights
+                )
+            ):
+                raise ValueError(
+                    "beta_coordinate_weights must contain six finite positive values"
+                )
+        if bool(self.beta_loss_only) and beta_coordinate_weights is None:
+            raise ValueError(
+                "beta_loss_only requires explicit beta_coordinate_weights"
+            )
         object.__setattr__(self, "hidden_units", units)
         object.__setattr__(self, "router_hidden_units", router_units)
         object.__setattr__(self, "max_steps", int(self.max_steps))
         object.__setattr__(self, "validation_interval", int(self.validation_interval))
         object.__setattr__(self, "patience_intervals", int(self.patience_intervals))
         object.__setattr__(self, "seed", int(self.seed))
+        object.__setattr__(self, "beta_coordinate_weights", beta_coordinate_weights)
+        object.__setattr__(self, "beta_loss_only", bool(self.beta_loss_only))
 
 
 @dataclass(frozen=True)
@@ -357,6 +378,8 @@ def workspace_student_loss_terms(
     geometry: StudentGeometry,
     loss_weights: WorkspaceStudentLossWeights,
     training: bool,
+    beta_coordinate_weights: Sequence[float] | None = None,
+    beta_loss_only: bool = False,
 ) -> Mapping[str, Any]:
     """Weighted beta, exact-FK, and frozen-J row-space terms for one batch."""
 
@@ -371,8 +394,22 @@ def workspace_student_loss_terms(
     if weights.shape.rank != 1:
         weights = tf.reshape(weights, (-1,))
     bounds = tf.constant(geometry.beta_bounds_rad, dtype=prediction.dtype)
-    beta_scale = tf.maximum(bounds[:, 1] - bounds[:, 0], tf.cast(1.0e-6, prediction.dtype))
-    beta_point = tf.reduce_mean(tf.square((prediction - beta_true) / beta_scale), axis=1)
+    if beta_coordinate_weights is None:
+        beta_scale = tf.maximum(
+            bounds[:, 1] - bounds[:, 0], tf.cast(1.0e-6, prediction.dtype)
+        )
+        beta_point = tf.reduce_mean(
+            tf.square((prediction - beta_true) / beta_scale), axis=1
+        )
+    else:
+        coordinate_weights = tf.constant(
+            tuple(float(value) for value in beta_coordinate_weights),
+            dtype=prediction.dtype,
+        )
+        squared_weights = tf.square(coordinate_weights)
+        beta_point = tf.reduce_sum(
+            squared_weights * tf.square(prediction - beta_true), axis=1
+        ) / tf.reduce_sum(squared_weights)
     predicted_xyz = forward_xyz_from_beta_tf(
         prediction,
         lengths_m=geometry.lengths_m,
@@ -386,7 +423,7 @@ def workspace_student_loss_terms(
     row_point = tf.reduce_mean(
         tf.square(projected / tf.cast(0.003, prediction.dtype)), axis=1
     )
-    point = (
+    point = beta_point if beta_loss_only else (
         tf.cast(loss_weights.beta, prediction.dtype) * beta_point
         + tf.cast(loss_weights.fk, prediction.dtype) * fk_point
         + tf.cast(loss_weights.row_space, prediction.dtype) * row_point
@@ -438,7 +475,9 @@ def _fit_model(
             terms = workspace_student_loss_terms(
                 features=train_arrays[0], beta_true=train_arrays[1], xyz_true=train_arrays[2],
                 jacobian_true=train_arrays[3], sample_weight=train_arrays[4], model=model,
-                geometry=geometry, loss_weights=config.loss_weights, training=True,
+                geometry=geometry, loss_weights=config.loss_weights,
+                beta_coordinate_weights=config.beta_coordinate_weights,
+                beta_loss_only=config.beta_loss_only, training=True,
             )
         gradients = tape.gradient(terms["objective"], model.trainable_variables)
         optimizer.apply_gradients(zip(gradients, model.trainable_variables))
@@ -447,7 +486,9 @@ def _fit_model(
         valid = workspace_student_loss_terms(
             features=validation_arrays[0], beta_true=validation_arrays[1], xyz_true=validation_arrays[2],
             jacobian_true=validation_arrays[3], sample_weight=validation_arrays[4], model=model,
-            geometry=geometry, loss_weights=config.loss_weights, training=False,
+            geometry=geometry, loss_weights=config.loss_weights,
+            beta_coordinate_weights=config.beta_coordinate_weights,
+            beta_loss_only=config.beta_loss_only, training=False,
         )
         value = float(valid["objective"].numpy())
         history.append({

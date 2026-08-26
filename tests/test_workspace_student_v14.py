@@ -21,6 +21,7 @@ from quasi_exp.teacher.workspace_student import (
     student_feature_columns,
     train_workspace_student,
     validate_workspace_student_frame,
+    workspace_student_loss_terms,
 )
 
 
@@ -158,6 +159,29 @@ def test_tiny_static_train_uses_public_interfaces_without_padding() -> None:
     evaluation = evaluate_workspace_student(
         result.inverse, InverseQuery(xyz_m=np.asarray([[1.0, 0.0, 0.0]])))
     assert evaluation.accepted_count + evaluation.abstained_count == 1
+
+
+def test_retry9_opt_in_uses_pure_normalized_coordinate_weighted_beta_loss() -> None:
+    tf = pytest.importorskip("tensorflow")
+
+    class ConstantModel:
+        trainable_variables = ()
+
+        def __call__(self, features, training=False):
+            del training
+            return tf.ones((tf.shape(features)[0], 6), dtype=tf.float32)
+
+    terms = workspace_student_loss_terms(
+        features=tf.zeros((2, 3)), beta_true=tf.zeros((2, 6)),
+        xyz_true=tf.zeros((2, 3)), jacobian_true=tf.zeros((2, 3, 6)),
+        sample_weight=tf.ones((2,)), model=ConstantModel(), geometry=_geometry(),
+        loss_weights=WorkspaceStudentTrainingConfig().loss_weights,
+        beta_coordinate_weights=(4, 4, 2, 2, 1, 1), beta_loss_only=True,
+        training=False,
+    )
+    assert float(terms["objective"].numpy()) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="requires explicit"):
+        WorkspaceStudentTrainingConfig(beta_loss_only=True)
 
 
 def test_model_manifest_round_trip_preserves_router_chart_order(tmp_path) -> None:

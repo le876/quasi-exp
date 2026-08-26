@@ -1,0 +1,24 @@
+{
+  "atlas_expansion_valid": true,
+  "atlas_frozen": true,
+  "catastrophic_edge_rate": 0.0,
+  "coverage_fraction": 0.4182,
+  "duplicate_count": 0,
+  "exploration_hard_guards_pass": true,
+  "fk_p95_mm": 2.4137916425098848e-05,
+  "fk_p99_mm": 3.138809381344689e-05,
+  "formal_authorized": false,
+  "frozen_label_count": 10455,
+  "gate_pass": true,
+  "global_student_label_count": 10455,
+  "initial_hard_pass_without_quarantine": true,
+  "local_weighted_p95_deg": 0.5035046553454137,
+  "panel_rows": {
+    "A": 858,
+    "B": 937,
+    "C": 937
+  },
+  "panel_underfill_blocks_student_claim_only": true,
+  "quarantined_row_count": 0,
+  "status": "pass"
+}

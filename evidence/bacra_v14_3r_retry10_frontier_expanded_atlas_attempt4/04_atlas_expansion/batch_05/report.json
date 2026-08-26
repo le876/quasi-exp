@@ -1,0 +1,17 @@
+{
+  "batch_index": 5,
+  "coverage_after": 0.3268,
+  "coverage_before": 0.3218,
+  "coverage_gain": 0.005,
+  "incremental_coverage_gain": 0.0,
+  "keep_valid_k2_labels": true,
+  "new_label_count": 125,
+  "promote_k2_policy": false,
+  "root_node_ids": [
+    4450,
+    4475,
+    1280,
+    5185
+  ],
+  "status": "complete"
+}

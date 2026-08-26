@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    {
+      "bytes": 396,
+      "path": "gate.json",
+      "sha256": "b8e71c7ede9166b45dc7aa3b4f71c7cf0308f05d72df36660a30ac2dd7b2791f"
+    },
+    {
+      "bytes": 4809,
+      "path": "registered_long_cycle_diagnostics.parquet",
+      "sha256": "0e5fd42122b08b48170c5efa2f1ee4c3e33ce939f1e69cf416e741574f2fc967"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "full_diagnostic",
+  "upstream_completion_sha256": "d595f16fa1049989841e3f5269b7ae8ee72184822c7586cb034bfa6eb3a15cbf"
+}

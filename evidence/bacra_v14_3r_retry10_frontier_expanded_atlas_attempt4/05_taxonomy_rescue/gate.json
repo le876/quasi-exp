@@ -1,0 +1,15 @@
+{
+  "candidate_label_count": 10455,
+  "component_count": 1,
+  "component_incompatibility_count": 0,
+  "formal_authorized": false,
+  "gate_pass": true,
+  "rescued_label_count": 2030,
+  "status": "complete",
+  "taxonomy_complete": true,
+  "taxonomy_counts": {
+    "frontier_reachable": 520,
+    "graph_limited": 15712,
+    "no_feasible_solution_observed": 343
+  }
+}

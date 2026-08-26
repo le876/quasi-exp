@@ -1,0 +1,8 @@
+{
+  "formal_authorized": false,
+  "gate_pass": false,
+  "reason": "dataset_unavailable",
+  "status": "not_evaluated",
+  "student_200k_quality_pass": false,
+  "student_scaling_claim_authorized": false
+}

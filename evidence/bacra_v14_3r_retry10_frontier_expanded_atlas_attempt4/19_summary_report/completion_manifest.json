@@ -1,0 +1,32 @@
+{
+  "artifact_manifest_sha256": "08fc611af8443af5a0989761dcaba39767d23923722f88dd80d6327d4223a0af",
+  "artifacts": [
+    {
+      "bytes": 193219,
+      "path": "artifact_manifest.json",
+      "sha256": "08fc611af8443af5a0989761dcaba39767d23923722f88dd80d6327d4223a0af"
+    },
+    {
+      "bytes": 1783,
+      "path": "gate.json",
+      "sha256": "9ee37b280955984d174e63cf02a364630f348346d41535cca8d3fd1cd2a43c40"
+    },
+    {
+      "bytes": 123,
+      "path": "report_render.json",
+      "sha256": "5e29b39bc672574cd5d9552bedec68f955b6a680277407f75c032f67b266db0a"
+    },
+    {
+      "bytes": 2333,
+      "path": "retry10_advisor_report.html",
+      "sha256": "2fdf7632e137795744d96b35eb040d03d70288623149e7cd9de326b124da7ff3"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "gate_sha256": "9ee37b280955984d174e63cf02a364630f348346d41535cca8d3fd1cd2a43c40",
+  "operational_completion": true,
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "summary",
+  "upstream_completion_sha256": "cb1e5cee2ba7516d9c4a9bf053daeb036acf72da9580fa3bc131afc634e79c42"
+}

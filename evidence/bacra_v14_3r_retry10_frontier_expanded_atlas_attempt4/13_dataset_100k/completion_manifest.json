@@ -1,0 +1,14 @@
+{
+  "artifacts": [
+    {
+      "bytes": 218,
+      "path": "gate.json",
+      "sha256": "f19a92e258be3c2d8db57e5fb942126c4b2ea7c799b5c233f5b76a1884ba1ee1"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "dataset_100k",
+  "upstream_completion_sha256": "61c42790e3fc94c0eb204d6c94bf32cb6db8a8aa71cb17bb8c3f4a401018d977"
+}

@@ -1,0 +1,11 @@
+{
+  "coverage_fraction": 0.337,
+  "coverage_plateau": false,
+  "executed_batch_count": 6,
+  "final_label_count": 8425,
+  "formal_authorized": false,
+  "gate_pass": true,
+  "plateau_or_exhausted": true,
+  "root_registry_exhausted": false,
+  "status": "complete"
+}

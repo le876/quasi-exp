@@ -1,0 +1,44 @@
+{
+  "artifacts": [
+    {
+      "bytes": 1721072,
+      "path": "candidate_atlas_after_rescue.parquet",
+      "sha256": "5698b865f454cb38bbfe1498626c663f75d38271381f88fb70244c11176dee63"
+    },
+    {
+      "bytes": 600,
+      "path": "cross_component_boundary_audit.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 112445,
+      "path": "frontier_taxonomy.parquet",
+      "sha256": "2a4a97ad419698b0715b579ba29cf7830603bc225d47e42ba619047f435adb41"
+    },
+    {
+      "bytes": 108765,
+      "path": "frontier_taxonomy_evidence.parquet",
+      "sha256": "856599f8bef2d30c4683a3e23d898cb364ac58333fc25a5338f460fd42b540e0"
+    },
+    {
+      "bytes": 364,
+      "path": "gate.json",
+      "sha256": "89909ff5bafa796227e36c45d2c8e0891c3a7e7631276712ed5f58d7546193f8"
+    },
+    {
+      "bytes": 609656,
+      "path": "refined_registered_task_edges.parquet",
+      "sha256": "dcd765fdc67732e8b0a37cd527b8ff11e66ea648115e4caeec34b28d8945314d"
+    },
+    {
+      "bytes": 274705,
+      "path": "targeted_r2_rescued_labels.parquet",
+      "sha256": "ee9366065741e4401948de613f07f5c775c47e0f8253ac5898cd6cf7301ce972"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "taxonomy_rescue",
+  "upstream_completion_sha256": "a0bdfc58c7b040b3cea002b266083b2ff1aa89efc38af17a3f64b9a1b34dd458"
+}

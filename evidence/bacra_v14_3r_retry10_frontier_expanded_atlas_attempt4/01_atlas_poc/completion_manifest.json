@@ -1,0 +1,74 @@
+{
+  "artifacts": [
+    {
+      "bytes": 150478,
+      "path": "batch_01/candidates.parquet",
+      "sha256": "c459957bcdc48281993c4b9795cb8599222e85ea21f3153e55fb2351ae10d8be"
+    },
+    {
+      "bytes": 600,
+      "path": "batch_01/cap_hit_events.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 39121,
+      "path": "batch_01/compatibility.parquet",
+      "sha256": "9b806e5746a83563b4af26cd4bbc7ed83c66de54a473ac383a6f4fce0ec80903"
+    },
+    {
+      "bytes": 48547,
+      "path": "batch_01/growth_events.parquet",
+      "sha256": "007e97df29187a2116a25babeed0baf4543cbcb6fad728403d09c6a4d681995b"
+    },
+    {
+      "bytes": 5426,
+      "path": "batch_01/new_new_pair_audit.parquet",
+      "sha256": "7274a2fbeed5b1c19b14fe4efc4fb017b24b7379cf73b9282bbdf3f152a624bd"
+    },
+    {
+      "bytes": 151489,
+      "path": "batch_01/primary_section.parquet",
+      "sha256": "7b361824b4c2af06013910a51f4be7ebd9e8b63f9e664c82d222686a63892ddf"
+    },
+    {
+      "bytes": 11484,
+      "path": "batch_01/roots.parquet",
+      "sha256": "91a1411329e64e5e366559633cf13bdae1d119a2d200fcd5e20c905e2fd2774b"
+    },
+    {
+      "bytes": 5785,
+      "path": "batch_01/section_charts.parquet",
+      "sha256": "095d1744d1e56b0f4c3800cd6ffe3ad2f292bc4009d7f99a505a6ab655023295"
+    },
+    {
+      "bytes": 419745,
+      "path": "batch_01/section_hypotheses.parquet",
+      "sha256": "c722855e321ad109268b8e7dee7472469d0450c8fa0ee998f8f4de3fde5ae8bb"
+    },
+    {
+      "bytes": 25717,
+      "path": "batch_01/selected_edges.parquet",
+      "sha256": "6e0073415c51144ac3c694bb1c325ea439c9bbf1b049945fe139f88d0217a973"
+    },
+    {
+      "bytes": 322,
+      "path": "batch_report.json",
+      "sha256": "1100bb27ce85fe1421060b72796f702f50f2201144abde9002dc1e0f5b0acbca"
+    },
+    {
+      "bytes": 1067187,
+      "path": "candidate_atlas_after_poc.parquet",
+      "sha256": "684c4da428b8276b637b6caba4ef2052d9f1eb458547ccd1f9bbfa0b957381be"
+    },
+    {
+      "bytes": 238,
+      "path": "gate.json",
+      "sha256": "328e23f3201a348018debf12ccee334b3902b71aa84f464cea4395e7326a14a6"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "atlas_poc",
+  "upstream_completion_sha256": "c4acf40aa10a8c0b0055fea6cfa2442cea93dfb8481daea28c6dec9919fefd01"
+}

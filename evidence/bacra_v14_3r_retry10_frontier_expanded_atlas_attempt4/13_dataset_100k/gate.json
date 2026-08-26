@@ -1,0 +1,8 @@
+{
+  "dataset_100k_generation_authorized": false,
+  "dataset_complete": false,
+  "formal_authorized": false,
+  "gate_pass": false,
+  "reason": "preflight_or_coverage_path_not_authorized",
+  "status": "not_authorized"
+}

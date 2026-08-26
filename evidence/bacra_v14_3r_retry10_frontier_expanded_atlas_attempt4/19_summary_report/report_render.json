@@ -1,0 +1,5 @@
+{
+  "exception_message": "No module named 'weasyprint'",
+  "exception_type": "ModuleNotFoundError",
+  "generated": false
+}

@@ -1,0 +1,33 @@
+{
+  "dataset_row_count": 10000,
+  "formal_authorized": false,
+  "from_scratch": true,
+  "metric_version": "normalized_weighted_v1",
+  "panels": {
+    "A": {
+      "bounds_violation_count": 0,
+      "dls_latency_ms_per_row": 4.881922115456739,
+      "dls_success_rate": 0.9184149184149184,
+      "dls_two_step_fk_p95_mm": 6.009139502981087,
+      "no_nan": true,
+      "panel_id": "A",
+      "raw_fk_p95_mm": 286.07845082194274,
+      "raw_latency_ms_per_row": 0.005234405588323906,
+      "row_count": 858,
+      "status": "complete",
+      "weighted_beta_p95_deg": 1.3413557735233046
+    }
+  },
+  "scale_id": "10k",
+  "status": "complete",
+  "student_quality": {
+    "authorized": true,
+    "evidence_paths": [],
+    "reasons": [],
+    "status": "pass"
+  },
+  "student_scaling_claim_authorized": false,
+  "student_scaling_claim_reason": "multi_seed_not_evaluated",
+  "train_row_count": 4856,
+  "validation_row_count": 2002
+}

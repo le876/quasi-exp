@@ -1,0 +1,11 @@
+{
+  "branch_conflict_node_count": 0,
+  "coverage_fraction": 0.23864,
+  "coverage_gain": 0.03444,
+  "formal_authorized": false,
+  "gate_pass": true,
+  "new_label_count": 861,
+  "poc_executed": true,
+  "root_count": 4,
+  "status": "pass"
+}

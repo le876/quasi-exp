@@ -1,0 +1,28 @@
+{
+  "accepted_count": 149882,
+  "actual_rows": 50000,
+  "allowed_qualities": [
+    "Gold",
+    "Silver"
+  ],
+  "attempt_count": 150000,
+  "dataset_50k_generation_authorized": true,
+  "dataset_complete": false,
+  "dataset_id": "pilot_domain_expanded_candidate_dataset_50k",
+  "formal_authorized": false,
+  "gate_pass": false,
+  "gold_count": 50000,
+  "integrity": {
+    "bounds_pass": true,
+    "duplicate_count": 0,
+    "exact_target_pass": true,
+    "finite_pass": true,
+    "physical_point_id_unique_pass": true,
+    "unique_xyz_pass": true
+  },
+  "row_padding_used": false,
+  "sampling_quota_pass": false,
+  "silver_count": 0,
+  "status": "underfilled",
+  "target_rows": 50000
+}

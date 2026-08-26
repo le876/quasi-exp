@@ -1,0 +1,14 @@
+{
+  "artifacts": [
+    {
+      "bytes": 237,
+      "path": "gate.json",
+      "sha256": "73f7f8c4580ab46557dfebce23182149e3f95ca4d7922ce23d4f7d5867e47201"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "tension_materialization",
+  "upstream_completion_sha256": "b381f520488ae4532bca6767f812979aa868d434e76a84bf072460bf4697162c"
+}

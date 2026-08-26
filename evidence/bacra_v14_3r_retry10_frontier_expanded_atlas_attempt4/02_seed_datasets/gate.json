@@ -1,0 +1,38 @@
+{
+  "dataset_20k_authorized": true,
+  "formal_authorized": false,
+  "gate_pass": true,
+  "maximum_legal_seed_rows": 20000,
+  "row_padding_used": false,
+  "scales": {
+    "10000": {
+      "accepted_count": 24468,
+      "attempt_count": 24475,
+      "bounds_pass": true,
+      "duplicate_count": 0,
+      "exact_target_pass": true,
+      "finite_pass": true,
+      "gold_count": 10000,
+      "physical_point_id_unique_pass": true,
+      "row_count": 10000,
+      "silver_count": 0,
+      "unique_xyz_pass": true
+    },
+    "20000": {
+      "accepted_count": 49988,
+      "attempt_count": 50000,
+      "bounds_pass": true,
+      "duplicate_count": 0,
+      "exact_target_pass": true,
+      "finite_pass": true,
+      "gold_count": 20000,
+      "physical_point_id_unique_pass": true,
+      "row_count": 20000,
+      "silver_count": 0,
+      "unique_xyz_pass": true
+    }
+  },
+  "seed_10k_target_pass": true,
+  "seed_20k_target_pass": true,
+  "status": "pass"
+}

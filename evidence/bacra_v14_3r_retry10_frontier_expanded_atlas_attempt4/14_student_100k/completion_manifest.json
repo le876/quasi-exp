@@ -1,0 +1,14 @@
+{
+  "artifacts": [
+    {
+      "bytes": 202,
+      "path": "gate.json",
+      "sha256": "432fd52dfe461acb8c9a4ba0f6b60d23b4541850f577d6dc404eb3f09a221cdf"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "student_100k",
+  "upstream_completion_sha256": "c496ac7b24cbf3ae3cea0d07f318642e928613092358fa7f0ccc5db87372e248"
+}

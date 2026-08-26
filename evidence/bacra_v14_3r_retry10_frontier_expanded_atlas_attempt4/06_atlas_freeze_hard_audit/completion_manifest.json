@@ -1,0 +1,54 @@
+{
+  "artifacts": [
+    {
+      "bytes": 600,
+      "path": "cross_component_boundary_audit.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 1721904,
+      "path": "frozen_candidate_atlas.parquet",
+      "sha256": "a88828d1324a2bf09e6f238a3dcd1b97ffbc79a759b8d5e496972fe6b236fc23"
+    },
+    {
+      "bytes": 649,
+      "path": "gate.json",
+      "sha256": "0e6178d619813198fcf2a0c74f1373fa1e1a67e2dc63fec627ee0fd2a1c7f742"
+    },
+    {
+      "bytes": 1721904,
+      "path": "global_student_compatible_atlas.parquet",
+      "sha256": "a88828d1324a2bf09e6f238a3dcd1b97ffbc79a759b8d5e496972fe6b236fc23"
+    },
+    {
+      "bytes": 1037304,
+      "path": "local_edge_integrity_audit.parquet",
+      "sha256": "ba4f6d637337ef8fc498365c8cef93b8d6b37653c609e096e1316b0e5763b268"
+    },
+    {
+      "bytes": 328261,
+      "path": "panel_a.parquet",
+      "sha256": "3e6172205b50f13a8221b5ff7923c68091cac22d1251554b14070423905e6a2c"
+    },
+    {
+      "bytes": 157386,
+      "path": "panel_b.parquet",
+      "sha256": "d5d50d840030c212b6e1fad1e64fb42e4275fa73a9bc369fb7eb6f84adaa72ea"
+    },
+    {
+      "bytes": 167539,
+      "path": "panel_c.parquet",
+      "sha256": "f5ddebea0948e4240caa3e617856b955f5ebf81fb88cc5a35d2f4fb831a7ea66"
+    },
+    {
+      "bytes": 21272,
+      "path": "quarantined_rows.parquet",
+      "sha256": "833b775e87bee64043cb5784cbbd9336a7803681d51ded51ef7d807711205254"
+    }
+  ],
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "schema_version": 1,
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "stage_name": "atlas_freeze",
+  "upstream_completion_sha256": "6ffe16d7b002f49b553bdc64845ec88fae103b26f34d3ee8d2554b1bb085fca7"
+}

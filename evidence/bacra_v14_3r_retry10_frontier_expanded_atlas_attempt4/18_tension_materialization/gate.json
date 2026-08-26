@@ -1,0 +1,8 @@
+{
+  "beta_theta_dataset_authorization_unchanged": true,
+  "formal_authorized": false,
+  "gate_pass": false,
+  "reason": "tension_pilot_failed_or_not_evaluated",
+  "status": "not_authorized",
+  "tension_materialization_complete": false
+}

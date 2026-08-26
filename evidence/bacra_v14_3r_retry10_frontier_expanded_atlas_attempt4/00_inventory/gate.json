@@ -1,0 +1,26 @@
+{
+  "checks": {
+    "atlas_unique": true,
+    "consultation_sha256": true,
+    "governing_protocol_exists": true,
+    "registered_parent_domain": true,
+    "task_denominator": true,
+    "task_graph_nonempty": true,
+    "upstream_abstention_sha256": true,
+    "upstream_artifact_manifest_sha256": true,
+    "upstream_atlas_labels_sha256": true,
+    "upstream_completion_manifest_sha256": true,
+    "upstream_student_supervision_sha256": true,
+    "upstream_student_test_predictions_sha256": true,
+    "upstream_task_edges_sha256": true,
+    "upstream_task_nodes_sha256": true
+  },
+  "deployment_authorized": false,
+  "formal_authorized": false,
+  "gate_pass": true,
+  "metric_version": "normalized_weighted_v1",
+  "status": "pass",
+  "task_edge_count": 60715,
+  "task_node_count": 25000,
+  "upstream_atlas_rows": 5105
+}

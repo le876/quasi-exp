@@ -1,0 +1,35 @@
+{
+  "branch_disagreement_rate": 0.0245,
+  "dataset_50k_generation_authorized": true,
+  "dataset_decision": {
+    "authorized": true,
+    "evidence_paths": [],
+    "reasons": [],
+    "status": "pass"
+  },
+  "dataset_id": "pilot_domain_expanded_candidate_dataset_50k",
+  "estimate": {
+    "acceptance_lower_bound": 0.9860052578454712,
+    "allowed_qualities": [
+      "Gold",
+      "Silver"
+    ],
+    "attempt_budget": 150000,
+    "estimated_attempts": 30426,
+    "mandatory_strata_nonempty": true,
+    "required_new_rows": 30000,
+    "within_attempt_budget": true
+  },
+  "formal_authorized": false,
+  "gate_pass": true,
+  "gold_acceptance_rate": 0.9755,
+  "no_solution_rate": 0.0,
+  "preflight_decision": {
+    "authorized": true,
+    "evidence_paths": [],
+    "reasons": [],
+    "status": "pass"
+  },
+  "silver_acceptance_rate": 0.023,
+  "status": "pass"
+}

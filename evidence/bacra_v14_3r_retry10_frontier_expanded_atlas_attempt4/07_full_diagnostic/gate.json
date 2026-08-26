@@ -1,0 +1,14 @@
+{
+  "exploration_hard_guard_failure": false,
+  "exploratory_materialization_may_proceed": true,
+  "formal_authorized": false,
+  "formal_diagnostic_failure": true,
+  "formal_failure_reasons": [
+    "reach_measure_not_evaluated",
+    "formal_repeat_max_not_evaluated",
+    "long_transport_execution_not_evaluated"
+  ],
+  "gate_pass": true,
+  "registered_cycle_count": 128,
+  "status": "complete"
+}

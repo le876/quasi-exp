@@ -1,0 +1,36 @@
+{
+  "branch_disagreement_rate": 0.023,
+  "dataset_200k_generation_authorized": false,
+  "dataset_decision": {
+    "authorized": false,
+    "evidence_paths": [],
+    "reasons": [
+      "prior_dataset_incomplete"
+    ],
+    "status": "fail"
+  },
+  "dataset_id": null,
+  "estimate": {
+    "acceptance_lower_bound": 0.9560311392838166,
+    "allowed_qualities": [
+      "Gold"
+    ],
+    "attempt_budget": 1000000,
+    "estimated_attempts": 209199,
+    "mandatory_strata_nonempty": true,
+    "required_new_rows": 200000,
+    "within_attempt_budget": true
+  },
+  "formal_authorized": false,
+  "gate_pass": false,
+  "gold_acceptance_rate": 0.977,
+  "no_solution_rate": 0.0,
+  "preflight_decision": {
+    "authorized": true,
+    "evidence_paths": [],
+    "reasons": [],
+    "status": "pass"
+  },
+  "silver_acceptance_rate": 0.0225,
+  "status": "not_authorized"
+}

@@ -1,0 +1,61 @@
+{
+  "artifact_completeness": true,
+  "atlas_authorization": {
+    "atlas_expansion_valid": true,
+    "atlas_frozen": true,
+    "coverage_fraction": 0.4182,
+    "frozen_label_count": 10455
+  },
+  "config_sha256": "f3bd033833177d0ef0ff31cacb41e366b462860fb2eafc5490a05120a606532d",
+  "dataset_authorizations": {
+    "100k": {
+      "actual_rows": 0,
+      "complete": false,
+      "dataset_id": null,
+      "generation_authorized": false,
+      "status": "not_authorized"
+    },
+    "200k": {
+      "actual_rows": 0,
+      "complete": false,
+      "dataset_id": null,
+      "generation_authorized": false,
+      "status": "not_authorized"
+    },
+    "50k": {
+      "actual_rows": 50000,
+      "complete": false,
+      "dataset_id": "pilot_domain_expanded_candidate_dataset_50k",
+      "generation_authorized": true,
+      "status": "underfilled"
+    }
+  },
+  "deployment_authorization": false,
+  "formal_authorization": false,
+  "full_workspace_authorization": false,
+  "governance_structure": "registered_retry10_protocol_config_runner",
+  "operational_completion": true,
+  "physics_label_authorization": {
+    "tension_materialization_complete": false,
+    "tension_pilot_pass": false,
+    "theta_generation_complete": false
+  },
+  "scientific_contract": "pilot_domain_frontier_expansion_and_staged_materialization",
+  "scientific_source_fixed_point": "e68364c13424a0d1ca1da42aca242ce2a4ecee94",
+  "student_authorizations": {
+    "100k": {
+      "quality_pass": false,
+      "status": "not_evaluated"
+    },
+    "200k": {
+      "quality_pass": false,
+      "status": "not_evaluated"
+    },
+    "50k": {
+      "quality_pass": false,
+      "status": "not_evaluated"
+    }
+  },
+  "student_scaling_claim_authorized": false,
+  "student_scaling_claim_reason": "multi_seed_not_evaluated"
+}

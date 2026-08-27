@@ -88,7 +88,29 @@ RELEASE_MAPPING_KEYS = {
     "public_release_sha",
     "evidence",
 }
-RELEASE_EVIDENCE_KEYS = {"type", "url"}
+RELEASE_EVIDENCE_KEYS = {"type", "manifest", "commit_url"}
+PUBLICATION_MANIFEST_KEYS = {
+    "schema_version",
+    "source_sha",
+    "public_sha",
+    "filter_policy",
+    "inventory_algorithm",
+    "file_count",
+    "inventory_sha256",
+}
+PUBLICATION_EVIDENCE_TYPE = "deterministic_publication_manifest"
+PUBLICATION_POLICY = "scientific_public_snapshot_v1"
+PUBLICATION_INVENTORY_ALGORITHM = "path-mode-type-content-sha256-v1"
+PUBLICATION_MANIFEST_PREFIX = "spec/publication-manifests/"
+PUBLICATION_INCLUDE_EXACT = frozenset({".gitignore", "pyproject.toml", "requirements.txt"})
+PUBLICATION_INCLUDE_PREFIXES = (
+    "configs/",
+    "data/robot/",
+    "env_specs/",
+    "scripts/",
+    "src/",
+    "tests/",
+)
 BUDGET_KEYS = {
     "schema_version",
     "unit",
@@ -130,6 +152,8 @@ BANNED_IMPLEMENTED_HEADING_RE = re.compile(
     flags=re.IGNORECASE,
 )
 MARKDOWN_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
+
+
 @dataclass(frozen=True)
 class Finding:
     severity: str
@@ -143,6 +167,13 @@ class BudgetRow:
     used: int
     ceiling: int
     kind: str
+
+
+@dataclass(frozen=True)
+class PublicationInventory:
+    records: Mapping[str, tuple[str, str, str]]
+    file_count: int
+    digest: str
 
 
 @dataclass
@@ -245,6 +276,24 @@ def _git(root: Path, args: Sequence[str]) -> subprocess.CompletedProcess[str] | 
             ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _git_bytes(
+    root: Path,
+    args: Sequence[str],
+    *,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes] | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            input=input_bytes,
+            capture_output=True,
             timeout=20,
             check=False,
         )
@@ -593,6 +642,305 @@ def validate_fixed_point_bindings(
             )
 
 
+def _publication_path_is_included(path: str) -> bool:
+    return (
+        path in PUBLICATION_INCLUDE_EXACT or path.startswith(PUBLICATION_INCLUDE_PREFIXES)
+    ) and not path.endswith(".md")
+
+
+def _git_commit_available(
+    root: Path,
+    commit: str,
+    *,
+    kind: str,
+    label: str,
+    report: VerificationReport,
+) -> bool:
+    result = _git(root, ["cat-file", "-e", f"{commit}^{{commit}}"])
+    if result is not None and result.returncode == 0:
+        return True
+    if kind == "public":
+        hint = "; fetch the ref containing it explicitly (for this repository: git fetch origin main)"
+    else:
+        hint = "; fetch the scientific source history explicitly"
+    report.error(
+        "release.commit_missing",
+        f"{label}: {kind} commit {commit} is unavailable in the local Git object database{hint}",
+    )
+    return False
+
+
+def _git_tree_entries(
+    root: Path,
+    commit: str,
+    *,
+    label: str,
+    report: VerificationReport,
+) -> dict[str, tuple[str, str, str]] | None:
+    result = _git_bytes(root, ["ls-tree", "-rz", "--full-tree", commit])
+    if result is None or result.returncode != 0:
+        report.error("release.tree", f"{label}: cannot read Git tree for {commit}")
+        return None
+    entries: dict[str, tuple[str, str, str]] = {}
+    for raw_record in result.stdout.split(b"\0"):
+        if not raw_record:
+            continue
+        try:
+            metadata, raw_path = raw_record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split()
+            path = raw_path.decode("utf-8")
+        except (UnicodeError, ValueError):
+            report.error("release.tree", f"{label}: malformed or non-UTF-8 Git tree entry")
+            return None
+        if path in entries:
+            report.error("release.tree", f"{label}: duplicate Git tree path {path!r}")
+            return None
+        entries[path] = (mode, object_type, object_id)
+    return entries
+
+
+def _git_blob_sha256s(
+    root: Path,
+    object_ids: Iterable[str],
+    *,
+    label: str,
+    report: VerificationReport,
+) -> dict[str, str] | None:
+    ordered = sorted(set(object_ids))
+    query = b"".join(object_id.encode("ascii") + b"\n" for object_id in ordered)
+    result = _git_bytes(root, ["cat-file", "--batch"], input_bytes=query)
+    if result is None or result.returncode != 0:
+        report.error("release.content", f"{label}: cannot read publication blobs")
+        return None
+
+    hashes: dict[str, str] = {}
+    cursor = 0
+    output = result.stdout
+    for requested_id in ordered:
+        header_end = output.find(b"\n", cursor)
+        if header_end < 0:
+            report.error("release.content", f"{label}: truncated git cat-file response")
+            return None
+        header = output[cursor:header_end].split()
+        if len(header) != 3:
+            report.error("release.content", f"{label}: invalid git cat-file response")
+            return None
+        actual_id, object_type, raw_size = header
+        try:
+            size = int(raw_size)
+        except ValueError:
+            report.error("release.content", f"{label}: invalid blob size from git cat-file")
+            return None
+        if object_type != b"blob":
+            report.error(
+                "release.entry_type",
+                f"{label}: object {requested_id} has unsupported type {object_type.decode('ascii', 'replace')}",
+            )
+            return None
+        content_start = header_end + 1
+        content_end = content_start + size
+        if content_end >= len(output) or output[content_end : content_end + 1] != b"\n":
+            report.error("release.content", f"{label}: truncated blob content from git cat-file")
+            return None
+        hashes[actual_id.decode("ascii")] = hashlib.sha256(
+            output[content_start:content_end]
+        ).hexdigest()
+        cursor = content_end + 1
+    if cursor != len(output):
+        report.error("release.content", f"{label}: unexpected trailing git cat-file output")
+        return None
+    return hashes
+
+
+def _publication_inventory(
+    root: Path,
+    entries: Mapping[str, tuple[str, str, str]],
+    *,
+    label: str,
+    report: VerificationReport,
+) -> PublicationInventory | None:
+    non_blobs = sorted(
+        path
+        for path, (_mode, object_type, _oid) in entries.items()
+        if object_type != "blob"
+    )
+    if non_blobs:
+        report.error(
+            "release.entry_type",
+            f"{label}: publication inventory contains non-blob entries {non_blobs[:5]}",
+        )
+        return None
+    content_hashes = _git_blob_sha256s(
+        root,
+        (object_id for _mode, _type, object_id in entries.values()),
+        label=label,
+        report=report,
+    )
+    if content_hashes is None:
+        return None
+
+    records: dict[str, tuple[str, str, str]] = {}
+    payload = bytearray()
+    for path in sorted(entries, key=lambda value: value.encode("utf-8")):
+        mode, object_type, object_id = entries[path]
+        content_sha256 = content_hashes.get(object_id)
+        if content_sha256 is None:
+            report.error("release.content", f"{label}: missing content hash for {path}")
+            return None
+        records[path] = (mode, object_type, content_sha256)
+        payload.extend(path.encode("utf-8"))
+        payload.extend(b"\0")
+        payload.extend(mode.encode("ascii"))
+        payload.extend(b"\0")
+        payload.extend(object_type.encode("ascii"))
+        payload.extend(b"\0")
+        payload.extend(content_sha256.encode("ascii"))
+        payload.extend(b"\n")
+    return PublicationInventory(
+        records=records,
+        file_count=len(records),
+        digest=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def _validate_publication_manifest(
+    root: Path,
+    *,
+    label: str,
+    source_sha: str,
+    public_sha: str,
+    manifest_value: Any,
+    report: VerificationReport,
+) -> None:
+    manifest_path = resolve_project_path(
+        root,
+        manifest_value,
+        report,
+        f"{label}.evidence.manifest",
+        require_exists=True,
+    )
+    if manifest_path is None:
+        return
+    relative_manifest = _relative(root, manifest_path)
+    if not relative_manifest.startswith(
+        PUBLICATION_MANIFEST_PREFIX
+    ) or not relative_manifest.endswith(".yaml"):
+        report.error(
+            "release.manifest",
+            f"{label}: publication manifest must be a YAML file under {PUBLICATION_MANIFEST_PREFIX}",
+        )
+        return
+    manifest = _read_yaml(manifest_path, report, f"{label}.publication_manifest")
+    if manifest is None:
+        return
+    if set(manifest) != PUBLICATION_MANIFEST_KEYS:
+        report.error(
+            "release.manifest",
+            f"{label}: publication manifest fields must be exactly {sorted(PUBLICATION_MANIFEST_KEYS)}",
+        )
+    if manifest.get("schema_version") != 1:
+        report.error("release.manifest", f"{label}: publication manifest schema_version must be 1")
+    if manifest.get("source_sha") != source_sha or manifest.get("public_sha") != public_sha:
+        report.error(
+            "release.manifest_binding",
+            f"{label}: publication manifest SHA binding differs from release map",
+        )
+        return
+    if manifest.get("filter_policy") != PUBLICATION_POLICY:
+        report.error("release.policy", f"{label}: unsupported publication filter policy")
+        return
+    if manifest.get("inventory_algorithm") != PUBLICATION_INVENTORY_ALGORITHM:
+        report.error("release.inventory", f"{label}: unsupported publication inventory algorithm")
+        return
+    expected_count = manifest.get("file_count")
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        report.error("release.inventory", f"{label}: file_count must be a non-negative integer")
+        expected_count = None
+    expected_digest = manifest.get("inventory_sha256")
+    if not isinstance(expected_digest, str) or SHA256_RE.fullmatch(expected_digest) is None:
+        report.error("release.inventory", f"{label}: inventory_sha256 must be a SHA-256 digest")
+        expected_digest = None
+
+    source_available = _git_commit_available(
+        root,
+        source_sha,
+        kind="source",
+        label=label,
+        report=report,
+    )
+    public_available = _git_commit_available(
+        root,
+        public_sha,
+        kind="public",
+        label=label,
+        report=report,
+    )
+    if not source_available or not public_available:
+        return
+    source_tree = _git_tree_entries(root, source_sha, label=f"{label}.source", report=report)
+    public_tree = _git_tree_entries(root, public_sha, label=f"{label}.public", report=report)
+    if source_tree is None or public_tree is None:
+        return
+    filtered_source = {
+        path: entry for path, entry in source_tree.items() if _publication_path_is_included(path)
+    }
+    source_inventory = _publication_inventory(
+        root,
+        filtered_source,
+        label=f"{label}.source",
+        report=report,
+    )
+    public_inventory = _publication_inventory(
+        root,
+        public_tree,
+        label=f"{label}.public",
+        report=report,
+    )
+    if source_inventory is None or public_inventory is None:
+        return
+
+    source_paths = set(source_inventory.records)
+    public_paths = set(public_inventory.records)
+    missing = sorted(source_paths - public_paths)
+    extra = sorted(public_paths - source_paths)
+    if missing:
+        report.error(
+            "release.tree",
+            f"{label}: public tree is missing filtered source paths {missing[:5]}",
+        )
+    if extra:
+        report.error(
+            "release.tree",
+            f"{label}: public tree has paths outside filtered source {extra[:5]}",
+        )
+    mismatched = sorted(
+        path
+        for path in source_paths & public_paths
+        if source_inventory.records[path] != public_inventory.records[path]
+    )
+    if mismatched:
+        report.error(
+            "release.tree",
+            f"{label}: public tree mode, type, or content differs at {mismatched[:5]}",
+        )
+    if expected_count is not None and (
+        source_inventory.file_count != expected_count
+        or public_inventory.file_count != expected_count
+    ):
+        report.error(
+            "release.inventory",
+            f"{label}: manifest file_count {expected_count} does not match source/public inventories "
+            f"{source_inventory.file_count}/{public_inventory.file_count}",
+        )
+    if expected_digest is not None and (
+        source_inventory.digest != expected_digest or public_inventory.digest != expected_digest
+    ):
+        report.error(
+            "release.inventory",
+            f"{label}: manifest inventory_sha256 does not match source/public inventories",
+        )
+
+
 def validate_release_map(
     root: Path,
     registry: Mapping[str, Any] | None,
@@ -603,8 +951,8 @@ def validate_release_map(
         return None
     if set(release_map) != RELEASE_MAP_KEYS:
         report.error("release.schema", f"release-map fields must be exactly {sorted(RELEASE_MAP_KEYS)}")
-    if release_map.get("schema_version") != 2:
-        report.error("release.schema", "release-map.schema_version must be 2")
+    if release_map.get("schema_version") != 3:
+        report.error("release.schema", "release-map.schema_version must be 3")
     repository = release_map.get("public_repository")
     if not isinstance(repository, str) or not repository.startswith("https://"):
         report.error("release.repository", "public_repository must be an https URL")
@@ -665,8 +1013,24 @@ def validate_release_map(
                 if isinstance(repository, str) and isinstance(public_sha, str)
                 else None
             )
-            if evidence.get("type") != "github_commit_message" or evidence.get("url") != expected_url:
-                report.error("release.evidence", f"{label}: evidence does not identify declared commit")
+            if evidence.get("type") != PUBLICATION_EVIDENCE_TYPE:
+                report.error("release.evidence", f"{label}: unsupported publication evidence type")
+            elif evidence.get("commit_url") != expected_url:
+                report.error("release.evidence", f"{label}: commit_url does not identify declared commit")
+            elif (
+                isinstance(source_sha, str)
+                and SHA_RE.fullmatch(source_sha) is not None
+                and isinstance(public_sha, str)
+                and SHA_RE.fullmatch(public_sha) is not None
+            ):
+                _validate_publication_manifest(
+                    root,
+                    label=label,
+                    source_sha=source_sha,
+                    public_sha=public_sha,
+                    manifest_value=evidence.get("manifest"),
+                    report=report,
+                )
 
     current_id = release_map.get("current_public_release_id")
     if current_id not in by_id:
@@ -1204,6 +1568,10 @@ def persistence_paths(
     paths.update(
         _relative(root, path)
         for path in (root / ".agents/notes/archived").glob("*.md")
+    )
+    paths.update(
+        _relative(root, path)
+        for path in (root / "spec/publication-manifests").glob("*.yaml")
     )
     paths.update(
         _relative(root, path)

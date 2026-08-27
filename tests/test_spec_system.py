@@ -204,26 +204,133 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _commit_fixture(root: Path) -> str:
+def _init_git_fixture(root: Path) -> None:
     _git(root, "init", "-q")
     _git(root, "config", "user.name", "Spec Test")
     _git(root, "config", "user.email", "spec-test@example.invalid")
+
+
+def _commit_fixture(root: Path) -> str:
+    _init_git_fixture(root)
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "scientific source")
     return _git(root, "rev-parse", "HEAD")
+
+
+def _create_publication_pair(
+    root: Path,
+    *,
+    mutation: str | None = None,
+    source_message: str = "scientific source without publication metadata",
+    public_message: str = "public snapshot without source metadata",
+) -> tuple[str, str]:
+    module = _module()
+    _init_git_fixture(root)
+    (root / "configs").mkdir(parents=True, exist_ok=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / ".gitignore").write_text("# fixture\n", encoding="utf-8")
+    config_path = root / "configs/released.yaml"
+    config_path.write_text("value: source\n", encoding="utf-8")
+    (root / "docs/not-public.md").write_text("# Private note\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", source_message)
+    source_sha = _git(root, "rev-parse", "HEAD")
+
+    (root / "docs/not-public.md").unlink()
+    if mutation == "missing":
+        config_path.unlink()
+    elif mutation == "extra":
+        (root / "outside.txt").write_text("not allowed\n", encoding="utf-8")
+    elif mutation == "content":
+        config_path.write_text("value: public\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    if mutation == "mode":
+        _git(root, "update-index", "--chmod=+x", "configs/released.yaml")
+    elif mutation == "type":
+        _git(
+            root,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{source_sha},configs/released.yaml",
+        )
+    _git(root, "commit", "-q", "--allow-empty", "-m", public_message)
+    public_sha = _git(root, "rev-parse", "HEAD")
+    assert source_sha != public_sha
+    assert module.SHA_RE.fullmatch(source_sha)
+    assert module.SHA_RE.fullmatch(public_sha)
+    return source_sha, public_sha
+
+
+def _write_publication_manifest(
+    root: Path,
+    source_sha: str,
+    public_sha: str,
+    **overrides: object,
+) -> Path:
+    module = _module()
+    report = module.VerificationReport()
+    source_tree = module._git_tree_entries(
+        root,
+        source_sha,
+        label="fixture.source",
+        report=report,
+    )
+    if source_tree is None:
+        file_count = 0
+        digest = "0" * 64
+    else:
+        filtered_source = {
+            path: entry
+            for path, entry in source_tree.items()
+            if module._publication_path_is_included(path)
+        }
+        inventory = module._publication_inventory(
+            root,
+            filtered_source,
+            label="fixture.source",
+            report=report,
+        )
+        assert inventory is not None, report.errors
+        file_count = inventory.file_count
+        digest = inventory.digest
+    value: dict[str, object] = {
+        "schema_version": 1,
+        "source_sha": source_sha,
+        "public_sha": public_sha,
+        "filter_policy": module.PUBLICATION_POLICY,
+        "inventory_algorithm": module.PUBLICATION_INVENTORY_ALGORITHM,
+        "file_count": file_count,
+        "inventory_sha256": digest,
+    }
+    value.update(overrides)
+    path = root / "spec/publication-manifests/published.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _write_release_map(
     root: Path,
     unpublished: list[object],
     *,
-    scientific_source_sha: str = "b" * 40,
-    public_release_sha: str = "c" * 40,
-) -> None:
+    scientific_source_sha: str | None = None,
+    public_release_sha: str | None = None,
+) -> tuple[str, str]:
     module = _module()
+    if scientific_source_sha is None or public_release_sha is None:
+        scientific_source_sha, public_release_sha = _create_publication_pair(root)
+    manifest_path = _write_publication_manifest(
+        root,
+        scientific_source_sha,
+        public_release_sha,
+    )
     (root / "spec").mkdir(parents=True, exist_ok=True)
     value = {
-        "schema_version": 2,
+        "schema_version": 3,
         "public_repository": "https://github.com/example/quasi-exp",
         "current_public_release_id": "published",
         "verified_at": "2026-08-21",
@@ -234,8 +341,10 @@ def _write_release_map(
                 "scientific_source_sha": scientific_source_sha,
                 "public_release_sha": public_release_sha,
                 "evidence": {
-                    "type": "github_commit_message",
-                    "url": "https://github.com/example/quasi-exp/commit/" + public_release_sha,
+                    "type": module.PUBLICATION_EVIDENCE_TYPE,
+                    "manifest": manifest_path.relative_to(root).as_posix(),
+                    "commit_url": "https://github.com/example/quasi-exp/commit/"
+                    + public_release_sha,
                 },
             }
         ],
@@ -245,6 +354,7 @@ def _write_release_map(
         module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    return scientific_source_sha, public_release_sha
 
 
 def test_repository_governance_structure_is_valid() -> None:
@@ -461,22 +571,21 @@ def test_source_bound_config_identity_and_protocol_inventory_are_enforced(
     assert expected in {item.code for item in report.errors}
 
 
-def test_release_map_v2_covers_sources_without_experiment_membership(tmp_path: Path) -> None:
+def test_release_map_v3_covers_sources_without_experiment_membership(tmp_path: Path) -> None:
     module = _module()
-    source_sha = "a" * 40
+    source_sha, _public_sha = _write_release_map(tmp_path, [])
     registry = {
         "experiments": {
             "first": {"scientific_source_fixed_point": source_sha},
             "new_definition": {"scientific_source_fixed_point": source_sha},
         }
     }
-    _write_release_map(tmp_path, [source_sha])
     report = module.VerificationReport()
     module.validate_release_map(tmp_path, registry, report)
     assert report.errors == ()
 
 
-def test_release_map_v2_requires_source_coverage(tmp_path: Path) -> None:
+def test_release_map_v3_requires_source_coverage(tmp_path: Path) -> None:
     module = _module()
     registry = {"experiments": {"missing": {"scientific_source_fixed_point": "a" * 40}}}
     _write_release_map(tmp_path, [])
@@ -490,10 +599,9 @@ def test_release_map_v2_requires_source_coverage(tmp_path: Path) -> None:
     [
         (["invalid"], "release.source_sha"),
         (["a" * 40, "a" * 40], "release.source_sha"),
-        (["b" * 40], "release.overlap"),
     ],
 )
-def test_release_map_v2_rejects_invalid_duplicate_or_overlapping_sources(
+def test_release_map_v3_rejects_invalid_or_duplicate_unpublished_sources(
     tmp_path: Path,
     unpublished: list[object],
     expected: str,
@@ -505,6 +613,21 @@ def test_release_map_v2_rejects_invalid_duplicate_or_overlapping_sources(
     assert expected in {item.code for item in report.errors}
 
 
+def test_release_map_v3_rejects_released_unpublished_overlap(tmp_path: Path) -> None:
+    module = _module()
+    source_sha, _public_sha = _write_release_map(tmp_path, [])
+    path = tmp_path / "spec/release-map.yaml"
+    value = module.yaml.safe_load(path.read_text(encoding="utf-8"))
+    value["unpublished_scientific_fixed_points"] = [source_sha]
+    path.write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert "release.overlap" in {item.code for item in report.errors}
+
+
 @pytest.mark.parametrize(
     ("field_name", "expected"),
     [
@@ -512,7 +635,7 @@ def test_release_map_v2_rejects_invalid_duplicate_or_overlapping_sources(
         ("public_release_sha", "release.public_sha"),
     ],
 )
-def test_release_map_v2_rejects_duplicate_released_shas(
+def test_release_map_v3_rejects_duplicate_released_shas(
     tmp_path: Path,
     field_name: str,
     expected: str,
@@ -528,8 +651,11 @@ def test_release_map_v2_rejects_duplicate_released_shas(
     else:
         duplicate["scientific_source_sha"] = "d" * 40
     duplicate["evidence"] = {
-        "type": "github_commit_message",
-        "url": value["public_repository"] + "/commit/" + duplicate["public_release_sha"],
+        "type": module.PUBLICATION_EVIDENCE_TYPE,
+        "manifest": value["mappings"][0]["evidence"]["manifest"],
+        "commit_url": value["public_repository"]
+        + "/commit/"
+        + duplicate["public_release_sha"],
     }
     value["mappings"].append(duplicate)
     path.write_text(
@@ -539,6 +665,181 @@ def test_release_map_v2_rejects_duplicate_released_shas(
     report = module.VerificationReport()
     module.validate_release_map(tmp_path, {"experiments": {}}, report)
     assert expected in {item.code for item in report.errors}
+
+
+def test_publication_manifest_proves_filtered_tree_without_commit_message_identity(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    source_sha, public_sha = _create_publication_pair(
+        tmp_path,
+        source_message="source message names the wrong public release",
+        public_message="public message names no scientific source",
+    )
+    _write_release_map(
+        tmp_path,
+        [],
+        scientific_source_sha=source_sha,
+        public_release_sha=public_sha,
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert report.errors == ()
+
+
+@pytest.mark.parametrize("missing_kind", ["source", "public"])
+def test_publication_manifest_requires_both_commits(
+    tmp_path: Path,
+    missing_kind: str,
+) -> None:
+    module = _module()
+    source_sha, public_sha = _create_publication_pair(tmp_path)
+    _write_release_map(
+        tmp_path,
+        [],
+        scientific_source_sha=source_sha,
+        public_release_sha=public_sha,
+    )
+    missing_sha = "d" * 40
+    release_path = tmp_path / "spec/release-map.yaml"
+    release_map = module.yaml.safe_load(release_path.read_text(encoding="utf-8"))
+    manifest_path = tmp_path / release_map["mappings"][0]["evidence"]["manifest"]
+    manifest = module.yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    field = "scientific_source_sha" if missing_kind == "source" else "public_release_sha"
+    manifest_field = "source_sha" if missing_kind == "source" else "public_sha"
+    release_map["mappings"][0][field] = missing_sha
+    manifest[manifest_field] = missing_sha
+    release_map["mappings"][0]["evidence"]["commit_url"] = (
+        release_map["public_repository"]
+        + "/commit/"
+        + release_map["mappings"][0]["public_release_sha"]
+    )
+    release_path.write_text(
+        module.yaml.safe_dump(release_map, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    manifest_path.write_text(
+        module.yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert "release.commit_missing" in {item.code for item in report.errors}
+    if missing_kind == "public":
+        assert any("git fetch origin main" in item.message for item in report.errors)
+
+
+def test_publication_manifest_must_bind_release_map_shas(tmp_path: Path) -> None:
+    module = _module()
+    _write_release_map(tmp_path, [])
+    manifest_path = tmp_path / "spec/publication-manifests/published.yaml"
+    manifest = module.yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_sha"] = "d" * 40
+    manifest_path.write_text(
+        module.yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert "release.manifest_binding" in {item.code for item in report.errors}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("missing", "release.tree"),
+        ("extra", "release.tree"),
+        ("content", "release.tree"),
+        ("mode", "release.tree"),
+        ("type", "release.entry_type"),
+    ],
+)
+def test_publication_manifest_rejects_tree_differences(
+    tmp_path: Path,
+    mutation: str,
+    expected: str,
+) -> None:
+    module = _module()
+    source_sha, public_sha = _create_publication_pair(tmp_path, mutation=mutation)
+    _write_release_map(
+        tmp_path,
+        [],
+        scientific_source_sha=source_sha,
+        public_release_sha=public_sha,
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert expected in {item.code for item in report.errors}
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "expected"),
+    [
+        ("filter_policy", "unknown", "release.policy"),
+        ("inventory_algorithm", "unknown", "release.inventory"),
+        ("file_count", 999, "release.inventory"),
+        ("inventory_sha256", "0" * 64, "release.inventory"),
+    ],
+)
+def test_publication_manifest_rejects_policy_or_inventory_drift(
+    tmp_path: Path,
+    field_name: str,
+    replacement: object,
+    expected: str,
+) -> None:
+    module = _module()
+    _write_release_map(tmp_path, [])
+    manifest_path = tmp_path / "spec/publication-manifests/published.yaml"
+    manifest = module.yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest[field_name] = replacement
+    manifest_path.write_text(
+        module.yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert expected in {item.code for item in report.errors}
+
+
+def test_publication_commit_url_must_match_public_sha(tmp_path: Path) -> None:
+    module = _module()
+    _write_release_map(tmp_path, [])
+    path = tmp_path / "spec/release-map.yaml"
+    value = module.yaml.safe_load(path.read_text(encoding="utf-8"))
+    value["mappings"][0]["evidence"]["commit_url"] = (
+        value["public_repository"] + "/commit/" + "d" * 40
+    )
+    path.write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert "release.evidence" in {item.code for item in report.errors}
+
+
+def test_release_map_rejects_commit_message_evidence_fallback(tmp_path: Path) -> None:
+    module = _module()
+    _write_release_map(tmp_path, [])
+    path = tmp_path / "spec/release-map.yaml"
+    value = module.yaml.safe_load(path.read_text(encoding="utf-8"))
+    value["mappings"][0]["evidence"]["type"] = "github_commit_message"
+    path.write_text(
+        module.yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = module.VerificationReport()
+    module.validate_release_map(tmp_path, {"experiments": {}}, report)
+    assert "release.evidence" in {item.code for item in report.errors}
+
+
+def test_publication_manifest_is_a_persistence_path(tmp_path: Path) -> None:
+    _write_release_map(tmp_path, [])
+    module = _module()
+    assert "spec/publication-manifests/published.yaml" in module.persistence_paths(
+        tmp_path,
+        None,
+    )
 
 
 def test_current_state_selects_registered_experiment_and_attempt(tmp_path: Path) -> None:

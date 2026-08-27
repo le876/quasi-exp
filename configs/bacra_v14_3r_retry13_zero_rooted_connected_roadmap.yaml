@@ -1,0 +1,153 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure
+consultation_sha256: d53ae208a8f04b7e0f1580ce6519c1f18ef14d5bc2754f2060c0a4cd5f82de70
+
+sources:
+  consultation_input: docs/26-pro提问-零点中心数据集提升为完整连续四象限数据集.md
+  governing_protocol: docs/protocols/30-BACRA-V14.3R-retry13-zero-rooted-connected-roadmap执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry12_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry12_symmetry_quotient_attempt3
+  retry12_scientific_source_fixed_point: 25b73f06eaf7d81926c30c3c07ad65dcc9fdf4bf
+  retry12_binding_fixed_point: ea1e3520b8cd8eef5448c455097996ce9aa6af7a
+  retry12_artifact_manifest:
+    path: 09_summary/artifact_manifest.json
+    sha256: 0f9e5df7d97ed931d82238c512025f6ab2cd03f003b3981aceb4c2a5c2bf65a0
+  retry12_completion_manifest:
+    path: 09_summary/completion_manifest.json
+    sha256: 57f1c866411a53e1e5b86ed0aab3fbd3cf597c1f231c4c2e46f98e58ad8a0873
+  retry12_summary_gate:
+    path: 09_summary/gate.json
+    sha256: a11ef5fd7f923a17b199192fa3f68d88ab49d5fec77a8823c10333bb0e83c5df
+  retry12_zero_rooted_fundamental_atlas:
+    path: 02_zero_rooted_outward_atlas/zero_rooted_fundamental_atlas.parquet
+    sha256: 71a80f28905bbdcd0f2aaa31b8ec698848307c336f1ee874b4c66fa559efa70b
+  retry12_target_registry:
+    path: 01_quotient_target_registry/quotient_target_registry.parquet
+    sha256: 348a420adc33d55cb3ddc8bd20818585c1bfebdd35f8900b9f74b70d1b5072c2
+  retry12_all_representatives:
+    path: 04_orbit_selection_expansion_split/fundamental_candidate_representatives.parquet
+    sha256: 07a7adc642b6c4cf2e4fcd9c70b282d2cdbe7ebec6071c6c7889db31901237d0
+  retry12_selected_representatives:
+    path: 04_orbit_selection_expansion_split/selected_fundamental_representatives.parquet
+    sha256: 3154f961a62326d40d861f1657c85c49bd36a099b6922c5eb5630cfddcd52de6
+  retry12_expanded_candidates:
+    path: 04_orbit_selection_expansion_split/expanded_kinematic_candidates.parquet
+    sha256: dd396dbd25948bc2950f22e1bb7826774604a5af970e658769953142c7103ea3
+  retry12_zero_anchor:
+    path: 00_symmetry_contract/zero_anchor.json
+    sha256: 83912de5acd900e55bfd4d1a0d46ecf582a75cff9a5ee4d902cc36bef1a260de
+  retry12_symmetry_group:
+    path: 00_symmetry_contract/symmetry_group_registry.json
+    sha256: 0d7f776792d82f6ba1dde0e8c0f57f0e5c3b1ab6ae2f4a827d602497f590a25d
+  retry11_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry11_dual_track_zero_bridge_attempt3
+  retry11_zero_lineage_labels:
+    absolute_path: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry11_dual_track_zero_bridge_attempt3/07_zero_frontier_poc/zero_component_labels_after_frontier.parquet
+    sha256: 9d42ed16633df66ba131ef1e1d952134497a79747e751f13cd58f04c5f4bf8dd
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  seed: 20260883
+  maximum_concurrent_workers: 1
+  launcher_deadline_hours: 24
+  expected_duration_hours: 2
+
+symmetry:
+  group: [identity, mirror_y, mirror_z, rotate_x_180]
+  exact_plane_snap_tolerance_m: 1.0e-9
+
+backbone:
+  maximum_edge_mm: 10
+  candidate_weighted_max_deg: 3
+  candidate_raw_max_deg: 7
+  same_point_weighted_max_deg: 3
+  same_point_raw_max_deg: 5
+  reverse_weighted_max_deg: 1
+  reverse_raw_max_deg: 5
+
+solver:
+  damping: 0.002
+  maximum_corrector_iterations: 400
+  residual_tolerance_mm: 10
+  adaptive_step_schedule_mm: [5.0, 2.5, 1.25]
+  maximum_reroute_corridors: 3
+
+spokes:
+  proposal_power_per_spoke: 10
+  dense_scale_count: 513
+  endpoint_radius_multiplier: 2.5
+  maximum_step_mm: 5
+  minimum_labels_per_spoke: 2
+
+fill:
+  maximum_step_mm: 5
+  batch_size: 4
+  maximum_batches: 250
+
+coverage:
+  angle_bin_count: 8
+  remote_green_angle_bins: 8
+  remote_yellow_angle_bins_min: 6
+  minimum_core_overlap_anchors_per_quadrant: 3
+  radial_shell_width_mm: 10
+  x_bin_mm: 20
+
+audit:
+  diagnostic_radii_mm: [5.0, 7.5, 10.0, 12.5, 15.0]
+  certified_edge_maximum_mm: 10
+  certified_edge_weighted_p95_max_deg: 3
+  certified_edge_raw_threshold_deg: 7
+  certified_edge_raw_gt7_rate_max: 0.02
+  local_conflict_radius_mm: 5
+
+dataset:
+  dataset_id: retry13_zero_rooted_connected_core_petal_kinematic_dataset_v1
+  domain_limited_dataset_id: retry13_domain_limited_zero_rooted_connected_dataset_v1
+  minimum_expanded_rows: 18000
+  target_range_min_rows: 20000
+  target_range_max_rows: 27000
+  fk_max_mm: 10
+  theta_width: 30
+  theta_storage: beta_to_theta_without_theta_sign_multiplication
+  kinematics_theta_sign_metadata: -1.0
+
+split:
+  hierarchy: quotient_macroblock_then_orbit_then_row
+  quotient_macroblock_size_mm: 40
+  train_fraction: 0.70
+  validation_fraction: 0.15
+  test_fraction: 0.15
+
+student:
+  device: cpu
+  seed: 20260883
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  maximum_steps: 1500
+  validation_interval: 50
+  patience_intervals: 8
+  beta_loss_only: true
+  quality_weight:
+    Gold: 1.0
+    Wide-Silver: 0.5
+    ExactAnchor: 1.0
+  dls_success_fk_max_mm: 10
+
+trajectory:
+  expected_lineage_trajectory_count: 32
+  endpoint_minimum_radius_mm: 260.6499268339916
+  success_rate_min: 0.90
+  fk_p95_max_mm: 10
+  corrected_beta_step_raw_gap_deg: 7
+  corrected_beta_step_catastrophic_rate_max: 0.02
+
+claims:
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  direct_far_seam_crossing_authorized: false
+  tension_authorized: false

@@ -1,0 +1,180 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry11_dual_track_zero_bridge
+consultation_sha256: 0623da226ddb20b392a6392df538785d7a5e2f2cdafc8b4cff99635906cce45b
+
+sources:
+  consultation_input: docs/24-pro提问-50k数据集Gate失败后的探索性实验推进方案.md
+  governing_protocol: docs/28-BACRA-V14.3R-retry11-dual-track-zero-bridge执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+  tension_robot_config: configs/robot_rods_only_standard_100k_segmented_canonical.yaml
+  tension_robot_config_sha256: 19e4cf1bdf1b4955bd7940190786dba60e9528de0aaa0c331191228938b7c3ee
+
+upstream:
+  retry10_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry10_frontier_expanded_atlas_attempt4
+  retry10_scientific_source_fixed_point: e68364c13424a0d1ca1da42aca242ce2a4ecee94
+  retry10_binding_fixed_point: a891700c9824d6dd5f4858e2dfce5965a252283f
+  retry10_artifact_manifest:
+    path: 19_summary_report/artifact_manifest.json
+    sha256: 08fc611af8443af5a0989761dcaba39767d23923722f88dd80d6327d4223a0af
+  retry10_completion_manifest:
+    path: 19_summary_report/completion_manifest.json
+    sha256: 9dfdfb13a917ca4a87e4734a02bcfe0e7bf61e781419c161eb4d8c4d3f2e82dd
+  atlas_freeze_completion:
+    path: 06_atlas_freeze_hard_audit/completion_manifest.json
+    sha256: 927eefa065d9584c541252abb0c16d69b90060a576431b2feec23165aa0f8b93
+  frozen_atlas:
+    path: 06_atlas_freeze_hard_audit/frozen_candidate_atlas.parquet
+    sha256: a88828d1324a2bf09e6f238a3dcd1b97ffbc79a759b8d5e496972fe6b236fc23
+  accepted_candidate_pool:
+    path: 09_dataset_50k/generation_attempts.parquet
+    sha256: f07cae00d08914cb452f037cc34d0c5e0fe24f56ae9765b1b0038e5fe09d383a
+  refined_task_edges:
+    path: 05_taxonomy_rescue/refined_registered_task_edges.parquet
+    sha256: dcd765fdc67732e8b0a37cd527b8ff11e66ea648115e4caeec34b28d8945314d
+  panel_a:
+    path: 06_atlas_freeze_hard_audit/panel_a.parquet
+    sha256: 3e6172205b50f13a8221b5ff7923c68091cac22d1251554b14070423905e6a2c
+  panel_b:
+    path: 06_atlas_freeze_hard_audit/panel_b.parquet
+    sha256: d5d50d840030c212b6e1fad1e64fb42e4275fa73a9bc369fb7eb6f84adaa72ea
+  panel_c:
+    path: 06_atlas_freeze_hard_audit/panel_c.parquet
+    sha256: f5ddebea0948e4240caa3e617856b955f5ebf81fb88cc5a35d2f4fb831a7ea66
+  task_nodes:
+    absolute_path: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry9_coverage_first_attempt2/02_pairwise_overlap_recovery/task_nodes.parquet
+    sha256: 57daf510af12ca04874e3aea3664ccde2c71ce5eadeb68ab2ced5c0239ca8496
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  logical_shard_count: 48
+  seed: 20260881
+  registered_attention_budget_hours: 6.0
+  launcher_deadline_hours: 24.0
+
+metric:
+  version: normalized_weighted_v1
+  beta_coordinate_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+components:
+  outer:
+    canonical_component_id: outer_component
+    component_role: outer_closure_component
+    zero_centered_primary: false
+  zero:
+    canonical_component_id: zero_component
+    component_role: zero_primary_component
+    zero_centered_primary: true
+
+spatial_registry:
+  shell_edge_percentile: 95.0
+  shell_edge_multiplier: 2.0
+  shell_width_min_mm: 10.0
+  shell_width_max_mm: 30.0
+  sector_definition: zero_relative_octants_v1
+  macroblock_size_mm: 40
+
+outer_dataset:
+  dataset_id: outer_sparse_wide_beta_dataset_v1
+  complete_dataset_id: outer_sparse_wide_complete_dataset_v1
+  mandatory_rows: 10455
+  target_rows: 20000
+  minimum_rows: 18000
+  allowed_qualities: [Gold, Silver]
+  required_round1_new_parent_service_coverage: 1.0
+  active_parent_fairness_gap_max: 1
+  scheduler: parent_round_then_shell_sector_relative_deficit_then_parent_local_xyz_maximin
+  total_parent_coverage_is_diagnostic_only: true
+  shell_sector_quota_is_diagnostic_only: true
+
+student:
+  device: cpu
+  seed: 20260881
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  max_steps: 1500
+  validation_interval: 50
+  patience_intervals: 8
+  beta_loss_only: true
+  quality_weight:
+    Gold: 1.0
+    Silver: 0.5
+  dls_success_fk_max_mm: 5.0
+  green_success_rate_min: 0.95
+  yellow_success_rate_min: 0.80
+  green_dls_fk_p95_max_mm: 10.0
+  green_dls_fk_p99_max_mm: 20.0
+  physics_authorization_depends_on_student: false
+
+theta:
+  output_width: 30
+  theta_sign: -1.0
+
+tension:
+  pilot_rows: 2000
+  maximum_concurrent_workers: 12
+  green_success_rate_min: 0.95
+  yellow_success_rate_min: 0.80
+  residual_max: 0.06
+  tension_bounds_n: [0.0, 2000.0]
+  runtime_projection_targets: [20000, 50000, 200000]
+  projected_200k_is_diagnostic_only: true
+  replacement_max_rounds: 3
+  replacement_levels:
+    - same_parent_shell_sector_component_split_exact_quality
+    - same_parent_shell_sector_component_split_gold_upgrade
+    - nearest_parent_same_shell_sector_component_split_exact_quality
+    - nearest_parent_same_shell_sector_component_split_gold_upgrade
+
+zero_seed:
+  candidate_count: 8
+  green_valid_count_min: 4
+  yellow_valid_count_min: 2
+  exact_anchor_roundtrip_tolerance_m: 1.0e-9
+  fk_gold_max_mm: 5.0
+  fk_wide_silver_max_mm: 10.0
+
+track_b_quality:
+  scheme: retry11_gold_wide_silver_v1
+  gold:
+    independent_source_path_count_min: 2
+    same_point_weighted_max_deg: 2.0
+    same_point_raw_max_deg: 5.0
+    fk_max_mm: 5.0
+  wide_silver:
+    successful_source_path_count: 1
+    reverse_return_max_deg: 1.0
+    retained_neighbor_count: 2
+    weighted_neighbor_max_deg: 3.0
+    raw_neighbor_max_deg: 7.0
+    fk_max_mm: 10.0
+
+zero_frontier:
+  root_count_max: 4
+  beam_width: 1
+  initial_waves: 8
+  extended_waves: 12
+  extend_requires_wave8_gain: true
+
+bridge:
+  maximum_step_mm: 10.0
+  maximum_probes_per_path: 32
+  diversity_ray_count: 3
+  maximum_batches: 1
+  same_point_raw_max_deg: 5.0
+  local_weighted_p95_max_deg: 3.0
+  neighbor_raw_catastrophic_deg: 7.0
+  neighbor_raw_catastrophic_rate_max: 0.02
+  persistent_edge_rate_max: 0.005
+  fk_p95_max_mm: 8.0
+  fk_p99_max_mm: 15.0
+  fk_individual_max_mm: 20.0
+
+claims:
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  unified_component_student_authorized: false
+  automatic_component_merge_authorized: false

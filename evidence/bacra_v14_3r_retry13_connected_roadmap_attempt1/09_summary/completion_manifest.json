@@ -1,0 +1,28 @@
+{
+  "artifacts": [
+    {
+      "bytes": 12415,
+      "path": "artifact_manifest.json",
+      "sha256": "41e4d845b95a42687686788bf72abe10ed5919c5412382de1d2c2f17696b2153"
+    },
+    {
+      "bytes": 2724,
+      "path": "gate.json",
+      "sha256": "a6248b61fc7d5c69718a00853d7321f56803d5276fa5b3caa85946175bbc008b"
+    },
+    {
+      "bytes": 2571,
+      "path": "retry13_summary.html",
+      "sha256": "760bd6a42ba913062fbdb640fd7dbd98ee0be43b89f7bf039609110f5878c5eb"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "summary",
+  "upstream": [
+    {
+      "sha256": "7a31f0c2dd0b53d954389d8b31def453d694bda1fddb9b335b4ae2c0aa2d059c",
+      "stage": "zero_to_target_trajectory_audit"
+    }
+  ]
+}

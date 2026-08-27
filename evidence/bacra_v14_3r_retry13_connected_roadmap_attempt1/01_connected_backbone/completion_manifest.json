@@ -1,0 +1,53 @@
+{
+  "artifacts": [
+    {
+      "bytes": 15197,
+      "path": "bridge_candidate_edges.parquet",
+      "sha256": "35d593ee408b283e8f796d3764d5f2acc1013111d33d67c735380d368f1b7313"
+    },
+    {
+      "bytes": 29631,
+      "path": "bridge_solver_attempts.parquet",
+      "sha256": "ef6796a4992a9ddf057b7fe395bf651882ae29eabdba20b8b1305cfbabf803fb"
+    },
+    {
+      "bytes": 28209,
+      "path": "certified_bridge_candidates.parquet",
+      "sha256": "a58b7ca5f97d305d9fe719e4cd86f0b4a44a1858b18124aad2d73c0437b333ce"
+    },
+    {
+      "bytes": 1034093,
+      "path": "connected_backbone_edges.parquet",
+      "sha256": "f8e4cb8db1cb0404ba5702623eb8c9b85d27201e6660ced57585c2af7e107f0d"
+    },
+    {
+      "bytes": 2566736,
+      "path": "connected_backbone_representatives.parquet",
+      "sha256": "cacb2f235c0f7dcbf9001ec0345d826c511e636966a487522061dbbb7568f5eb"
+    },
+    {
+      "bytes": 954,
+      "path": "gate.json",
+      "sha256": "125a1272b7583c3811bd28051070f38e1d71c04b0b1efb10a8cdcb5849a7606f"
+    },
+    {
+      "bytes": 737550,
+      "path": "inherited_retry12_parent_edges.parquet",
+      "sha256": "619cb7799a4f15de096ca997f841a536ada30e230f011823eb834ee36c743417"
+    },
+    {
+      "bytes": 25178,
+      "path": "selected_component_bridge_tree.parquet",
+      "sha256": "1e3c00f4a8a1635885d49b0fc7207053a7cfb2d00521c48f4b1c85d737b30b0b"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "connected_backbone",
+  "upstream": [
+    {
+      "sha256": "8ea27b1296e5ae571519edf7b3b0a56db78e5aa7948e9964f7993a8d4e881d5b",
+      "stage": "input_lineage_audit"
+    }
+  ]
+}

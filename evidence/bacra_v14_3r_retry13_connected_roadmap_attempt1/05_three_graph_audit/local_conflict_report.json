@@ -1,0 +1,7 @@
+{
+  "diagnostic_only": true,
+  "edge_count": 2780,
+  "radius_mm": 5.0,
+  "raw_beta_gap_gt7_rate": 0.08776978417266187,
+  "weighted_beta_gap_p95_deg": 2.849291704830818
+}

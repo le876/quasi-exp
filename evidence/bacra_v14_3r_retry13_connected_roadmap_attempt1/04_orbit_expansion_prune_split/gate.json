@@ -1,0 +1,23 @@
+{
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "deployment_authorized": false,
+  "exact_19999_target_active": false,
+  "expanded_row_count": 24021,
+  "expected_expanded_row_count": 24021,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "formal_authorized": false,
+  "graph_audit_authorized": true,
+  "orbit_split_leakage_count": 0,
+  "preprune_representative_count": 6016,
+  "pruned_leaf_orbit_count": 0,
+  "quotient_macroblock_split_leakage_count": 0,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "selected_representative_count": 6016,
+  "split_integrity_pass": true,
+  "stage": "orbit_expansion_prune_split",
+  "status": "pass",
+  "target_range_max_rows": 27000,
+  "target_range_min_rows": 20000,
+  "variable_row_budget_active": true,
+  "whole_orbit_integrity_pass": true
+}

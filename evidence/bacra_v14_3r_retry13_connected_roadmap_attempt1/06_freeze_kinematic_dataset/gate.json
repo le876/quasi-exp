@@ -1,0 +1,22 @@
+{
+  "canonical_row_integrity_pass": true,
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "dataset_class": "wide_zero_centered_core_petal_kinematic_dataset",
+  "dataset_freeze_complete": true,
+  "dataset_row_count": 24021,
+  "deployment_authorized": false,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "far_seam_direct_crossing_claim": false,
+  "formal_authorized": false,
+  "minimum_row_count": 18000,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "freeze_kinematic_dataset",
+  "status": "pass",
+  "student_execution_authorized": true,
+  "target_range_complete": true,
+  "target_range_max_rows": 27000,
+  "target_range_min_rows": 20000,
+  "theta_sign_applied_to_storage": false,
+  "theta_storage_direct_beta_expansion_pass": true,
+  "wide_zero_centered_connected_dataset_claim": true
+}

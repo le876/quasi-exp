@@ -1,0 +1,11 @@
+{
+  "all_rows_zero_reachable": true,
+  "component_count": 1,
+  "edge_count": 24020,
+  "edge_length_max_mm": 9.999864283425588,
+  "edge_length_p95_mm": 9.888367893032113,
+  "raw_beta_gap_gt7_rate": 0.0,
+  "row_count": 24021,
+  "weighted_beta_gap_p95_deg": 0.26307087634041415,
+  "zero_component_row_count": 24021
+}

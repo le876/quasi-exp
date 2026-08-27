@@ -1,0 +1,14 @@
+{
+  "y_seam": {
+    "admitted_label_count": 10,
+    "complete": true,
+    "maximum_edge_mm": 4.997678315873849,
+    "target_count": 10
+  },
+  "z_seam": {
+    "admitted_label_count": 10,
+    "complete": true,
+    "maximum_edge_mm": 4.9887693932711015,
+    "target_count": 10
+  }
+}

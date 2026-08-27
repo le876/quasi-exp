@@ -1,0 +1,17 @@
+{
+  "axis_spoke_failure_does_not_invalidate_backbone": true,
+  "axis_spoke_label_count": 20,
+  "axis_spokes_pass": true,
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "connected_fill_authorized": true,
+  "core_nonzero_anchor_count": 19,
+  "core_radial_shell_count": 2,
+  "core_radius_mm": 19.777666286011772,
+  "core_row_count": 20,
+  "deployment_authorized": false,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "formal_authorized": false,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "core_axis_spokes",
+  "status": "pass"
+}

@@ -1,0 +1,17 @@
+{
+  "core_overlap_anchors_by_quadrant": {
+    "++": 12,
+    "+-": 12,
+    "-+": 12,
+    "--": 12
+  },
+  "remote_rows_by_quadrant": {
+    "++": 3896,
+    "+-": 3896,
+    "-+": 3896,
+    "--": 3896
+  },
+  "remote_serviced_angle_bins": 8,
+  "remote_start_radius_mm": 260.6499268339916,
+  "remote_uniform_coverage_status": "green"
+}

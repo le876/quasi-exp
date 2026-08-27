@@ -1,0 +1,23 @@
+{
+  "artifacts": [
+    {
+      "bytes": 921,
+      "path": "gate.json",
+      "sha256": "3b71d9a244778ebe14150841b1f349c968f8dfe737df6ef26fdb51047f6edf86"
+    },
+    {
+      "bytes": 8697401,
+      "path": "retry13_zero_rooted_connected_kinematic_dataset.parquet",
+      "sha256": "21dc70956ad36f80e9ed78a501d463b1271a4466c2903d8a594fdd5b3bdbf4e7"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "freeze_kinematic_dataset",
+  "upstream": [
+    {
+      "sha256": "ce7ff640b2fb3d0ecaf60987ed8f62af0566cc8e07cbfbfbd2ae1f870db8ca87",
+      "stage": "three_graph_audit"
+    }
+  ]
+}

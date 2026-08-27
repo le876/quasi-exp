@@ -1,0 +1,8 @@
+{
+  "artifacts": {
+    "global": "global.keras"
+  },
+  "chart_ids": [],
+  "representation_mode": "xyz_global",
+  "schema_version": 1
+}

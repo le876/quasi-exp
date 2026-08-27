@@ -1,0 +1,33 @@
+{
+  "artifacts": [
+    {
+      "bytes": 732,
+      "path": "gate.json",
+      "sha256": "256a9f7b783bff048b92b032ecc76a65fabdda0e95bb220e36065e8fe4f323e8"
+    },
+    {
+      "bytes": 82930,
+      "path": "trajectory_panel.parquet",
+      "sha256": "659bb027d44007badb8360d7efdb3bdfd13e33469174c9f5bc621b27e13e431a"
+    },
+    {
+      "bytes": 8224,
+      "path": "trajectory_report.parquet",
+      "sha256": "ae19631bca878c742eeedc17e2a8f130fe986cb1bf8c44ae1a3a14ffecd804f0"
+    },
+    {
+      "bytes": 448873,
+      "path": "trajectory_waypoints.parquet",
+      "sha256": "cbefcd3c31149e8c51167f5ec9d4fe1950e73b8838027ed1ba83f46fff9c2083"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "zero_to_target_trajectory_audit",
+  "upstream": [
+    {
+      "sha256": "67baa9f956b3a25d485519acfe4b286215a103a0051c54804d67693c01347f90",
+      "stage": "quotient_student"
+    }
+  ]
+}

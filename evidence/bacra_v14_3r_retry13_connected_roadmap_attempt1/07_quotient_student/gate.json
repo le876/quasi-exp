@@ -1,0 +1,19 @@
+{
+  "bounds_pass": true,
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "deployment_authorized": false,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "finite_pass": true,
+  "formal_authorized": false,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "quotient_student",
+  "status": "complete",
+  "student_failure_does_not_invalidate_dataset": true,
+  "student_training_complete": true,
+  "train_row_count": 4732,
+  "trajectory_execution_authorized": true,
+  "validation_dls2_fk_p95_mm": 0.003944435677290905,
+  "validation_dls2_success_rate": 1.0,
+  "validation_raw_fk_p95_mm": 23.688815503535714,
+  "validation_row_count": 564
+}

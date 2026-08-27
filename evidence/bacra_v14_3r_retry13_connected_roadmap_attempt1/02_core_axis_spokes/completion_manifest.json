@@ -1,0 +1,48 @@
+{
+  "artifacts": [
+    {
+      "bytes": 28301,
+      "path": "axis_spoke_labels.parquet",
+      "sha256": "9d76c3ccf7a499a260ee8ea86e0c30cb53f64cbe74cf636543056633b7a2d058"
+    },
+    {
+      "bytes": 12852,
+      "path": "axis_spoke_proposal_beta_provenance.parquet",
+      "sha256": "cdec86bb56470cf14fcb80df0ee5d8c64e1eecb729b3348faf5aa8d2103caef7"
+    },
+    {
+      "bytes": 280,
+      "path": "axis_spoke_report.json",
+      "sha256": "c18243ec38c441422dab341e15c56ab87ca2a8b1216e325fef4cc2925b0cd8b3"
+    },
+    {
+      "bytes": 12396,
+      "path": "axis_spoke_solver_attempts.parquet",
+      "sha256": "b13d8f12898f85a97a513e4ead45ebc860d9d4a5cfcd4607659c2c65b7509ae5"
+    },
+    {
+      "bytes": 1038439,
+      "path": "core_petal_edges.parquet",
+      "sha256": "85f55b0a2b39aac936cc2f367d39fd4e43b9d6d3740534c50191a28f462448b4"
+    },
+    {
+      "bytes": 2574167,
+      "path": "core_petal_representatives.parquet",
+      "sha256": "d95309fc4df9ac9a8ed636b8b3f4d66578cbc528a10c11106012dee34d063515"
+    },
+    {
+      "bytes": 663,
+      "path": "gate.json",
+      "sha256": "bb5c916390586e720a25a438515a4413967aa40705303ceeb4474b5ca93df90d"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "core_axis_spokes",
+  "upstream": [
+    {
+      "sha256": "e5be6684b8ef22f9d48ebc51e7ff1f20f7d528d8b1de18bb6dd30144857bd960",
+      "stage": "connected_backbone"
+    }
+  ]
+}

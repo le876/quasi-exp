@@ -1,0 +1,16 @@
+{
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "connected_fill_complete": true,
+  "deployment_authorized": false,
+  "exact_19999_target_removed": true,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "fill_required": false,
+  "formal_authorized": false,
+  "fundamental_row_count": 6016,
+  "new_label_count": 0,
+  "orbit_expansion_authorized": true,
+  "potential_expanded_row_count": 24021,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "connected_fill",
+  "status": "pass"
+}

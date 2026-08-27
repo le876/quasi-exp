@@ -1,0 +1,44 @@
+{
+  "compatibility_graph": {
+    "candidate_edge_count": 8285,
+    "compatible_edge_count": 8281,
+    "component_count": 2,
+    "component_sizes_descending": [
+      5996,
+      35
+    ],
+    "node_count": 6031,
+    "rejected_component_row_count": 35,
+    "zero_component_row_count": 5996
+  },
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "core_radius_mm": 19.777666286011772,
+  "deployment_authorized": false,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "fast_path_authorized": true,
+  "formal_authorized": false,
+  "potential_expanded_row_count_without_spokes": 23981,
+  "rejected_local_branch_row_count": 35,
+  "remote_serviced_angle_bins": 8,
+  "remote_start_radius_mm": 260.6499268339916,
+  "remote_uniform_coverage_status": "green",
+  "retry12_identity_pass": true,
+  "retry12_input_row_count": 6031,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "seed_edges_require_recertification": true,
+  "seed_lineage_audit": {
+    "different_symmetry_edge_count": 8,
+    "remapped_edge_count": 27,
+    "remapped_edge_length_max_mm": 24.31768396836136,
+    "remapped_edge_length_p95_mm": 19.749889961737107,
+    "remapped_raw_gap_p95_deg": 12.1276529636919,
+    "remapped_weighted_gap_p95_deg": 3.8883746165768085,
+    "same_symmetry_edge_count": 19,
+    "seed_count": 28,
+    "seed_lineage_edges_reusable_without_recertification": false
+  },
+  "source_integrity_pass": true,
+  "stage": "input_lineage_audit",
+  "status": "fast_path_available",
+  "zero_compatible_row_count": 5996
+}

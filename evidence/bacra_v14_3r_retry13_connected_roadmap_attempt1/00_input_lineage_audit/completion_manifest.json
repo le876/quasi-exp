@@ -1,0 +1,43 @@
+{
+  "artifacts": [
+    {
+      "bytes": 1607,
+      "path": "gate.json",
+      "sha256": "b98ac9ffe791506a0bf20b7ac87ba9fec9a6f5e3515bfff6662f0572702025e7"
+    },
+    {
+      "bytes": 5233,
+      "path": "graph_radius_sensitivity.parquet",
+      "sha256": "cd455f4773412466f687a3141c43d32e3d8437978ebeac82a20d61d8a53d1402"
+    },
+    {
+      "bytes": 317447,
+      "path": "local_compatibility_edges.parquet",
+      "sha256": "788083b864ef032ff7794a5e5f7dcbb233628322343deef50a5cba3dc7ccf7cd"
+    },
+    {
+      "bytes": 50698,
+      "path": "rejected_local_branch_components.parquet",
+      "sha256": "e616222186ae9982c96e47446aec448d78a947c7592f07e9bd694169b15dfebb"
+    },
+    {
+      "bytes": 11813,
+      "path": "remapped_seed_lineage_audit.parquet",
+      "sha256": "e16fc804f7977de6b419dd9cd1fff9bb6ed1326fe21512ee347464fcc953f503"
+    },
+    {
+      "bytes": 7809,
+      "path": "source_inventory.parquet",
+      "sha256": "54a9985080392b904d0e06aa5c813383c6632e08ab54ca74ef85eeed26ac2cbd"
+    },
+    {
+      "bytes": 2278139,
+      "path": "zero_compatible_fundamental_labels.parquet",
+      "sha256": "d5df1879d1d1b6210b1703f7ba9074bc903c6d4427b95bf71516d62c96e84b92"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "input_lineage_audit",
+  "upstream": []
+}

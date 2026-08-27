@@ -1,0 +1,33 @@
+{
+  "artifacts": [
+    {
+      "bytes": 761,
+      "path": "gate.json",
+      "sha256": "ae891dde2662689af367a7840b56a7443ba1e6ff9931a2a303aec130cf5892c1"
+    },
+    {
+      "bytes": 3807213,
+      "path": "student_supervision.parquet",
+      "sha256": "770d230af8039b1d18ea354c90cd140811327bd903eff43bf2e32a1cf92d140c"
+    },
+    {
+      "bytes": 5935,
+      "path": "training_history.parquet",
+      "sha256": "6604f7628092c5cfde4f6f27f49f604bfd093b2aaaeb5ae41d3b71938002e068"
+    },
+    {
+      "bytes": 153182,
+      "path": "validation_predictions.parquet",
+      "sha256": "4eb3c3ba4bec5dfb311b49d3ead610329708a6695c8c980bd331c05fb8430e0e"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "quotient_student",
+  "upstream": [
+    {
+      "sha256": "37ba369e24b393a1e5323f124f4fc15ea0a6cd29b081b7e159f5a8f696a6421b",
+      "stage": "freeze_kinematic_dataset"
+    }
+  ]
+}

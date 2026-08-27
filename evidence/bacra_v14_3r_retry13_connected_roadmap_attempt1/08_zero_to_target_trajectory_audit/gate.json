@@ -1,0 +1,17 @@
+{
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "corrected_beta_continuity_is_hard_gate": true,
+  "deployment_authorized": false,
+  "exact_seam_dls_coordinates_frozen": true,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "formal_authorized": false,
+  "pooled_dls2_corrected_step_gt7_rate": 0.0,
+  "pooled_dls2_fk_p95_mm": 0.0030263472778910335,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "zero_to_target_trajectory_audit",
+  "status": "pass",
+  "trajectory_count": 32,
+  "trajectory_gate_pass": true,
+  "trajectory_paths_follow_certified_parent_edges": true,
+  "trajectory_success_rate": 1.0
+}

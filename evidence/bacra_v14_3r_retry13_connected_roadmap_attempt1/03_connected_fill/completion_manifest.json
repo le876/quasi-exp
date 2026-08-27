@@ -1,0 +1,38 @@
+{
+  "artifacts": [
+    {
+      "bytes": 600,
+      "path": "connected_fill_new_labels.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 600,
+      "path": "connected_fill_solver_attempts.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 2574167,
+      "path": "connected_fundamental_atlas.parquet",
+      "sha256": "d95309fc4df9ac9a8ed636b8b3f4d66578cbc528a10c11106012dee34d063515"
+    },
+    {
+      "bytes": 1038439,
+      "path": "connected_fundamental_edges.parquet",
+      "sha256": "85f55b0a2b39aac936cc2f367d39fd4e43b9d6d3740534c50191a28f462448b4"
+    },
+    {
+      "bytes": 609,
+      "path": "gate.json",
+      "sha256": "4407086bba26b7b9882c5ff0284e982b935742e35cb157e861795462d69c8b18"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "connected_fill",
+  "upstream": [
+    {
+      "sha256": "54889c997124fb60c205c9480eff4f5a439a0a9e170ea64f12c44568d6f4a565",
+      "stage": "core_axis_spokes"
+    }
+  ]
+}

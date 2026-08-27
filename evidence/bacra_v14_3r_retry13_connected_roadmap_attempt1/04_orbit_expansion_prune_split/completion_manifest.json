@@ -1,0 +1,53 @@
+{
+  "artifacts": [
+    {
+      "bytes": 2743374,
+      "path": "expanded_certified_edges.parquet",
+      "sha256": "c4f2ee64f5042fbcbccff9f72d14ebcae5bc4029b6dc35e11c1c7b19e8c42fcc"
+    },
+    {
+      "bytes": 8692393,
+      "path": "expanded_kinematic_candidates.parquet",
+      "sha256": "b5e8791270b4c347e226fb1064f828ad5b0e8c2a76a13d511b47b166951ba679"
+    },
+    {
+      "bytes": 902,
+      "path": "gate.json",
+      "sha256": "0e9b813b65118de18b6d4c8138967c3c670ff9e568f5db706869b08c353ebd91"
+    },
+    {
+      "bytes": 2573343,
+      "path": "preprune_fundamental_representatives.parquet",
+      "sha256": "e39cabe752c392449ff3b7df5b9d3ea9a4eeba4d7251c15100714301bd81e11a"
+    },
+    {
+      "bytes": 1227,
+      "path": "pruned_leaf_orbits.parquet",
+      "sha256": "f9f689029808826c40fe2b14e41bda9c0921eb6d1a3ccbf5a40ae79ad6873dc0"
+    },
+    {
+      "bytes": 600,
+      "path": "rejected_orbits.parquet",
+      "sha256": "3c82f08bf97b2d52b49e43fe22906af4351fe0f88cbfb01458bf3388d4cad92c"
+    },
+    {
+      "bytes": 1038439,
+      "path": "selected_fundamental_certified_edges.parquet",
+      "sha256": "85f55b0a2b39aac936cc2f367d39fd4e43b9d6d3740534c50191a28f462448b4"
+    },
+    {
+      "bytes": 2584904,
+      "path": "selected_fundamental_representatives.parquet",
+      "sha256": "180eed18612aebf70b953102acc659cea24049aab433cb4468b08f1ddee6687e"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "orbit_expansion_prune_split",
+  "upstream": [
+    {
+      "sha256": "61e70c265e0d73ee5d0defd72cfee39914ed9d8b627f0d653fdc0ac0f8c2607a",
+      "stage": "connected_fill"
+    }
+  ]
+}

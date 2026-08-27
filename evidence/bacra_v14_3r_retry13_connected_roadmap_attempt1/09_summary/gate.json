@@ -1,0 +1,104 @@
+{
+  "artifact_completeness": true,
+  "certified_lineage": {
+    "pass": true,
+    "report": {
+      "all_rows_zero_reachable": true,
+      "component_count": 1,
+      "edge_count": 24020,
+      "edge_length_max_mm": 9.999864283425588,
+      "edge_length_p95_mm": 9.888367893032113,
+      "raw_beta_gap_gt7_rate": 0.0,
+      "row_count": 24021,
+      "weighted_beta_gap_p95_deg": 0.26307087634041415,
+      "zero_component_row_count": 24021
+    },
+    "status": "pass"
+  },
+  "config_sha256": "dd15e0d766d616846cccb5ddbf55b9a82c3b6c30e26f6b8f76b2a6c0e586eba4",
+  "connected_backbone": {
+    "bridge_count": 23,
+    "pass": true,
+    "status": "pass"
+  },
+  "connected_fill": {
+    "fill_required": false,
+    "new_labels": 0,
+    "status": "pass"
+  },
+  "continuous_workspace_authorization": false,
+  "core_axis_spokes": {
+    "labels": 20,
+    "pass": true,
+    "status": "pass"
+  },
+  "dataset": {
+    "class": "wide_zero_centered_core_petal_kinematic_dataset",
+    "complete": true,
+    "row_count": 24021,
+    "status": "pass",
+    "wide_claim": true
+  },
+  "deployment_authorization": false,
+  "deployment_authorized": false,
+  "experiment_id": "bacra_v14_3r_retry13_zero_rooted_connected_roadmap_core_petal_closure",
+  "far_seam_direct_crossing_claim": false,
+  "fast_path": {
+    "status": "fast_path_available",
+    "zero_compatible_rows": 5996
+  },
+  "formal_authorization": false,
+  "formal_authorized": false,
+  "full_workspace_authorization": false,
+  "geometric_coverage": {
+    "pass": true,
+    "report": {
+      "core_overlap_anchors_by_quadrant": {
+        "++": 12,
+        "+-": 12,
+        "-+": 12,
+        "--": 12
+      },
+      "remote_rows_by_quadrant": {
+        "++": 3896,
+        "+-": 3896,
+        "-+": 3896,
+        "--": 3896
+      },
+      "remote_serviced_angle_bins": 8,
+      "remote_start_radius_mm": 260.6499268339916,
+      "remote_uniform_coverage_status": "green"
+    }
+  },
+  "local_conflict": {
+    "diagnostic_only": true,
+    "edge_count": 2780,
+    "radius_mm": 5.0,
+    "raw_beta_gap_gt7_rate": 0.08776978417266187,
+    "weighted_beta_gap_p95_deg": 2.849291704830818
+  },
+  "operational_completion": true,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "summary",
+  "status": "complete",
+  "student": {
+    "dls2_fk_p95_mm": 0.003944435677290905,
+    "raw_fk_p95_mm": 23.688815503535714,
+    "status": "complete",
+    "training_complete": true
+  },
+  "symmetry_expansion": {
+    "status": "pass",
+    "whole_orbit_pass": true
+  },
+  "tension_executed": false,
+  "theta_storage": {
+    "direct_beta_expansion": true,
+    "theta_sign_applied": false
+  },
+  "trajectory": {
+    "count": 32,
+    "pass": true,
+    "status": "pass"
+  }
+}

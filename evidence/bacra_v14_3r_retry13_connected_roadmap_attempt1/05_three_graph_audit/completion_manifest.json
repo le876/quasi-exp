@@ -1,0 +1,48 @@
+{
+  "artifacts": [
+    {
+      "bytes": 2743374,
+      "path": "certified_lineage_edges.parquet",
+      "sha256": "c4f2ee64f5042fbcbccff9f72d14ebcae5bc4029b6dc35e11c1c7b19e8c42fcc"
+    },
+    {
+      "bytes": 314,
+      "path": "certified_lineage_report.json",
+      "sha256": "55a48f08221db25518cde924daff59982fe44507980ecc8d28e576a2d31e8226"
+    },
+    {
+      "bytes": 1522,
+      "path": "gate.json",
+      "sha256": "8ffcd4f9eb72313a03e5b05c8d520364f1f5900f7364d1dc737864ea6c366763"
+    },
+    {
+      "bytes": 4204,
+      "path": "geometric_coverage_radius_sensitivity.parquet",
+      "sha256": "0578c146340e9e29b8a4a4a960ea13374862256310aa45cedcb37e45aba2ba8e"
+    },
+    {
+      "bytes": 329,
+      "path": "geometric_coverage_report.json",
+      "sha256": "f229e6a299be4449f553389e15ae418bd38a828990904b7655474fefde2a910c"
+    },
+    {
+      "bytes": 62503,
+      "path": "local_conflict_edges.parquet",
+      "sha256": "4692e77ca9168897fc56a292ce916b333f27eeee2469e9996f3efc2465f3df5c"
+    },
+    {
+      "bytes": 170,
+      "path": "local_conflict_report.json",
+      "sha256": "bcd1b4a743cf7987d3cf4131ba4b7c28bd3e3a46f178f4b9ca4a0b9930684786"
+    }
+  ],
+  "schema_version": 1,
+  "scientific_source_fixed_point": "bc9e52d9701a262f38cd0009ecb08dfbdba6c14c",
+  "stage": "three_graph_audit",
+  "upstream": [
+    {
+      "sha256": "72c02afe69e0dee13df20ccd2a0f5c8188f39588cc4842220c80f23049373765",
+      "stage": "orbit_expansion_prune_split"
+    }
+  ]
+}

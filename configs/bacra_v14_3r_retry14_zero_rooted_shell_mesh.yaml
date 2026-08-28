@@ -1,0 +1,160 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry14_zero_rooted_shell_mesh_ring_coverage
+consultation_sha256: 7610d6b553d75b90fc1f281156113b9f8601ec474a32c1d9c50733da78adbc8c
+
+sources:
+  consultation_input: docs/27-pro提问-如何实质提升零点中心四象限数据集覆盖区域.md
+  governing_protocol: docs/protocols/31-BACRA-V14.3R-retry14-zero-rooted-shell-mesh执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry13_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry13_connected_roadmap_attempt1
+  retry13_scientific_source_fixed_point: bc9e52d9701a262f38cd0009ecb08dfbdba6c14c
+  retry13_binding_fixed_point: bad4a80d6ef7f5b73d180931dc63f03c3d76e26a
+  retry13_run_identity_sha256: 2b652afec114919e31449cfce8267838629b2a4ef61d9e8c1c2802564e761828
+  retry13_artifact_manifest:
+    path: 09_summary/artifact_manifest.json
+    sha256: 41e4d845b95a42687686788bf72abe10ed5919c5412382de1d2c2f17696b2153
+  retry13_completion_manifest:
+    path: 09_summary/completion_manifest.json
+    sha256: e7a003c682864ed297f57a377fcfac8bbb782bdb84a514353d8d299e46da75a0
+  retry13_summary_gate:
+    path: 09_summary/gate.json
+    sha256: a6248b61fc7d5c69718a00853d7321f56803d5276fa5b3caa85946175bbc008b
+  retry13_fundamental_representatives:
+    path: 04_orbit_expansion_prune_split/selected_fundamental_representatives.parquet
+    sha256: 180eed18612aebf70b953102acc659cea24049aab433cb4468b08f1ddee6687e
+  retry13_fundamental_edges:
+    path: 04_orbit_expansion_prune_split/selected_fundamental_certified_edges.parquet
+    sha256: 85f55b0a2b39aac936cc2f367d39fd4e43b9d6d3740534c50191a28f462448b4
+  retry12_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry12_symmetry_quotient_attempt3
+  retry12_target_registry:
+    path: 01_quotient_target_registry/quotient_target_registry.parquet
+    sha256: 348a420adc33d55cb3ddc8bd20818585c1bfebdd35f8900b9f74b70d1b5072c2
+  retry12_zero_anchor:
+    path: 00_symmetry_contract/zero_anchor.json
+    sha256: 83912de5acd900e55bfd4d1a0d46ecf582a75cff9a5ee4d902cc36bef1a260de
+  retry12_symmetry_group:
+    path: 00_symmetry_contract/symmetry_group_registry.json
+    sha256: 0d7f776792d82f6ba1dde0e8c0f57f0e5c3b1ab6ae2f4a827d602497f590a25d
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  seed: 20260894
+  maximum_concurrent_workers: 12
+  numerical_threads_per_worker: 1
+  launcher_deadline_hours: 24
+  expected_duration_hours: 8
+
+shell_domain:
+  axial_step_mm: 15.0
+  radial_step_mm: 15.0
+  target_arc_step_mm: 10.0
+  coarse_angle_bin_count: 8
+  coverage_ring_minimum_bins: 6
+  trajectory_ring_required_bins: 8
+  trajectory_support_maximum_mm: 15.0
+  allowed_angular_gap_bins: 1
+  one_cell_hole_minimum_orthogonal_neighbors: 3
+  proposal_nearest_neighbor_diagnostic_k: 2
+
+mesh:
+  maximum_solver_segment_mm: 5.0
+  solver_step_schedule_mm: [5.0, 2.5, 1.25]
+  maximum_parent_sources: 3
+  maximum_local_corridors: 3
+  legacy_snap_maximum_mm: 5.0
+  seam_snap_tolerance_m: 1.0e-9
+  advancing_front_initial_supervision_cap: 256
+  ring_closure_supervision_cap: 1024
+
+solver:
+  damping: 0.002
+  maximum_corrector_iterations: 400
+  fk_residual_maximum_mm: 8.0
+  gold_weighted_maximum_deg: 3.0
+  gold_raw_maximum_deg: 5.0
+  local_weighted_maximum_deg: 3.0
+  local_raw_maximum_deg: 7.0
+  reverse_weighted_maximum_deg: 1.0
+  branch_conflict_raw_minimum_deg: 5.0
+
+fill:
+  target_shell_coverage: 0.80
+  target_ring_fraction: 0.80
+  target_service_radius_mm: 20.0
+  maximum_batches: 8
+  maximum_targets_per_batch: 256
+  maximum_new_supervision_targets: 2000
+  low_gain_batches_to_plateau: 2
+  low_gain_shell_coverage_pp: 0.5
+  low_gain_ring_fraction_pp: 2.0
+
+ring:
+  angular_weighted_p95_maximum_deg: 3.0
+  angular_raw_threshold_deg: 7.0
+  angular_raw_gt_threshold_rate_maximum: 0.02
+  cycle_return_weighted_maximum_deg: 3.0
+  cycle_return_raw_maximum_deg: 5.0
+  green_minimum_complete_rings: 9
+  yellow_minimum_complete_rings: 4
+
+audit:
+  diagnostic_radii_mm: [5.0, 7.5, 10.0, 12.5, 15.0]
+  geometric_neighbor_radius_mm: 5.0
+  green_shell_coverage_minimum: 0.80
+  green_ring_fraction_minimum: 0.80
+  green_service_p95_maximum_mm: 20.0
+  yellow_shell_coverage_minimum: 0.60
+  yellow_ring_fraction_minimum: 0.60
+  yellow_service_p95_maximum_mm: 30.0
+
+dataset:
+  dataset_id: retry14_zero_rooted_certified_shell_mesh_kinematic_dataset_v1
+  domain_limited_dataset_id: retry14_domain_limited_zero_rooted_shell_mesh_dataset_v1
+  minimum_fundamental_supervision_representatives: 4500
+  minimum_expanded_rows: 18000
+  target_range_minimum_rows: 20000
+  target_range_maximum_rows: 30000
+  theta_width: 30
+  theta_storage: beta_to_theta_without_theta_sign_multiplication
+  kinematics_theta_sign_metadata: -1.0
+
+split:
+  hierarchy: quotient_macroblock_then_orbit_then_row
+  quotient_macroblock_size_mm: 40
+  train_fraction: 0.70
+  validation_fraction: 0.15
+  test_fraction: 0.15
+  trajectory_holdout_axial_levels: 3
+  trajectory_holdout_radial_levels_per_axial: 3
+
+student:
+  device: cpu
+  seed: 20260894
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  maximum_steps: 1500
+  validation_interval: 50
+  patience_intervals: 8
+  beta_loss_only: true
+  quality_weight:
+    Gold: 1.0
+    certified_silver: 0.5
+    ExactAnchor: 1.0
+
+trajectory:
+  maximum_waypoint_step_mm: 5.0
+  complete_circle_dls2_success_minimum: 0.90
+  fk_p95_maximum_mm: 10.0
+  corrected_beta_step_raw_threshold_deg: 7.0
+  corrected_beta_step_raw_gt_threshold_rate_maximum: 0.02
+
+claims:
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  tension_authorized: false

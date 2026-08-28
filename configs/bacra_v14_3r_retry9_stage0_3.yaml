@@ -4,7 +4,7 @@ consultation_sha256: d04899b777a2809d11187de6927a6e49aadaf132c1f35f9de46eae18d05
 
 sources:
   consultation_input: docs/22-pro提问-当前覆盖能力提升与最高信息增益实验设计.md
-  governing_protocol: docs/26-BACRA-V14.3R-retry9-coverage-first执行协议.md
+  governing_protocol: docs/protocols/26-BACRA-V14.3R-retry9-coverage-first执行协议.md
   robot_config: configs/robot_rods_only_standard_100k.yaml
 
 upstream:

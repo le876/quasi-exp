@@ -4,7 +4,7 @@ consultation_sha256: 0623da226ddb20b392a6392df538785d7a5e2f2cdafc8b4cff99635906c
 
 sources:
   consultation_input: docs/24-pro提问-50k数据集Gate失败后的探索性实验推进方案.md
-  governing_protocol: docs/28-BACRA-V14.3R-retry11-dual-track-zero-bridge执行协议.md
+  governing_protocol: docs/protocols/28-BACRA-V14.3R-retry11-dual-track-zero-bridge执行协议.md
   robot_config: configs/robot_rods_only_standard_100k.yaml
   robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
   tension_robot_config: configs/robot_rods_only_standard_100k_segmented_canonical.yaml

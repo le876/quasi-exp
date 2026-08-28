@@ -10,6 +10,7 @@ __pycache__/
 !.agents/skills/
 !.agents/skills/**
 .codex
+.playwright-cli/
 *.egg-info/
 .ipynb_checkpoints/
 .DS_Store

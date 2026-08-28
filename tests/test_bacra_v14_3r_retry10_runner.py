@@ -88,7 +88,7 @@ def test_launcher_forces_cpu_before_any_runner_process() -> None:
 
 def test_protocol_removes_unregistered_cell_size_and_full_workspace_name() -> None:
     protocol = (
-        ROOT / "docs/27-BACRA-V14.3R-retry10-frontier-expanded-atlas执行协议.md"
+        ROOT / "docs/protocols/27-BACRA-V14.3R-retry10-frontier-expanded-atlas执行协议.md"
     ).read_text(encoding="utf-8")
     assert "禁止 hardcode `10 mm`" in protocol
     assert "full_workspace_dataset" in protocol

@@ -6,9 +6,9 @@ output_root: runs/bacra_v14_2r_retry8_partial_relay_retry4
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
-  reviewed_plan: docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
-  performance_protocol: docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
-  scientific_closure_protocol: docs/23-BACRA-V14.2R科学Gate与closure修复协议.md
+  reviewed_plan: docs/protocols/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+  performance_protocol: docs/protocols/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
+  scientific_closure_protocol: docs/protocols/23-BACRA-V14.2R科学Gate与closure修复协议.md
   retry7_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4
   retry7_meso_variant: gauge_K1_R8
   legacy_config: configs/bacra_v14_2_section_first_atlas.yaml

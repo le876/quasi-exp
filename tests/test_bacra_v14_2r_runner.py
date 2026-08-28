@@ -702,14 +702,14 @@ def test_v14_2r_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
     config = module.load_config(ROOT / "configs/bacra_v14_2r_stitched_atlas.yaml")
     paths = module._source_paths(config, Path("/mnt/ML_projects/quasi_exp"))
 
-    assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
+    assert paths["plan"] == ROOT / "docs/protocols/20-BACRA-V14.2R修订执行协议.md"
     assert paths["plan"].is_file()
     assert paths["performance_protocol"] == (
-        ROOT / "docs/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md"
+        ROOT / "docs/protocols/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md"
     )
     assert paths["performance_protocol"].is_file()
     assert paths["scientific_closure_protocol"] == (
-        ROOT / "docs/23-BACRA-V14.2R科学Gate与closure修复协议.md"
+        ROOT / "docs/protocols/23-BACRA-V14.2R科学Gate与closure修复协议.md"
     )
     assert paths["scientific_closure_protocol"].is_file()
 

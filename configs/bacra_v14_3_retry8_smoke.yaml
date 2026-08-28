@@ -6,7 +6,7 @@ output_root: runs/bacra_v14_3_retry8_balanced_smoke_retry5
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
-  reviewed_plan: docs/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
+  reviewed_plan: docs/protocols/25-BACRA-V14.2R-retry8-partial-relay执行协议.md
   v14_2r_root: runs/bacra_v14_2r_retry8_partial_relay_retry4
   v14_2r_config: configs/bacra_v14_2r_retry8_partial_relay.yaml
   retry7_root: runs/bacra_v14_2r_stitched_atlas_retry7_abstention_retry4

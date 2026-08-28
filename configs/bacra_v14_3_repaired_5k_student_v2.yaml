@@ -4,7 +4,7 @@ output_root: runs/bacra_v14_3_repaired_5k_student_optimized_v2
 robot_config: configs/robot_rods_only_standard_100k.yaml
 
 sources:
-  reviewed_plan: docs/20-BACRA-V14.2R修订执行协议.md
+  reviewed_plan: docs/protocols/20-BACRA-V14.2R修订执行协议.md
   v14_2r_root: runs/bacra_v14_2r_stitched_atlas_retry6
   v14_2r_config: configs/bacra_v14_2r_stitched_atlas_retry6.yaml
   v14_2_legacy_config: configs/bacra_v14_2_section_first_atlas.yaml

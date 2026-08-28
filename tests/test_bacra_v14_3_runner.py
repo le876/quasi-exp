@@ -141,7 +141,7 @@ def test_v14_3_tracked_plan_resolves_inside_the_fixed_point_worktree() -> None:
     )
     paths = module._sources(config, Path("/mnt/ML_projects/quasi_exp"))
 
-    assert paths["plan"] == ROOT / "docs/20-BACRA-V14.2R修订执行协议.md"
+    assert paths["plan"] == ROOT / "docs/protocols/20-BACRA-V14.2R修订执行协议.md"
     assert paths["plan"].is_file()
 
 

@@ -12,7 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts/analysis/run_bacra_v14_3r_retry11.py"
 CONFIG = ROOT / "configs/bacra_v14_3r_retry11_dual_track_zero_bridge.yaml"
-PROTOCOL = ROOT / "docs/28-BACRA-V14.3R-retry11-dual-track-zero-bridge执行协议.md"
+PROTOCOL = ROOT / "docs/protocols/28-BACRA-V14.3R-retry11-dual-track-zero-bridge执行协议.md"
 LAUNCHER = ROOT / "scripts/pipelines/run_bacra_v14_3r_retry11.sh"
 
 

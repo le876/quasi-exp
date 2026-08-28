@@ -4,7 +4,7 @@ consultation_sha256: 0ece2f5e78179bd9fbaee41a6da3aa26e35cbb7972d5a38df2ae47c95a9
 
 sources:
   consultation_input: docs/23-pro提问-当前实验总结与后续实验推进计划.md
-  governing_protocol: docs/27-BACRA-V14.3R-retry10-frontier-expanded-atlas执行协议.md
+  governing_protocol: docs/protocols/27-BACRA-V14.3R-retry10-frontier-expanded-atlas执行协议.md
   robot_config: configs/robot_rods_only_standard_100k.yaml
   tension_robot_config: configs/robot_rods_only_standard_100k_segmented_canonical.yaml
 

@@ -1,0 +1,124 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry15_omega600_domain_discovery
+
+sources:
+  governing_protocol: docs/protocols/32-BACRA-V14.3R-retry15-Omega600-canonical-graph执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry14_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry14_zero_rooted_shell_mesh_attempt4
+  retry14_run_identity:
+    path: run_identity.json
+    sha256: c0f3562d1fb680c940e90625cf875936eb6f01f017765a9233225b869c7e6f42
+  retry14_summary_gate:
+    path: 11_summary/gate.json
+    sha256: 612283dc600e7f40af50a8c0fd3438f85e56a74fb61e50787208a61379fbf86b
+  retry14_artifact_manifest:
+    path: 11_summary/artifact_manifest.json
+    sha256: 03a39e0d8f67802ca20ce08cfdf1fcb951f9beca7f1dadf7bc3783fb3ba73d93
+  retry14_completion_manifest:
+    path: 11_summary/completion_manifest.json
+    sha256: fa5208404dfb3d202828656ad8e9453a93e114ea72982953721f9fecd95034ca
+  retry12_zero_anchor:
+    absolute_path: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry12_symmetry_quotient_attempt3/00_symmetry_contract/zero_anchor.json
+    sha256: 83912de5acd900e55bfd4d1a0d46ecf582a75cff9a5ee4d902cc36bef1a260de
+  retry12_symmetry_group:
+    absolute_path: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry12_symmetry_quotient_attempt3/00_symmetry_contract/symmetry_group_registry.json
+    sha256: 0d7f776792d82f6ba1dde0e8c0f57f0e5c3b1ab6ae2f4a827d602497f590a25d
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  numerical_threads_per_worker: 1
+  expected_duration_hours: 12
+  deadline_hours: 24
+
+omega600:
+  zero_x_m: 1.2154980000000004
+  minimum_x_m: 0.6154980000000004
+  axial_length_mm: 600.0
+
+proposal:
+  pool_a_seed: 20260895
+  pool_b_seed: 20260896
+  initial_power: 18
+  comparison_power: 17
+  maximum_power: 19
+  profile_change_p95_expand_mm: 10.0
+  fk_chunk_rows: 65536
+  beta_label_eligible: false
+  beta_seed_eligible: false
+  beta_warm_start_eligible: false
+  beta_branch_hint_eligible: false
+
+domain:
+  axial_step_mm: 10.0
+  radial_step_mm: 10.0
+  full_sector_count: 16
+  isolated_single_voxel_closing: true
+  radial_margin_mm: 10.0
+  slope_limit_mm: 20.0
+  ceiling_step_mm: 5.0
+  shrink_profiles_mm: [0.0, 10.0, 20.0, 30.0]
+  pilot_target_budget: 2500
+  expanded_target_budget: 5000
+  maximum_circle_step_mm: 5.0
+  required_circle_count: 9
+  required_large_circle_radius_mm: 100.0
+  minimum_circle_level_separation_mm: 100.0
+
+teacher_seed_banks:
+  full:
+    bank_id: retry15_teacher_seed_bank_full_v1
+    size: 32768
+    seed: 20260897
+  y_seam:
+    bank_id: retry15_teacher_seed_bank_y_seam_v1
+    size: 4096
+    seed: 20260898
+  z_seam:
+    bank_id: retry15_teacher_seed_bank_z_seam_v1
+    size: 4096
+    seed: 20260899
+
+candidate_solver:
+  nearest_seed_count: 64
+  saturation_target_count: 1000
+  preflight_target_count_per_profile: 2000
+  saturation_budgets: [8, 16, 32]
+  default_preflight_seed_budget: 16
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  damping: 0.002
+  maximum_dls_iterations: 100
+  maximum_least_squares_evaluations: 200
+  maximum_step_rms_deg: 3.0
+  residual_maximum_mm: 3.0
+  cluster_threshold_deg: 0.5
+  difficult_slsqp_seed_count: 4
+
+graph_teacher:
+  k_values: [8, 12]
+  pairwise_lambdas: [0.0, 0.5, 1.0, 2.0, 4.0]
+  maximum_edge_spacing_factor: 1.75
+  robust_pairwise_cap_deg: 7.0
+  maximum_icm_sweeps: 30
+
+preflight_gates:
+  core_shrink_mm: 20.0
+  core_acceptance_minimum: 0.95
+  expanded_acceptance_minimum: 0.90
+  accepted_lcc_minimum: 0.95
+  edge_weighted_p95_maximum_deg: 3.0
+  edge_raw_gt7_rate_maximum: 0.02
+  required_complete_circle_count: 9
+
+claims:
+  diagnostic_only: true
+  claim_bearing_run_authorized: false
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  tension_authorized: false

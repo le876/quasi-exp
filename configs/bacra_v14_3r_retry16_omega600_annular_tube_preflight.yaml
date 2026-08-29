@@ -1,0 +1,129 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry16_omega600_annular_tube_preflight
+
+sources:
+  governing_protocol: docs/protocols/33-BACRA-V14.3R-retry16-Omega600-annular-tube执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry15_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry15_omega600_domain_discovery_attempt1
+  retry15_run_identity:
+    path: run_identity.json
+    sha256: 0ea60636a106e5a7611ed7fffc2b7df468ec265666e5cca2014574e8c0b0e135
+  retry15_summary_gate:
+    path: 05_summary/gate.json
+    sha256: 72227c2833ba5905150bd99ebb91ebeda3e7fa53a7efd1c7674d502eb582b8a5
+  retry15_artifact_manifest:
+    path: 05_summary/artifact_manifest.json
+    sha256: b4635348e090805b7231a8ac9f2614e23949715015d7ce3945650c5c09251fe9
+  retry15_completion_manifest:
+    path: 05_summary/completion_manifest.json
+    sha256: ec0ffb826c82517651a1f357355a04d34bd3e761de2f31f352114587b75b6a65
+  proposal_pool_a_xyz:
+    path: 01_workspace_probe/proposal_pool_A_xyz.parquet
+    sha256: 227d97dfe867683d4a18a019cdb1fd63da2e01b787c59604e8486727da177f1f
+  proposal_pool_b_xyz:
+    path: 01_workspace_probe/proposal_pool_B_xyz.parquet
+    sha256: 15b387033470d022ef23e27192d9f7c127a327db534c552f161879ab0e08f11f
+  final_voxel_support:
+    path: 01_workspace_probe/empirical_voxel_support.parquet
+    sha256: 79db6b73a845cfc741ba4bbdac1e4de3a279b25c363f3008a810ac2dbf9fc49e
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  numerical_threads_per_worker: 1
+  expected_duration_hours: 12
+  deadline_hours: 24
+
+omega600:
+  zero_x_m: 1.2154980000000004
+  minimum_x_m: 0.6154980000000004
+  axial_length_mm: 600.0
+
+annular_domain:
+  comparison_power: 18
+  final_power: 19
+  axial_step_mm: 10.0
+  radial_step_mm: 10.0
+  full_sector_count: 16
+  inner_margin_mm: 10.0
+  outer_margin_mm: 10.0
+  slope_limit_mm: 20.0
+  minimum_thickness_mm: 20.0
+  root_link_maximum_mm: 25.0
+  pilot_target_budget: 2500
+  expanded_target_budget: 5000
+  target_spacing_minimum_mm: 20.0
+  target_spacing_maximum_mm: 40.0
+  maximum_circle_step_mm: 10.0
+  required_circle_count: 9
+  required_large_circle_radius_mm: 100.0
+  minimum_circle_level_separation_mm: 100.0
+
+teacher_seed_banks:
+  full:
+    bank_id: retry16_teacher_seed_bank_full_v1
+    size: 32768
+    seed: 20260901
+  y_seam:
+    bank_id: retry16_teacher_seed_bank_y_seam_v1
+    size: 4096
+    seed: 20260902
+  z_seam:
+    bank_id: retry16_teacher_seed_bank_z_seam_v1
+    size: 4096
+    seed: 20260903
+
+candidate_solver:
+  nearest_seed_count: 64
+  saturation_target_count: 1000
+  preflight_target_count: 2000
+  saturation_budgets: [8, 16, 32]
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  damping: 0.002
+  maximum_dls_iterations: 100
+  maximum_least_squares_evaluations: 200
+  maximum_step_rms_deg: 3.0
+  residual_maximum_mm: 3.0
+  cluster_threshold_deg: 0.5
+  difficult_slsqp_seed_count: 4
+  saturation_t1_difference_p95_maximum_deg: 0.5
+  saturation_acceptance_gain_maximum: 0.01
+
+graph_teacher:
+  k_values: [8, 12]
+  pairwise_lambdas: [0.0, 0.5, 1.0, 2.0, 4.0]
+  maximum_edge_spacing_factor: 1.75
+  robust_pairwise_cap_deg: 7.0
+  maximum_icm_sweeps: 30
+
+preflight_gates:
+  green:
+    stable_core_acceptance_minimum: 0.90
+    expanded_acceptance_minimum: 0.80
+    accepted_lcc_minimum: 0.95
+    edge_weighted_p95_maximum_deg: 3.0
+    edge_raw_gt7_rate_maximum: 0.02
+    complete_circle_count_minimum: 9
+    root_connector_complete_required: true
+  yellow:
+    stable_core_acceptance_minimum: 0.80
+    expanded_acceptance_minimum: 0.60
+    accepted_lcc_minimum: 0.90
+    edge_weighted_p95_maximum_deg: 5.0
+    edge_raw_gt7_rate_maximum: 0.05
+    complete_large_circle_count_minimum: 1
+    root_connector_complete_required: true
+
+claims:
+  diagnostic_only: true
+  claim_bearing_run_authorized: false
+  downstream_scale_authorized: false
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  tension_authorized: false

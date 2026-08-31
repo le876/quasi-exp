@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "kind": "read_only_advisor_report_browser_validation",
+  "observed_at_utc": "2026-08-30T03:55:01Z",
+  "report": "retry17_attempt1_final_advisor_dataset_report.html",
+  "served_locally_only": true,
+  "desktop": {
+    "viewport_css_px": [1440, 1000],
+    "horizontal_overflow": false,
+    "scene_ready": ["true", "true", "true"],
+    "legend_count": 3,
+    "checked_interactions": [
+      "full G4-expanded dataset layer toggle: displayed 12,000 / full 54,427 deterministic sample",
+      "held-out trajectory selector: retry17_ellipse_2 (720 sealed waypoints)",
+      "trajectory oblique camera control",
+      "dark theme toggle"
+    ]
+  },
+  "narrow": {
+    "viewport_css_px": [390, 844],
+    "horizontal_overflow": false,
+    "canvas_count": 3,
+    "dark_theme_retained": true
+  },
+  "visual_observation": {
+    "coverage_initial": "rotatable real XYZ point cloud rendered with beta=0 robot centreline and zero-end-effector marker in one physical-coordinate scene",
+    "trajectory_reset": "reset main-plane scene visibly rendered Target dashed path, Teacher orange outer stroke, raw Student blue path, and DLS2 green path without coordinate displacement"
+  },
+  "console": {
+    "errors": 0,
+    "warnings": 0
+  },
+  "boundary": "Browser validation checks report presentation only; it is not a scientific Gate, sealed-artifact re-computation, deployment result, or closed-loop claim."
+}

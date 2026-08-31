@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "kind": "read_only_advisor_report_browser_validation",
+  "observed_at_utc": "2026-08-31T09:28:18Z",
+  "report": {
+    "path": "retry18_attempt3_advisor_dataset_report.html",
+    "sha256": "8fc971520920611cf311c786efa76f4af323d275342c3948152ed093d14a5a08"
+  },
+  "served_locally_only": true,
+  "desktop": {
+    "viewport_css_px": [1280, 720],
+    "horizontal_overflow": false,
+    "scene_ready": {
+      "coverage": true,
+      "seam_causal": true,
+      "trajectory": true
+    },
+    "checked_interactions": [
+      "coverage 3D reset",
+      "trajectory selector: retry17_rounded_rectangle_1",
+      "Target, Teacher, Raw Student, and DLS2 independently present",
+      "dark-theme toggle"
+    ],
+    "console": {"errors": 0, "warnings": 0},
+    "visual_observation": "The real-XYZ coverage scene visibly contains the full-G4/quotient cloud, zero-tip profile, beta=0 robot centreline and end-effector. The selected rounded-rectangle tracking scene visibly renders Target dashed, Teacher orange, Raw Student blue, and DLS2 green in the same physical frame."
+  },
+  "narrow": {
+    "viewport_css_px": [390, 844],
+    "horizontal_overflow": false,
+    "scene_ready": {
+      "coverage": true,
+      "seam_causal": true,
+      "trajectory": true
+    },
+    "table_behavior": "Wide metric and provenance tables retain their own horizontal scroll containers; the document viewport itself does not overflow.",
+    "console": {"errors": 0, "warnings": 0}
+  },
+  "boundary": "Browser validation checks report presentation and interactions only. It is not a scientific Gate, sealed-artifact recomputation, deployment result, or closed-loop-control claim."
+}

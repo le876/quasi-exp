@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "derived_diagnostic_report",
+  "report": "retry18_attempt3_advisor_dataset_report.html",
+  "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+  "binding_fixed_point": "a028916517419d43ffcc1a0d8d0439536dac6bf2",
+  "summary_gate": {
+    "path": "../13_summary/gate.json",
+    "sha256": "c1b2656b9dc8b003fbb567277ba3eecc7002f8665756bffbfdd33378f8c36262"
+  },
+  "input_manifest": {
+    "path": "input_manifest.json",
+    "sha256": "b620a0a1917ef90db72a411d5ef86812db38d3f28494f315b036478a53bf2855"
+  },
+  "evidence_map": {
+    "path": "evidence_map.json",
+    "sha256": "d982aa36ffdfed6e75267d8d884c4a0b5b0d793ba0b38aa6e5d4fa27fa9fc723"
+  },
+  "html": {
+    "path": "retry18_attempt3_advisor_dataset_report.html",
+    "bytes": 2949102,
+    "sha256": "8fc971520920611cf311c786efa76f4af323d275342c3948152ed093d14a5a08"
+  },
+  "claim_boundary": {
+    "diagnostic_only": true,
+    "formal_authorized": false,
+    "deployment_authorized": false,
+    "full_workspace_authorized": false,
+    "continuous_workspace_authorized": false,
+    "dls2_is_real_closed_loop": false
+  },
+  "browser_validation": {
+    "path": "browser_validation.json",
+    "sha256": "2e1e7417e095d24584fbc564a18c808489907f3d8cdfba81ad51987242d83fd8"
+  }
+}

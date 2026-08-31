@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "kind": "derived_diagnostic_report_inputs",
+  "observed_at_utc": "2026-08-31T09:29:30.396353+00:00",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry18_zero_tip_parity_smooth_attempt3",
+  "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+  "binding_fixed_point": "a028916517419d43ffcc1a0d8d0439536dac6bf2",
+  "inputs": [
+    {
+      "kind": "sealed_attempt_input",
+      "path": "run_identity.json",
+      "bytes": 333,
+      "sha256": "cec69b9307a879a76df5a7ed98302c310e2fdff813182da0ea43ec14f0658eef"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "13_summary/gate.json",
+      "bytes": 1599,
+      "sha256": "c1b2656b9dc8b003fbb567277ba3eecc7002f8665756bffbfdd33378f8c36262"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "13_summary/artifact_manifest.json",
+      "bytes": 18049,
+      "sha256": "91c4948cf448db9388321f9a9aff1388ff97ffb569dc5dfb8096194799c13ede"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "13_summary/completion_manifest.json",
+      "bytes": 761,
+      "sha256": "e00e04bace3b8216e7cd64887fc29ad7f1c5c2dcea1ba4633eaa65f07dec31a9"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "10_dataset_model_lock/dataset_model_lock.json",
+      "bytes": 1482,
+      "sha256": "ef0f50854addca78af9adb07457f72caf327e39250f9941a0fc8bfe25f9826c2"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "09_student_selection/selected_model.json",
+      "bytes": 237,
+      "sha256": "44ae3e309646691cdbccfca60dd564e8f18291aabdd9e5c44cead3fe38e95cc2"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "01_zero_tip_discovery/common_axis_aware_support.parquet",
+      "bytes": 89180,
+      "sha256": "972466ceac8e257d5c9f164f1a77572c93320af5a88d0fdd9fb4e7ada1cd7b82"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "02_profile_preflight/frozen_tip_profile.parquet",
+      "bytes": 5295,
+      "sha256": "c8423128825e8a533df84844a5379cf3b085ba4e18fb2011e02c67a138ec1cc3"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "05_unified_dataset/unified_full_g4_dataset.parquet",
+      "bytes": 11910674,
+      "sha256": "39305ca8843421a069b0be97c2fd4afbade0210286e83c7fef09fc99223947f0"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "05_unified_dataset/unified_quotient_supervision.parquet",
+      "bytes": 6159609,
+      "sha256": "eedc7e6e90ee8a4091f842bd6bc528259cabbfc6bbf9711ad79461dd80641e56"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "05_unified_dataset/parity_label_compatibility.parquet",
+      "bytes": 9510,
+      "sha256": "18cb55bea56655fe1eb1d2917e400fbe196a8f6b78724b3dade4e50fcd3be3ba"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "06_seam_causal_audit/teacher_seam_sweeps.parquet",
+      "bytes": 400804,
+      "sha256": "475dba959024298ef5468a7594564d440d84c8637f2052ca59c4df6b95a0c235"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "06_seam_causal_audit/student_teacher_seam_causal_panel.parquet",
+      "bytes": 561281,
+      "sha256": "e2c6b349a7a7abe961ce9bb39c21b48d01e66ceff21dabe338b90dbeb084daab"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "07_parity_regularity/teacher_odd_vanish_exponent.parquet",
+      "bytes": 8050,
+      "sha256": "b173f1e5b51a82c36be5f3ac2c628a262e662d555a496af980cf13613ccd22d3"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "00_objective_baseline/rectangle_raw_spike_report.parquet",
+      "bytes": 5966,
+      "sha256": "84624bfabe2d53fc803e4b47c4d6170f6062fb3dada7f6a198d8af9952f58a93"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "08_student_ablation/models/S1_seam_root/training_history.parquet",
+      "bytes": 5937,
+      "sha256": "b056264fdeead5885d905626a97330b2f4b49bf5c9634e17d2e9dc72d54c47f3"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "09_student_selection/model_selection_metrics.parquet",
+      "bytes": 11274,
+      "sha256": "61685a2eeaa521b1687d7293cb9ecb20bf9fe0df18a9105d2cdddb12ae9a6ee2"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "11_heldout_trajectories/maximal_shape_registry.parquet",
+      "bytes": 17535,
+      "sha256": "246fb3146b51bcd2cd8bb63c0df2d2aebe538c59cfe609d41ad3c075e76c8d6a"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "12_trajectory_evaluation/trajectory_report.parquet",
+      "bytes": 21247,
+      "sha256": "9012e4383752d1d283449f965a5c264f3d94b5e810f955071d6a4c3cdc548b2c"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "12_trajectory_evaluation/trajectory_waypoint_evaluation.parquet",
+      "bytes": 1058113,
+      "sha256": "1e11fa4cd63aeeef9a4f945a1c57268b32a9fbea8684a102c284520a614a692c"
+    }
+  ],
+  "source_inputs": [
+    -1.0,
+    {
+      "kind": "authoritative_fk",
+      "path": "src/quasi_exp/model/kinematics.py",
+      "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    },
+    {
+      "kind": "authoritative_beta_mapping",
+      "path": "src/quasi_exp/model/sampling.py",
+      "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+      "bytes": 18277,
+      "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f"
+    },
+    {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/lengths.csv",
+      "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+      "bytes": 285,
+      "sha256": "ad0769805a22389f445e2ba7f2d7a712478c78654c8c75ab8603eda002b30f9c"
+    },
+    {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/end_effector.csv",
+      "source_fixed_point": "6b3ba0636c1a620cafaf425c7c235754dea379f6",
+      "bytes": 47,
+      "sha256": "736b1a23e66e6d3bc36cb30a040155b0c2c3b95da3c8bfb06f21033f6368c4dd"
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "kind": "read_only_diagnostic_report_inputs",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry17_omega600_annular_continuity_attempt1",
+  "observed_at_utc": "2026-08-30T03:53:14.664919+00:00",
+  "scientific_source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+  "inputs": [
+    {
+      "kind": "sealed_attempt_input",
+      "path": "run_identity.json",
+      "bytes": 338,
+      "sha256": "e700db8ac2a1545a6ee45c3609af4c5883b0f2e58df4b32ce5bfa4e5574b5bfd"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "12_summary/gate.json",
+      "bytes": 1967,
+      "sha256": "2447731230d73af39503dd35edc5316538bacee55c16c18524169dbfb4cacc7c"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "12_summary/artifact_manifest.json",
+      "bytes": 15789,
+      "sha256": "4c38b6e5024212c2930d4c3163a463b1e8c76edaa20853d68736e87f5551983f"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "00_retry16_baseline/baseline_metrics.json",
+      "bytes": 682,
+      "sha256": "5d0d098f1b87cf8da242523e8840905aa8edb4c145bd875eb016a7a0e1bc0fb0"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "05_phase_a_adaptive_fill/selected_metrics.json",
+      "bytes": 628,
+      "sha256": "ed97ff8d529ff9684a637f3cf0caf8e38d5d5538def9615973236636f6e35778"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "07_phase_b_continuation/phase_b_metrics.json",
+      "bytes": 647,
+      "sha256": "1752f1f2b54056395277a8afcd392e331b75bbe70f835e5506ce71f824666583"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "07_phase_b_continuation/gate.json",
+      "bytes": 1470,
+      "sha256": "b6d5c6b2cdaa6effcfa98605ea098129c4a8f2709055bb3f8247f03b3f26a446"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "07_phase_b_continuation/final_quotient_supervision.parquet",
+      "bytes": 3028703,
+      "sha256": "0fff9bc4f3f8f32880789e053eebcd5d2c11f0e07c1d53b8a6e84570a13c331a"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "07_phase_b_continuation/final_full_g4_dataset.parquet",
+      "bytes": 11492661,
+      "sha256": "9bd8f990ed8053db1c6aaaa08f495ed2b9ee0313d2003ed96e60457081987994"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "06_phase_a_freeze_audit/phase_a_frozen_quotient_labels.parquet",
+      "bytes": 620163,
+      "sha256": "8a7ae6c0241e7d34ee5ec74ca54d904b32ee90a60e2771168957c21c00c1d584"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "08_student/gate.json",
+      "bytes": 815,
+      "sha256": "c88b3d75fbe54e278991dd45fb88d87539e1f1afcbfbf7dc5f02bdbebb3b2086"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "08_student/training_history.parquet",
+      "bytes": 5935,
+      "sha256": "54cf35abe36cf611d1cbf44dafd0852cc03a39f15df20e9e4c11da73c51ac90c"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "08_student/models/global.keras",
+      "bytes": 136110,
+      "sha256": "eb8fb47ca8475981f3b801d83aef5d53ecfe4bb002f97e9cf453c4503b7a6014"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "08_student/models/model_manifest.json",
+      "bytes": 135,
+      "sha256": "88a349fa7ee0af3a520ec84d5aa885a768d771c27135bb246442175fb23128c4"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "09_dataset_student_lock/dataset_student_lock.json",
+      "bytes": 804,
+      "sha256": "9bc466d09ad7fc13083e5bb529ca68ae6ecdb77029d08d90f69ddc0c05bd1eb9"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "10_heldout_shapes/gate.json",
+      "bytes": 843,
+      "sha256": "4cdcc1d0d93dc2c7500c3b4f4fbb545528a9ec7cf65704a548922c7497cf430f"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "10_heldout_shapes/heldout_shape_registry.parquet",
+      "bytes": 17662,
+      "sha256": "77ea57c71b5f2af49e30c2d36748cde0e631fdd08e05cfc0f2395fae6f83033f"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "11_trajectory_evaluation/gate.json",
+      "bytes": 933,
+      "sha256": "b72ba6b4fef5d3ec14a27a167dc5eda9db10e8f7faa4dd6725eaddf822a880b5"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "11_trajectory_evaluation/trajectory_report.parquet",
+      "bytes": 29658,
+      "sha256": "45d532f78dddcc83b68e65b2022682d9f8d76c49cb830bc8226ccb1ab105938b"
+    },
+    {
+      "kind": "sealed_attempt_input",
+      "path": "11_trajectory_evaluation/trajectory_waypoint_evaluation.parquet",
+      "bytes": 1277392,
+      "sha256": "6709fbb31de9fcf5ba36f008d83e48baf2c591e9f68cfb203eb40e20d9700f59"
+    },
+    {
+      "kind": "authoritative_config",
+      "path": "configs/bacra_v14_3r_retry17_omega600_annular_continuity.yaml",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 5189,
+      "sha256": "aaee25f558d3112922c83210ca2ce39dda4bc72defbdcc30f2f919f9b3622aa7"
+    },
+    {
+      "kind": "authoritative_fk",
+      "path": "src/quasi_exp/model/kinematics.py",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    },
+    {
+      "kind": "authoritative_beta_mapping",
+      "path": "src/quasi_exp/model/sampling.py",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 18277,
+      "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f"
+    },
+    {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/lengths.csv",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 285,
+      "sha256": "ad0769805a22389f445e2ba7f2d7a712478c78654c8c75ab8603eda002b30f9c"
+    },
+    {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/end_effector.csv",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 47,
+      "sha256": "736b1a23e66e6d3bc36cb30a040155b0c2c3b95da3c8bfb06f21033f6368c4dd"
+    }
+  ],
+  "sealed_input_verification": {
+    "summary_artifact_entries": 85,
+    "summary_sha256_mismatches": [],
+    "completion_manifest_count": 14,
+    "completion_sha256_mismatches": []
+  }
+}

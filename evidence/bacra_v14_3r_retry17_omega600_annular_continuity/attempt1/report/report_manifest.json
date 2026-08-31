@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "diagnostic_report_delivery",
+  "html": {
+    "path": "retry17_attempt1_final_advisor_dataset_report.html",
+    "bytes": 1615805,
+    "sha256": "f4f9cf1ba89377c7ca7505dc37b64bc1dca88fbb2f21b757a829ac37c843d289"
+  },
+  "generator": {
+    "path": "build_retry17_final_report.py",
+    "bytes": 1930,
+    "sha256": "b3963d12b53bbcb0a8577e76e1c4bb1b852997c83608681286065188a585a5a7"
+  },
+  "input_manifest": {
+    "path": "input_manifest.json",
+    "sha256": "e9759b891ae8be385eaa260b5f652b053c98c48bb3ebb06db3bd2b492d807bcb"
+  },
+  "evidence_map": {
+    "path": "evidence_map.json",
+    "sha256": "83b103c777e5b60471a844342d422f67985d8ab39fac048585e6605b2e1fb41f"
+  },
+  "browser_validation": {
+    "path": "browser_validation.json",
+    "sha256": "73ac7c49952e4560f74a2ed8f591c712255bd571cd5b7ed4ed5afcc60acaaa98"
+  },
+  "pdf_generated": false,
+  "claim_boundary": "diagnostic-only; not a scientific Gate or deployment claim"
+}

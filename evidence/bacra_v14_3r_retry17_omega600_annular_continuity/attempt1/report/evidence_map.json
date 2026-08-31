@@ -1,0 +1,68 @@
+{
+  "report_kind": "derived_diagnostic_visualization",
+  "attempt": "bacra_v14_3r_retry17_omega600_annular_continuity",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry17_omega600_annular_continuity_attempt1",
+  "scientific_source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+  "binding_fixed_point": "9631d41109836d1293821955bb5b1f6d8729c668",
+  "claim_boundary": {
+    "diagnostic_only": true,
+    "formal_authorized": false,
+    "deployment_authorized": false,
+    "full_workspace_authorized": false,
+    "continuous_workspace_authorized": false,
+    "dls2_is_real_closed_loop": false
+  },
+  "coverage": {
+    "quotient_full_rows": 13707,
+    "quotient_display_rows": 7200,
+    "g4_full_rows": 54427,
+    "g4_display_rows": 12000,
+    "sampling": "deterministic sorted-target_id stratified display sample by lineage; statistics retain full sealed denominators"
+  },
+  "evidence_gap": {
+    "summary_gate_final_quotient_row_count": 13713,
+    "sealed_parquet_row_count": 13707,
+    "report_denominator": "sealed final_quotient_supervision.parquet; no sealed artifact was altered"
+  },
+  "fk_replay": {
+    "kind": "derived_diagnostic_fk_replay",
+    "method": "sealed beta -> beta_to_theta -> forward_kinematics; no training, solving, or repair",
+    "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+    "theta_sign": -1.0,
+    "kinematics": {
+      "kind": "authoritative_fk",
+      "path": "src/quasi_exp/model/kinematics.py",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    },
+    "beta_mapping": {
+      "kind": "authoritative_beta_mapping",
+      "path": "src/quasi_exp/model/sampling.py",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 18277,
+      "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f"
+    },
+    "lengths": {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/lengths.csv",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 285,
+      "sha256": "ad0769805a22389f445e2ba7f2d7a712478c78654c8c75ab8603eda002b30f9c"
+    },
+    "end_effector": {
+      "kind": "robot_geometry",
+      "path": "data/robot/generated/end_effector.csv",
+      "source_fixed_point": "b2e3226cb31108809ed490e65582f565d5dbcab5",
+      "bytes": 47,
+      "sha256": "736b1a23e66e6d3bc36cb30a040155b0c2c3b95da3c8bfb06f21033f6368c4dd"
+    }
+  },
+  "trajectory_count": 9,
+  "trajectory_visualization": {
+    "overview": "all nine held-out target paths in one rotatable physical-coordinate scene",
+    "individual": "Target, Teacher FK replay, raw Student FK replay, and DLS2 FK replay",
+    "camera": "per-trajectory PCA principal-plane default plus oblique 3D view; no coordinate displacement"
+  },
+  "input_manifest": "input_manifest.json"
+}

@@ -316,10 +316,22 @@ def _effective_seed_budget(seed_budget: int, *, smoke: bool) -> int:
     return value
 
 
-def _solve_candidates(config: Mapping[str, Any], targets: pd.DataFrame, stage: Path, *, seed_budget: int, smoke: bool) -> pd.DataFrame:
+def _solve_candidates(
+    config: Mapping[str, Any],
+    targets: pd.DataFrame,
+    stage: Path,
+    *,
+    seed_budget: int,
+    smoke: bool,
+    maximum_workers: int | None = None,
+    work_namespace: str | None = None,
+) -> pd.DataFrame:
     if targets.empty: return pd.DataFrame()
-    work = stage / "_work" / f"k{seed_budget}"; work.mkdir(parents=True, exist_ok=True)
-    worker_count = min(int(config["runtime"]["maximum_concurrent_workers"]), len(targets)); shards = [frame for frame in np.array_split(targets, worker_count) if len(frame)]
+    work = stage / "_work" / (work_namespace or f"k{seed_budget}"); work.mkdir(parents=True, exist_ok=True)
+    configured_workers = int(config["runtime"]["maximum_concurrent_workers"])
+    worker_limit = configured_workers if maximum_workers is None else min(configured_workers, int(maximum_workers))
+    if worker_limit < 1: raise ValueError("candidate worker limit must be positive")
+    worker_count = min(worker_limit, len(targets)); shards = [frame for frame in np.array_split(targets, worker_count) if len(frame)]
     processes = []
     for index, frame in enumerate(shards):
         target_path = work / f"targets_{index:03d}.parquet"; output_path = work / f"candidates_{index:03d}.parquet"; _write_parquet(frame, target_path)

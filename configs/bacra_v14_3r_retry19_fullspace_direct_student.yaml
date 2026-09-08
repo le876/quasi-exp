@@ -1,0 +1,157 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry19_fullspace_direct_student
+
+sources:
+  governing_protocol: docs/protocols/36-BACRA-V14.3R-retry19-Full-Space-Direct-Student执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry18_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry18_zero_tip_parity_smooth_attempt3
+  retry16_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry16_omega600_annular_tube_preflight_attempt3
+  retry18_run_identity: {root: retry18, path: run_identity.json, sha256: cec69b9307a879a76df5a7ed98302c310e2fdff813182da0ea43ec14f0658eef}
+  retry18_full_g4_dataset: {root: retry18, path: 05_unified_dataset/unified_full_g4_dataset.parquet, sha256: 39305ca8843421a069b0be97c2fd4afbade0210286e83c7fef09fc99223947f0}
+  retry18_quotient_supervision: {root: retry18, path: 05_unified_dataset/unified_quotient_supervision.parquet, sha256: eedc7e6e90ee8a4091f842bd6bc528259cabbfc6bbf9711ad79461dd80641e56}
+  retry18_s1_model: {root: retry18, path: 08_student_ablation/models/S1_seam_root/global.keras, sha256: 659d7e9f0d7e57a6156dea8db4c5954eafc0c38b2463fa0f68d68cea08a52748}
+  retry18_selection_metrics: {root: retry18, path: 09_student_selection/model_selection_metrics.parquet, sha256: 61685a2eeaa521b1687d7293cb9ecb20bf9fe0df18a9105d2cdddb12ae9a6ee2}
+  retry18_dataset_model_lock: {root: retry18, path: 10_dataset_model_lock/dataset_model_lock.json, sha256: ef0f50854addca78af9adb07457f72caf327e39250f9941a0fc8bfe25f9826c2}
+  retry18_heldout_waypoints: {root: retry18, path: 11_heldout_trajectories/heldout_waypoints.parquet, sha256: fbeaf702836b64f7cebbc94ab68f390bf34bd137aa5c3ae05ee0e85671334bc2}
+  retry18_trajectory_evaluation: {root: retry18, path: 12_trajectory_evaluation/trajectory_waypoint_evaluation.parquet, sha256: 1e11fa4cd63aeeef9a4f945a1c57268b32a9fbea8684a102c284520a614a692c}
+  retry18_summary_gate: {root: retry18, path: 13_summary/gate.json, sha256: c1b2656b9dc8b003fbb567277ba3eecc7002f8665756bffbfdd33378f8c36262}
+  retry18_artifact_manifest: {root: retry18, path: 13_summary/artifact_manifest.json, sha256: 91c4948cf448db9388321f9a9aff1388ff97ffb569dc5dfb8096194799c13ede}
+  retry18_completion_manifest: {root: retry18, path: 13_summary/completion_manifest.json, sha256: e00e04bace3b8216e7cd64887fc29ad7f1c5c2dcea1ba4633eaa65f07dec31a9}
+  full_seed_bank: {root: retry16, path: 03_teacher_seed_banks/full_seed_bank_with_xyz.parquet, sha256: db41666d24a27b3799b223e9122b6375b8fdff533f9ed89e3cc7f1626ac79d42}
+  y_seed_bank: {root: retry16, path: 03_teacher_seed_banks/y_seam_seed_bank_with_xyz.parquet, sha256: 0972ce361fb6fc9d6ad1dd19d1fce176bec3e214d4d1f36bc2cccad1790d6f62}
+  z_seed_bank: {root: retry16, path: 03_teacher_seed_banks/z_seam_seed_bank_with_xyz.parquet, sha256: 8ff157f9c419b356a218231cdd86900c65f27c96b405e73a2a50d5a6ae7c40be}
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  trajectory_candidate_workers: 12
+  numerical_threads_per_worker: 1
+  expected_duration_hours: 24
+  deadline_hours: 96
+
+workspace:
+  zero_x_m: 1.2154980000000004
+  primary_u_maximum_mm: 200.0
+  audit_u_maximum_mm: 220.0
+  fine_cell_mm: 5.0
+  coarse_cell_mm: 10.0
+  fine_root_radius_mm: 40.0
+  global_proposal_power: 19
+  shell_proposal_power: 16
+  pool_a_seeds: [20260940, 20260942, 20260944]
+  pool_b_seeds: [20260941, 20260943, 20260945]
+  zero_biased_radii_deg: [0.5, 1.5, 3.0, 5.0]
+  medium_bend_radii_deg: [3.0, 5.0, 8.0, 12.0]
+  primary_target_cap: 30000
+  audit_target_cap: 512
+  pilot_target_count: 5000
+  immutable_batch_size: 1000
+  service_radius_mm: 10.0
+  root_registration_mm: 5.0
+  path_query_count: 1000
+  path_query_seed: 20260954
+
+candidate_solver:
+  nearest_seed_count: 64
+  ordinary_seed_budget: 16
+  difficult_seed_budget: 32
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  damping: 0.002
+  maximum_dls_iterations: 100
+  maximum_least_squares_evaluations: 200
+  maximum_step_rms_deg: 3.0
+  residual_maximum_mm: 3.0
+  cluster_threshold_deg: 0.5
+  difficult_slsqp_seed_count: 4
+
+graph_teacher:
+  k: 16
+  pairwise_lambdas: [4.0]
+  selected_pairwise_lambda: 4.0
+  sigma_mm: 10.0
+  huber_delta_deg: 7.0
+  maximum_icm_sweeps: 12
+  soft_anchor_bonus: 0.25
+  teacher_root_beta_gap_maximum_deg: 3.0
+
+coverage_gate:
+  volume_coverage_minimum: 0.90
+  fine_5mm_coverage_minimum: 0.85
+  coarse_10mm_coverage_minimum: 0.90
+  service_distance_p95_maximum_mm: 10.0
+  maximum_hole_fraction: 0.02
+  axial_bin_mm: 10.0
+  minimum_axial_slice_coverage: 0.80
+  path_success_minimum: 0.95
+  stretch_p95_maximum: 2.0
+  edge_weighted_p95_maximum_deg: 3.0
+  edge_raw_gt7_rate_maximum: 0.02
+
+overlap_gate:
+  u_minimum_mm: 180.0
+  u_maximum_mm: 220.0
+  weighted_gap_p95_maximum_deg: 3.0
+  weighted_gap_gt7_rate_maximum: 0.02
+
+split:
+  macroblock_mm: 40.0
+  seed: 20260950
+
+student:
+  primary_seed: 20260925
+  robustness_seeds: [20260926, 20260927]
+  hidden_units: [128, 128, 64]
+  capacity_hidden_units: [192, 192, 96]
+  learning_rate: 0.001
+  maximum_steps: 500
+  validation_interval: 25
+  patience_intervals: 5
+  batch_size: 1024
+  axial_scale_mm: 600.0
+  radial_scale_quantile: 0.99
+  radial_scale_safety_factor: 1.05
+  signed_power_alphas: [1.0, 0.5]
+  signed_power_epsilon_mm: 3.0
+  edge_lambda: 1.0
+  edge_minimum_distance_mm: 5.0
+  edge_registry_cap: 65536
+  jacobian_lambda: 0.3
+  q0_reproduction_relative_tolerance: 0.02
+  representation_spike_reduction_minimum: 0.50
+  incremental_spike_reduction_minimum: 0.25
+  old_rectangle_fk_p95_maximum_mm: 10.0
+  old_rectangle_fk_maximum_mm: 15.0
+  old_rectangle_path_excess_maximum_mm: 3.0
+  new_rectangle_raw_spike_maximum_mm: 3.0
+  raw_green_trajectory_minimum: 12
+  raw_step_gt7_rate_maximum: 0.02
+
+trajectories:
+  seed: 20260955
+  waypoint_count: 120
+  support_maximum_mm: 20.0
+  inventory:
+    old_rounded_rectangles: 3
+    seam_between_rectangles: 3
+    exact_seam_waypoint_rectangles: 3
+    slanted_ellipse: 1
+    star: 1
+    spiral_3d: 1
+    zero_to_boundary: 3
+  dls2_success_minimum: 0.95
+  dls2_fk_p95_maximum_mm: 10.0
+
+claims:
+  diagnostic_only: true
+  exploratory_e2e_authorized: true
+  claim_bearing_run_authorized: false
+  downstream_scale_authorized: false
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  tension_authorized: false

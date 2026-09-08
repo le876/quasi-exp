@@ -1,0 +1,202 @@
+{
+  "report_schema_version": 1,
+  "experiment_id": "bacra_retry20_continuous_target_preflight",
+  "attempt_root": "runs/bacra_retry20_preflight_attempt2",
+  "scientific_source_fixed_point": "33b9e8740120b424276bb4b655b26ee043e9fcd0",
+  "binding_fixed_point": "38b9a0b59d6fb5bd322d96cbd69f7e493fdb6b66",
+  "code_snapshot_sha": "c18d7ee858e2f643913410f77005425a2b56c38f",
+  "report_kind": "candidate_geometry_diagnostic",
+  "generated_at_utc": "2026-09-08T07:50:48.825160+00:00",
+  "input_sha256": [
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/atomic_objective_schedule.json",
+      "sha256": "22e648d91fdc9f0d4457bec06e2305ee199d4ddc7f9bc48dfab4cc045e9fcff4"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/baseline_axial_slices.parquet",
+      "sha256": "8f7fad6790b19874e56ae9c52959cbf8e2c99b3826dbc7dacf652c459f39c6eb"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/baseline_served_cells.parquet",
+      "sha256": "6b748d24f97febbf731cf6f4fa3fb41b303a1048021d285ed9f90cf704c88f80"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/budget_lower_bound.json",
+      "sha256": "4b4aa7d35affd97e1256d9b839fe41d275ee7f6a96c0c560b74808499575a8d7"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/candidate_replacement_registry.parquet",
+      "sha256": "54d0f2372c85ad62fb34c6de83fd62c60ef360dca0342ba00bf8befb69766f85"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/coarse_center_denominator.parquet",
+      "sha256": "f1bd56b59d94ae45e3fbb9178c0c99f13382fc990a49dbe696c8ed0e304681c8"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/denominator_size.json",
+      "sha256": "fcba7ec8d2ea49b7d05f7db8d149e1ef985c94fac6d2a29f920db586aa209014"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/evaluation_panel_registry.parquet",
+      "sha256": "1ac779dcc3757ef378cae75573828abcd9183bac6aeec718d7e84125031776c2"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/gate.json",
+      "sha256": "0b02fead2f163e8aeb002f2dc0ab6e194d8f97236b4935340ae3c1bff3020cfe"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/geometry_audit.json",
+      "sha256": "264cc999ef0c9f68c6df0c8beb668bb38c9dbe56dfd627c89c796ab547374430"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/objective_contract.json",
+      "sha256": "ebbd7744e7b374c541084d5562fdf2a91d268525e4e2ffdc73e5f98fa62b964d"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/planned_replacement_registry.parquet",
+      "sha256": "4b1d48cb871d3998a4cf1a5eeb93a07db8ccb4a4e2681f8d868a1c192adf8468"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/prospective_axial_slices.parquet",
+      "sha256": "35940a3b7785788003e16506397e527f4ed6a92e3027c6df8579e34aa35db49e"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/prospective_primary_targets.parquet",
+      "sha256": "b1bfb50ac89ffae06de5e320447a4489d755c9eb3eeb8c3aaf0873e12a32361f"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/prospective_served_cells.parquet",
+      "sha256": "efdf1e988225eea4863d53a7cc986b709de0ddadd2013c09bb829d9129425e0f"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/relocation_eligibility.parquet",
+      "sha256": "dbf2844c7f2f0c51fbd5238e3d370620acf0afd05d80dfc9442e8dccb6311a73"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/required_cell_registry.parquet",
+      "sha256": "18c10da64633a858b888d8c11de5044548d2cf6a6ff072cd0a7c2425c76d9431"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/required_volume_units.parquet",
+      "sha256": "e3fd375f6e1f3b436f8a3051e72b7640329094f660f681197a21680dace46a8e"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/00_objective_feasibility/reusable_evidence.json",
+      "sha256": "00d1652d95d80271567cfdd446a45c57eb17bad79e4edcc3d7ba86541d41ab57"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/completion_manifest.json",
+      "sha256": "d93a080d020cf199794dc4ebf5475f490af8978a6eafd21f46962d07ea803e13"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/progress.json",
+      "sha256": "fa9766ede189b59eaebbced46bfb1f4326401a176de6bc36e9981d1e91991474"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/run_identity.json",
+      "sha256": "959d5cab32baa73b874f54aa65548083e1ce4d6ab8dc67f6066f6fdc46f1840a"
+    },
+    {
+      "path": "runs/bacra_retry20_preflight_attempt2/summary.json",
+      "sha256": "a2a867c53e3fab971e1fd295a4032ee0e0220d4b66831626b1a4085ad5c338f3"
+    }
+  ],
+  "output_sha256": [
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/retry20_preflight_attempt2_geometry_report.html",
+      "sha256": "e8c10faf559394e74c4458de807fda0710fba7ccb608dd1f250128eb9e4a3743"
+    },
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/generate_report.py",
+      "sha256": "a7458623da8e0674c40826e3bc22f534036b22571fe5ef679c998a45ab4d452e"
+    },
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/browser_3d_initial.png",
+      "sha256": "53b1c4a0706f4bf8fd848b0e90d6f25966472cd6279d86fb67c7819ba050b8f5"
+    },
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/browser_desktop_dark.png",
+      "sha256": "049fe70aa984540c768f7d1b6fdda5404a520e88c61de51d9517fcf886f906cf"
+    },
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/browser_desktop_light.png",
+      "sha256": "7c9605cd8c3e2088043899a6376b1f5c9158e4193bd3af94a66e606bcf1636d2"
+    },
+    {
+      "path": "runs/diagnostics/retry20_preflight_attempt2_report/browser_narrow_dark.png",
+      "sha256": "9dcb5ddf72c2855697e9b38ea9b7bfb1ab759d176678be06cd67199063655a31"
+    }
+  ],
+  "robot_zero_pose_diagnostic": {
+    "robot_config": "configs/robot_rods_only_standard_100k.yaml",
+    "robot_config_sha256": "21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc",
+    "lengths_csv_sha256": "ad0769805a22389f445e2ba7f2d7a712478c78654c8c75ab8603eda002b30f9c",
+    "end_effector_csv_sha256": "736b1a23e66e6d3bc36cb30a040155b0c2c3b95da3c8bfb06f21033f6368c4dd"
+  },
+  "recomputed_coverage_delta": {
+    "required_cells": 88168,
+    "baseline_served": 86830,
+    "prospective_served": 72497,
+    "lost_probes": 14467,
+    "gained_probes": 134,
+    "lost_volume_mm3": 14433750.0,
+    "gained_volume_mm3": 116500.0,
+    "required_volume_mm3": 87104000.0,
+    "lost_at_10mm_tolerance": 14451,
+    "lost_distance_quantiles_mm": [
+      8.291561975888355,
+      10.000000000000009,
+      10.000000000000009,
+      10.000000000000009,
+      10.000000000000009,
+      10.000000000000009
+    ]
+  },
+  "claim_boundary": "Explains only the sealed retry20 deterministic prospective geometry layout. It is not a formal scientific pass, supervision dataset, Teacher/Student/training/tracking evaluation, solver result, deployment authorization, or proof that every continuous layout is infeasible.",
+  "evidence_gaps": {
+    "teacher": "not_evaluated; protocol stopped before IK",
+    "student": "not_evaluated; no training launched",
+    "tracking": "not_evaluated; no solver or trajectory outputs",
+    "largest_circle_and_pressure_trajectories": "not_applicable; preflight terminated before any solver"
+  },
+  "attempt2_consistency": {
+    "launcher": "success rc=0; 2026-09-08 15:36:18-15:36:42 Asia/Shanghai",
+    "runner_elapsed_seconds": 22.8031405,
+    "output_hashes": "22 matched",
+    "shared_six_file_schema_validator": "valid",
+    "byte_identical_to_attempt1": [
+      "candidate_replacement_registry.parquet",
+      "planned_replacement_registry.parquet",
+      "prospective_primary_targets.parquet",
+      "prospective_served_cells.parquet",
+      "geometry_audit.json"
+    ],
+    "evaluation_panel_registry": "after column-name alignment, row order, all values, and dtypes equal"
+  },
+  "browser_validation_details": {
+    "desktop_1440x960": {
+      "horizontal_overflow": false,
+      "canvas_pixels": [
+        1116,
+        520
+      ],
+      "base_axes": "+X/+Y/+Z, each 150 mm from O=(0,0,0) mm",
+      "initial_3d_screenshot": "browser_3d_initial.png"
+    },
+    "narrow_390x844": {
+      "horizontal_overflow": false,
+      "canvas_css_pixels": [
+        332,
+        380
+      ]
+    },
+    "interactions": [
+      "primary/prospective switch",
+      "pointer rotation",
+      "reset",
+      "dark mode"
+    ],
+    "console": "0 errors, 0 warnings"
+  },
+  "browser_validation": "passed"
+}

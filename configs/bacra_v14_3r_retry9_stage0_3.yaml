@@ -1,0 +1,112 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry9_coverage_first_stage0_3
+consultation_sha256: d04899b777a2809d11187de6927a6e49aadaf132c1f35f9de46eae18d05c143e
+
+sources:
+  consultation_input: docs/22-pro提问-当前覆盖能力提升与最高信息增益实验设计.md
+  governing_protocol: docs/protocols/26-BACRA-V14.3R-retry9-coverage-first执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+
+upstream:
+  root: runs/bacra_v14_3_retry8_repaired_5k_retry5
+  scientific_source_fixed_point: 73b28039ca0013693c0cc321a4ec006e63fefc26
+  config_sha256: b761ca262e18a4a170c12ec09d061f309f10d3bdf3a3423b73a47af2d8bf0484
+  runtime_sha256: 83ce7d8efc457a42c75feb5f54effc34b0033756ff0315f6fb0c8ba49c77b10d
+  completion_manifest:
+    path: 09_summary/completion_manifest.json
+    sha256: 8cc438d75010b4d6cfbe21c9201f97ceea7bd98db96402da9c866880c096b4d9
+  artifact_manifest:
+    path: 09_summary/artifact_manifest.json
+    sha256: 71641a4a7a3e9d3b3179e9d95397938b10de2d09d88ef25d8fd9269c5a35153b
+  qualified_chart_executions:
+    path: 03_stitched_atlas/qualified_chart_audit_executions.parquet
+    sha256: 0af92c4173577bc233f3f2187b6ffb3fc1a33956bbe5dbd77035acf9be879107
+  qualified_charts:
+    path: 03_stitched_atlas/qualified_charts.parquet
+    sha256: 2ddc636ee80f04afbf7fdeaa8041d6c8ae8a39c128250e5bb0d27a02689b79f1
+  chart_schedules: 03_stitched_atlas/qualified_chart_audit_schedules.parquet
+  chart_labels: 03_stitched_atlas/alternative_chart_labels.parquet
+  task_nodes: 01_pilot_registry/pilot_task_nodes.parquet
+  task_edges: 01_pilot_registry/pilot_task_edges.parquet
+
+beta_coordinate_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+historical_rescore:
+  score_max: 1.0
+  edge_scale_deg: 2.0
+  root_path_scale_deg: 3.0
+  cycle_scale_deg: 3.0
+  multipath_scale_deg: 3.0
+  repeat_scale_deg: 1.0
+  persistent_failure_rate_max: 0.001
+  catastrophic_jump_deg: 5.0
+  catastrophic_jump_rate_max: 0.01
+  residual_p95_max_mm: 5.0
+  residual_p99_max_mm: 10.0
+
+overlap:
+  minimum_nodes: 8
+  minimum_fraction: 0.002
+  minimum_spread_mm: 20.0
+  label_weighted_p95_max_deg: 2.0
+  transition_weighted_p95_max_deg: 2.0
+  cycle_weighted_p95_max_deg: 3.0
+  repeat_weighted_p95_max_deg: 1.0
+  catastrophic_jump_deg: 5.0
+  catastrophic_jump_rate_max: 0.01
+  persistent_failure_rate_max: 0.001
+  residual_p95_max_mm: 5.0
+  residual_p99_max_mm: 10.0
+
+fresh_audit:
+  maximum_transition_edges_per_pair: 64
+  high_gap_transition_edges_per_pair: 32
+  maximum_cycles_per_pair: 16
+  maximum_cycle_length: 16
+  repeats: 2
+  repeat_perturbation_rad: 1.0e-8
+  logical_shard_count: 48
+  maximum_concurrent_workers: 12
+  assignment_strategy: cost_balanced_lpt
+  progress_every_schedules: 8
+  retry_tiers:
+    - {tier_id: R0, maximum_step_mm: 5.0, maximum_iterations: 100, solver_chain: [predictor, bounded_ls]}
+    - {tier_id: R1, maximum_step_mm: 2.5, maximum_iterations: 200, solver_chain: [weighted_dls, bounded_ls]}
+    - {tier_id: R2, maximum_step_mm: 1.25, maximum_iterations: 400, solver_chain: [weighted_dls, bounded_ls, slsqp]}
+
+exploratory_atlas:
+  abstention_hops: 0
+  sensitivity_abstention_hops: 1
+  fk_p95_max_mm: 5.0
+  fk_p99_max_mm: 10.0
+  individual_fk_max_mm: 10.0
+  green_minimum_unique_rows: 3000
+  yellow_minimum_unique_rows: 1000
+  denominator_task_nodes: 25000
+
+split:
+  block_sizes_mm: [40, 30, 20]
+  seed: 20260881
+  fractions: [0.70, 0.15, 0.15]
+  minimum_train_blocks: 3
+  minimum_validation_blocks: 1
+  minimum_test_blocks: 1
+  minimum_rows_per_split: 100
+
+student:
+  device: cpu
+  seed: 20260881
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  max_steps: 300
+  validation_interval: 20
+  patience_intervals: 6
+  beta_loss_only: true
+  raw_fk_p95_max_mm: 30.0
+  dls_two_step_fk_p95_max_mm: 15.0
+
+claims:
+  student_ready_only: true
+  formal_authorized: false
+  deployment_authorized: false
+  frontier_relay_authorized_by_student_quality: false

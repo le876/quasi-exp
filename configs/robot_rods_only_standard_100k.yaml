@@ -1,0 +1,80 @@
+robot:
+  k: 3
+  D: 10
+  kD: 30
+
+kinematics:
+  theta_sign: -1.0
+
+paths:
+  lengths_csv: data/robot/generated/lengths.csv
+  holes_csv: data/robot/generated/holes.csv
+  disks_csv: data/robot/generated/disks.csv
+  material_csv: data/robot/generated/material_rods_only.csv
+  end_effector_csv: data/robot/generated/end_effector.csv
+
+physics:
+  g: 9.81
+
+friction:
+  mu_shaft: 0.15
+  r_shaft_m: 0.004
+  mu_cable: 0.10
+
+tension:
+  bounds_n: [0.0, 2000.0]
+
+cables:
+  end_disk_by_j:
+    "1": 10
+    "2": 10
+    "3": 20
+    "4": 20
+    "5": 30
+    "6": 30
+    "7": 30
+    "8": 30
+    "9": 20
+    "10": 20
+    "11": 10
+    "12": 10
+
+sampling:
+  strategy: standard_sweep
+  beta_ranges_rad:
+    beta1: [-0.08726646259971647, 0.08726646259971647]
+    beta2: [-0.08726646259971647, 0.08726646259971647]
+    beta3: [-0.17453292519943295, 0.17453292519943295]
+    beta4: [-0.17453292519943295, 0.17453292519943295]
+    beta5: [-0.2617993877991494, 0.2617993877991494]
+    beta6: [-0.2617993877991494, 0.2617993877991494]
+  rng_seed: 20260409
+  standard_sweep:
+    axis_order: [beta1, beta2, beta3, beta4, beta5, beta6]
+    step_policy: per_axis_exact
+    sequence_order: center_out
+    max_retries_per_candidate: 5
+
+pso:
+  n_particles: 24
+  iters: 40
+  inertia: 0.72
+  c1: 1.49
+  c2: 1.49
+  w_resid: 1000000.0
+  lambda_max: 5000.0
+  max_tension_power: 4.0
+  w_tension_mean: 2000.0
+  w_tension_soft_cap: 1200000.0
+  tension_soft_cap_ratio: 0.90
+  early_stop_mean_rnorm2: 1.0e-8
+  rng_seed: 20260409
+
+dataset:
+  mode: forward
+  rms_rnorm_threshold: 6.0e-2
+  shard_rows: 2000
+  out_dir: data/standard_beta_sweep_100k
+
+parallel:
+  workers: 16

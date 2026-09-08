@@ -1,0 +1,6 @@
+extends: bacra_v12_12_1_multiresolution_teacher_retry.yaml
+
+output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_12_independent_gold_set_geometry_holdout_retry3_smoke

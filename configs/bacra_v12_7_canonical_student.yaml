@@ -1,0 +1,32 @@
+extends: bacra_v12_5_composable_lift.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.7-canonical-student
+schema_version: 1
+claim_scope: simulation_public_validation_canonical_student_diagnostic
+deployment_claim_gate_pass: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_7_canonical_student
+
+canonical_student:
+  source_root: runs/branch_aware_canonical_region_atlas_v12_5_composable_lift_pilot_retry5
+  public_dataset: 06_dataset/D3_full/public_dataset.parquet
+  baseline_metrics: 07_student/student_metrics_per_seed.parquet
+  expected_public_dataset_sha256: df162f15b4e57296213576ca680c9ca5d84b0d659a70534ec9f17c90f49f448a
+  expected_baseline_metrics_sha256: 5802e056f8a7c7744f94ece9c3c0e4193decc786b396a967921814e80f3eb1af
+  beta_loss_scale_deg: 1.0
+  lambda_fk_candidates: [0.0, 0.1, 1.0]
+  pilot_seed: 20260743
+  formal_seeds: [20260737, 20260738, 20260739, 20260740, 20260741]
+  fk_p95_max_mm: 5.0
+  fk_max_mm: 10.0
+  beta_rms_p95_max_deg: 1.5
+  joint_abs_p95_max_deg: 2.0
+  required_seed_passes: 4
+  baseline_median_beta_rms_p95_deg: 3.01642071452341
+  median_beta_improvement_min: 0.40
+
+student:
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  batch_size: 256
+  max_epochs: 300
+  patience: 30

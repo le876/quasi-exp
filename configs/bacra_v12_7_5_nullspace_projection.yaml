@@ -1,0 +1,29 @@
+extends: bacra_v12_7_canonical_student.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.7.5-nullspace-projection
+schema_version: 1
+claim_scope: simulation_public_validation_nullspace_projected_student
+deployment_claim_gate_pass: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_7_5_nullspace_projection
+
+canonical_projection:
+  source_v12_7_root: runs/branch_aware_canonical_region_atlas_v12_7_canonical_student
+  pilot_model: 01_pilot/uniform1deg_lambda1_seed20260743/model.keras
+  formal_model_template: 02_formal/seed_{seed}/model.keras
+  expected_source_formal_gate_sha256: d65219189f9db46b3cd94588065d411f99f0d6d4cd70023a68164328568e7697
+  alpha_candidates: [0.25, 0.5, 0.75, 1.0]
+  tree_n_estimators: 300
+  tree_min_samples_leaf: 2
+  tree_workers: 12
+  completion_marker: V12_7_5_NULLSPACE_PROJECTED_STUDENT_COMPLETED.json
+
+exploratory_admission:
+  gate_semantics: exploratory_student_admission
+  joint_abs_p95_max_deg: 2.0
+  fk_p95_max_mm: 5.0
+  fk_max_mm: 10.0
+  minimum_joint_margin_min_deg: 1.5
+  required_seed_passes: 5
+  completion_marker: V12_7_5_EXPLORATORY_ADMISSION_PASSED.json
+  reused_holdout_dataset: runs/branch_aware_canonical_region_atlas_v12_5_composable_lift_pilot_retry5/06_dataset/D3_full/sealed_dataset.parquet
+  expected_reused_holdout_sha256: abd1fb875f031f3d9998f9debf08a9feca8d543343963d73a53b816e01968e05

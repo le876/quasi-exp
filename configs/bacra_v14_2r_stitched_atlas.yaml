@@ -1,0 +1,121 @@
+schema_version: 1
+experiment_id: bacra_v14_2r_stitched_atlas
+output_root: runs/bacra_v14_2r_stitched_atlas_retry4
+robot_config: configs/robot_rods_only_standard_100k.yaml
+
+sources:
+  reviewed_plan: docs/protocols/20-BACRA-V14.2R修订执行协议.md
+  performance_protocol: docs/protocols/22-BACRA-V14.2R聚合与work-conserving调度修复协议.md
+  scientific_closure_protocol: docs/protocols/23-BACRA-V14.2R科学Gate与closure修复协议.md
+  legacy_config: configs/bacra_v14_2_section_first_atlas.yaml
+  retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
+  v14_2_root: runs/bacra_v14_2_section_first_atlas
+  original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+parallel:
+  patch_workers: 12
+  numerical_threads_per_worker: 1
+
+audit_execution:
+  total_shard_workers: 12
+  checkpoint_resume: true
+  heartbeat_every_completed_shards: 1
+  progress_every_schedules: 256
+  patch_benchmark_runtime_per_parent_max_s: 120.0
+
+diagnostic_patch_ids: [patch_00, patch_03, patch_07, patch_09]
+development_patch_ids: [patch_00, patch_01, patch_02, patch_03, patch_04, patch_05, patch_06, patch_07]
+diagnostic_only_patch_ids: [patch_09]
+confirmation_patch_ids: [patch_08, patch_10, patch_11, patch_12]
+registered_method: S4
+
+rooted_section:
+  beam_width: 4
+  root_count: 8
+  maximum_growth_waves: 16
+  parent_consensus_gold_deg: 0.5
+  parent_consensus_silver_deg: 1.0
+  continuation_residual_max_mm: 3.0
+  reverse_return_max_deg: 0.5
+  minimum_alternative_chart_cells: 8
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+audit_v2:
+  geometry_p95_max_deg: 0.5
+  geometry_max_deg: 1.0
+  repeat_p95_max_deg: 0.2
+  continuation_residual_max_mm: 3.0
+  repeats_per_direction: 3
+  repeat_perturbation_rad: 1.0e-8
+  retry_tiers:
+    - {tier_id: R0, maximum_step_mm: 5.0, maximum_iterations: 100, solver_chain: [predictor, bounded_ls]}
+    - {tier_id: R1, maximum_step_mm: 2.5, maximum_iterations: 200, solver_chain: [weighted_dls, bounded_ls]}
+    - {tier_id: R2, maximum_step_mm: 1.25, maximum_iterations: 400, solver_chain: [weighted_dls, bounded_ls, slsqp]}
+
+chart_repair:
+  minimum_chart_cells: 8
+  minimum_chart_fraction: 0.02
+  minimum_chart_spread_mm: 10.0
+  minimum_stitch_overlap_cells: 8
+  stitch_p95_max_deg: 0.5
+  stitch_max_deg: 1.0
+  minimum_boundary_transition_edges: 4
+  minimum_overlap_fraction: 0.02
+  minimum_overlap_spread_mm: 10.0
+  abstention_hops: 0
+  abstention_radius_mm: 10.0
+
+mechanism_gate:
+  minimum_passing_patches: 3
+  primary_label_coverage_min: 0.90
+  largest_stitched_component_min: 0.60
+  geometry_p95_max_deg: 0.5
+  geometry_max_deg: 1.0
+  repeat_p95_max_deg: 0.2
+  retained_fk_residual_max_mm: 3.0
+  unresolved_critical_edges_max: 0
+
+search_stability:
+  beam_widths: [1, 2, 4]
+  root_counts: [3, 5, 8]
+  root_order_seeds: [20260871, 20260872, 20260873]
+  coverage_jaccard_min: 0.95
+  beta_p95_max_deg: 1.0
+  beta_max_deg: 2.0
+  assignment_change_max: 0.05
+  verified_edge_change_max: 0.05
+  true_beam_alternative_ratio_trigger: 0.05
+  strong_reference_relative_objective_gap_max: 0.001
+  strong_reference_beta_p95_max_deg: 0.5
+  strong_reference_beta_max_deg: 1.0
+
+confirmation_gate:
+  development_pass_min: 6
+  confirmation_pass_min: 3
+  largest_component_median_min: 0.60
+  tiny_chart_ratio_max: 0.20
+  tiny_chart_min_cells_abs: 8
+  tiny_chart_min_fraction: 0.02
+
+meso_bridge:
+  parent_cell_count: 512
+  root_count: 8
+  minimum_primary_coverage: 0.60
+  minimum_largest_coherent_region: 0.40
+  maximum_long_path_p95_deg: 0.5
+  maximum_long_path_deg: 1.0
+  maximum_root_dropout_beta_p95_deg: 1.0
+  maximum_runtime_per_parent_s: 120.0
+
+reach_round7:
+  seed_a: 20260863
+  seed_b: 20260864
+  sobol_power: 19
+  frontier_cell_budget: 128
+  frontier_starts_per_cell: 8
+  weighted_jaccard_min: 0.95
+  new_volume_ratio_max: 0.01
+  frontier_new_volume_ratio_max: 0.005
+  boundary_change_ratio_max: 0.02
+  lower_upper_measure_gap_max: 0.05
+  required_consecutive_rounds: 2

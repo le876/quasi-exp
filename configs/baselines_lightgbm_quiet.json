@@ -1,0 +1,6 @@
+{
+  "lgbm": {
+    "estimator__verbosity": -1,
+    "estimator__force_col_wise": true
+  }
+}

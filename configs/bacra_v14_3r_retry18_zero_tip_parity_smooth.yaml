@@ -1,0 +1,154 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry18_zero_tip_parity_smooth
+
+sources:
+  governing_protocol: docs/protocols/35-BACRA-V14.3R-retry18-Zero-Tip-Parity-Smooth执行协议.md
+  consultation: docs/30-pro提问-retry17零位邻域缺口与长方形Student轨迹尖刺原因及修复.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  robot_config_sha256: 21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc
+
+upstream:
+  retry17_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry17_omega600_annular_continuity_attempt1
+  retry16_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry16_omega600_annular_tube_preflight_attempt3
+  retry17_run_identity: {path: run_identity.json, sha256: e700db8ac2a1545a6ee45c3609af4c5883b0f2e58df4b32ce5bfa4e5574b5bfd}
+  retry17_summary_gate: {path: 12_summary/gate.json, sha256: 2447731230d73af39503dd35edc5316538bacee55c16c18524169dbfb4cacc7c}
+  retry17_artifact_manifest: {path: 12_summary/artifact_manifest.json, sha256: 4c38b6e5024212c2930d4c3163a463b1e8c76edaa20853d68736e87f5551983f}
+  retry17_completion_manifest: {path: 12_summary/completion_manifest.json, sha256: a7ebee0e7ce13f5329521ab7fb02bd64f11dcda1aadc1f9dbfeda21c36d5899e}
+  target_registry: {path: 07_phase_b_continuation/final_targets.parquet, sha256: 43f50852563c1d81a4f8cf997fe615a8c8159367ceefb446a3cbba4195aed391}
+  quotient_labels: {path: 07_phase_b_continuation/final_quotient_labels.parquet, sha256: 33da443c90300069462a5bcbde10e88c09fb387667a255e2e886b2bc82701c17}
+  quotient_supervision: {path: 07_phase_b_continuation/final_quotient_supervision.parquet, sha256: 0fff9bc4f3f8f32880789e053eebcd5d2c11f0e07c1d53b8a6e84570a13c331a}
+  full_g4_dataset: {path: 07_phase_b_continuation/final_full_g4_dataset.parquet, sha256: 9bd8f990ed8053db1c6aaaa08f495ed2b9ee0313d2003ed96e60457081987994}
+  frozen_student: {path: 08_student/models/global.keras, sha256: eb8fb47ca8475981f3b801d83aef5d53ecfe4bb002f97e9cf453c4503b7a6014}
+  dataset_student_lock: {path: 09_dataset_student_lock/dataset_student_lock.json, sha256: 9bc466d09ad7fc13083e5bb529ca68ae6ecdb77029d08d90f69ddc0c05bd1eb9}
+  old_shape_waypoints: {path: 10_heldout_shapes/heldout_shape_waypoints.parquet, sha256: 3b68e5a7c0fa5e47f36ccea30bebf6770429e30a7433d1bdd5d31364e532cab0}
+  old_trajectory_evaluation: {path: 11_trajectory_evaluation/trajectory_waypoint_evaluation.parquet, sha256: 6709fbb31de9fcf5ba36f008d83e48baf2c591e9f68cfb203eb40e20d9700f59}
+  stable_core_profile: {root: retry16, path: 01_annular_domain/stable_core_annular_profile.parquet, sha256: 8ac7f05a55ce2df0fbe98a688d44cf84018a19713323649e5cf5d47f584ff941}
+  expanded_profile: {root: retry16, path: 01_annular_domain/expanded_annular_profile.parquet, sha256: 93470a2ddfaa7f452dad371141fce1bd07b74091764d0239a099a7de02d6a991}
+  full_seed_bank: {root: retry16, path: 03_teacher_seed_banks/full_seed_bank_with_xyz.parquet, sha256: db41666d24a27b3799b223e9122b6375b8fdff533f9ed89e3cc7f1626ac79d42}
+  y_seed_bank: {root: retry16, path: 03_teacher_seed_banks/y_seam_seed_bank_with_xyz.parquet, sha256: 0972ce361fb6fc9d6ad1dd19d1fce176bec3e214d4d1f36bc2cccad1790d6f62}
+  z_seed_bank: {root: retry16, path: 03_teacher_seed_banks/z_seam_seed_bank_with_xyz.parquet, sha256: 8ff157f9c419b356a218231cdd86900c65f27c96b405e73a2a50d5a6ae7c40be}
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  trajectory_candidate_workers: 1
+  numerical_threads_per_worker: 1
+  expected_duration_hours: 24
+  deadline_hours: 48
+
+omega600: {zero_x_m: 1.2154980000000004, minimum_x_m: 0.6154980000000004, axial_length_mm: 600.0}
+
+root_tip:
+  proposal_seeds: [20260920, 20260921]
+  proposal_power_per_radius: 17
+  weighted_radii_deg: [0.25, 0.5, 1.0, 2.0, 3.0]
+  axial_step_mm: 2.0
+  radial_step_mm: 2.0
+  sector_count: 16
+  axis_core_radius_mm: 5.0
+  angular_arc_mm: 5.0
+  maximum_u_mm: 60.0
+  maximum_rho_mm: 220.0
+  continuity_gap_mm: 10.0
+  profile_erosions_mm: [0.0, 2.0, 5.0, 10.0]
+  preflight_target_count: 512
+  preflight_seed: 20260924
+  target_pool_power: 17
+  target_pool_seed: 20260922
+  evaluation_probe_power: 17
+  evaluation_probe_seed: 20260923
+  target_cap: 3000
+  boundary_reselection_cap: 500
+  minimum_separation_mm: 5.0
+  batch_size: 250
+  fill_p95_maximum_mm: 10.0
+  minimum_axial_overlap_mm: 5.0
+  minimum_radial_overlap_p50_mm: 10.0
+  nearest_zero_nonzero_maximum_mm: 10.0
+
+candidate_solver:
+  nearest_seed_count: 64
+  ordinary_seed_budget: 16
+  difficult_seed_budget: 32
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  damping: 0.002
+  maximum_dls_iterations: 100
+  maximum_least_squares_evaluations: 200
+  maximum_step_rms_deg: 3.0
+  residual_maximum_mm: 3.0
+  cluster_threshold_deg: 0.5
+  difficult_slsqp_seed_count: 4
+
+graph_teacher:
+  k_values: [12, 16]
+  pairwise_lambdas: [2.0, 4.0, 8.0]
+  maximum_edge_spacing_factor: 1.75
+  robust_pairwise_cap_deg: 7.0
+  maximum_icm_sweeps: 30
+  boundary_reselection_trigger_deg: 5.0
+
+data_gate:
+  unified_graph_maximum_distance_mm: 35.0
+  lcc_minimum: 1.0
+  edge_weighted_p95_maximum_deg: 3.0
+  edge_raw_gt7_rate_maximum: 0.02
+  split_seed: 20260914
+  macroblock_mm: 40.0
+  density_weight_clip: [0.25, 4.0]
+
+seam_audit:
+  anchor_count_per_seam: 64
+  anchor_seed: 20260928
+  normal_minimum_mm: -30.0
+  normal_maximum_mm: 30.0
+  normal_step_mm: 2.0
+  soft_gate_delta_mm: [2.0, 5.0, 10.0, 20.0]
+  seam_band_mm: 20.0
+
+student:
+  primary_seed: 20260925
+  robustness_seeds: [20260926, 20260927]
+  hidden_units: [128, 128, 64]
+  capacity_control_hidden_units: [256, 256, 128]
+  learning_rate: 0.001
+  maximum_steps: 1500
+  validation_interval: 50
+  patience_intervals: 8
+  axial_scale_mm: 600.0
+  radial_scale_quantile: 0.99
+  radial_scale_safety_factor: 1.05
+  parity_label_tolerance_rad: 1.0e-8
+  parity_exponent_minimum: 0.75
+  parity_exponent_maximum: 1.25
+  jacobian_spectral_clip_quantile: 0.99
+  jacobian_lambdas: [0.1, 0.3, 1.0]
+  seam_multiplier: 4.0
+  root_tip_multiplier: 4.0
+  exact_seam_multiplier: 8.0
+  seam_p95_relative_reduction_minimum: 0.50
+  rectangle_fk_p95_maximum_mm: 10.0
+  rectangle_fk_maximum_mm: 15.0
+  rectangle_step_excess_maximum_mm: 5.0
+  raw_step_gt7_rate_maximum: 0.02
+  global_validation_s0_ratio_maximum: 1.10
+  old_shape_nonregression_ratio_maximum: 1.10
+
+trajectories:
+  heldout_seed: 20260929
+  waypoint_count: 360
+  support_maximum_mm: 20.0
+  root_ray_count: 16
+  small_ring_u_mm: [5.0, 10.0, 20.0]
+  dls2_success_minimum: 0.95
+  dls2_fk_p95_maximum_mm: 10.0
+
+claims:
+  diagnostic_only: true
+  claim_bearing_run_authorized: false
+  downstream_scale_authorized: false
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  continuous_workspace_authorized: false
+  tension_authorized: false

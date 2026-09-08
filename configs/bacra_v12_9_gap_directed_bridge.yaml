@@ -1,0 +1,46 @@
+extends: bacra_v12_8_independent_geometry_loops.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.9-gap-directed-capability-bridge
+schema_version: 1
+claim_scope: simulation_teacher_graph_connectivity_repair
+deployment_claim_gate_pass: false
+output_root: runs/branch_aware_canonical_region_atlas_v12_9_gap_directed_capability_bridge
+
+teacher_reference:
+  # V12.8 hard numerical and topology gates remain unchanged.
+  residual_p95_mm: 1.0
+  residual_max_mm: 3.0
+  joint_margin_min_deg: 1.5
+  phase_beta_rms_p95_deg: 1.0
+  phase_beta_rms_max_deg: 2.0
+  acceleration_beta_rms_p95_deg: 0.5
+  seam_beta_rms_deg: 1.0
+  direction_gap_p95_deg: 0.5
+  direction_gap_max_deg: 1.0
+
+  # Only finite graph support is enriched. Each accepted candidate is produced
+  # by predictor-corrector continuation from a failed reachable frontier.
+  gap_enrichment_rounds: 12
+  gap_enrichment_sources_per_frontier: 2
+  gap_enrichment_round_candidate_budget: 192
+  gap_enrichment_max_candidates_per_phase: 96
+  gap_enrichment_topology_dedup_deg: 1.0e-6
+
+parallel:
+  teacher_workers: 8
+
+completion_marker: V12_9_GAP_DIRECTED_BRIDGE_COMPLETED.json
+pass_marker: V12_9_HARD_CYCLIC_TEACHER_GATE_PASSED.json
+
+smoke:
+  output_root: runs/branch_aware_canonical_region_atlas_v12_9_gap_directed_capability_bridge_smoke
+  geometry_holdout:
+    phase_count: 180
+  teacher_reference:
+    phase_beta_rms_p95_deg: 4.0
+    phase_beta_rms_max_deg: 8.0
+    acceleration_beta_rms_p95_deg: 2.0
+    seam_beta_rms_deg: 4.0
+    gap_enrichment_rounds: 4
+    gap_enrichment_round_candidate_budget: 64
+    gap_enrichment_max_candidates_per_phase: 64

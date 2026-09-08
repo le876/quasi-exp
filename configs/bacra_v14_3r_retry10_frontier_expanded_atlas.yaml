@@ -1,0 +1,156 @@
+schema_version: 1
+experiment_id: bacra_v14_3r_retry10_frontier_expanded_atlas
+consultation_sha256: 0ece2f5e78179bd9fbaee41a6da3aa26e35cbb7972d5a38df2ae47c95a9022ea
+
+sources:
+  consultation_input: docs/23-pro提问-当前实验总结与后续实验推进计划.md
+  governing_protocol: docs/protocols/27-BACRA-V14.3R-retry10-frontier-expanded-atlas执行协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  tension_robot_config: configs/robot_rods_only_standard_100k_segmented_canonical.yaml
+
+upstream:
+  root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry9_coverage_first_attempt2
+  scientific_source_fixed_point: 8eb5a83dedef9e4ef55308f4360c13011053c805
+  binding_fixed_point: b3fddb897a64cdc700a91eef47bff69a6967bc3c
+  completion_manifest:
+    path: 05_summary/completion_manifest.json
+    sha256: 502b64609768a262444f6fe910c8e0947a8b6b4297beed8b498e07be64ea0c33
+  artifact_manifest:
+    path: 05_summary/artifact_manifest.json
+    sha256: ddd9cdfb88c6aecfc2218c5073f8e6af5bd010ea519da6b61b11f7f7a6d796df
+  atlas_labels:
+    path: 03_exploratory_primary_atlas/exploratory_primary_labels.parquet
+    sha256: d19092572c84997b3efe0d8748ec6ce31c2875d7df5a04965534ffcbaaa64655
+  abstention:
+    path: 03_exploratory_primary_atlas/exploratory_abstention.parquet
+    sha256: b39b8ab2924010292012a1b122741376ae026671aaf119b186fb7b28a288b4a6
+  task_nodes:
+    path: 02_pairwise_overlap_recovery/task_nodes.parquet
+    sha256: 57daf510af12ca04874e3aea3664ccde2c71ce5eadeb68ab2ced5c0239ca8496
+  task_edges:
+    path: 02_pairwise_overlap_recovery/task_edges.parquet
+    sha256: b5af7d5423cdc5c6cae658ba7946d6104d847370b0b810c2dd9a388fa27ed7ab
+  student_supervision:
+    path: 04_student_smoke/student_supervision.parquet
+    sha256: 0b9a8c1cb8f3ef82e06127b79045659a54179bead4c09c2509d8c50a585becb9
+  student_test_predictions:
+    path: 04_student_smoke/test_predictions.parquet
+    sha256: 32a1f3dff3277cba6778806fea369883ddb67369a1a1d411d2792a0ebbdf9b9f
+
+runtime:
+  python: /mnt/ML_projects/conda_envs/quasi_exp_tf221_cu125_py311/bin/python
+  device: cpu
+  maximum_concurrent_workers: 12
+  logical_shard_count: 48
+  seed: 20260881
+
+metric:
+  version: normalized_weighted_v1
+  beta_coordinate_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+atlas:
+  denominator_task_nodes: 25000
+  root_count_per_batch: 4
+  maximum_batches: 6
+  proof_of_concept_batches: 1
+  dynamic_root_hops: 2
+  k1_beam_width: 1
+  k1_initial_waves: 8
+  k1_extended_waves: 12
+  k2_beam_width: 2
+  k2_promotion_gain_fraction: 0.005
+  plateau_gain_fraction: 0.005
+  plateau_consecutive_batches: 2
+  weighted_local_p95_max_deg: 2.0
+  weighted_cycle_p95_max_deg: 3.0
+  raw_catastrophic_deg: 5.0
+  raw_catastrophic_rate_max: 0.01
+  fk_p95_max_mm: 5.0
+  fk_p99_max_mm: 10.0
+  individual_fk_max_mm: 10.0
+  graph_refinement_maximum_edges_per_node: 2
+  graph_edge_predicate_owner: src/quasi_exp/teacher/workspace_atlas_repair.py::build_shared_face_task_edges
+
+taxonomy:
+  priority:
+    - branch_conflict
+    - beam_limited
+    - frontier_reachable
+    - graph_limited
+    - disconnected_but_feasible
+    - no_feasible_solution_observed
+
+sampling:
+  registered_parent_domain_column: source_parent_node_id
+  parent_geometry_source: upstream_task_node_registry
+  logical_shard_count: 48
+  maximum_concurrent_workers: 12
+  attempt_multiplier: 5
+  preflight_rows: 2000
+  qualities:
+    seed: [Gold, Silver]
+    dataset_50k: [Gold, Silver]
+    dataset_100k: [Gold, Silver]
+    dataset_200k: [Gold]
+  seed_targets: [5105, 10000, 20000]
+  seed_minimum_for_50k: 10000
+  staged_targets: [50000, 100000, 200000]
+  silver:
+    reverse_return_max_deg: 0.5
+    neighbor_count: 2
+    weighted_neighbor_gap_max_deg: 2.0
+    raw_neighbor_gap_max_deg: 5.0
+
+dataset_authorization:
+  dataset_50k:
+    standard_coverage_min: 0.30
+    limited_coverage_min: 0.20
+    limited_requires_plateau: true
+  dataset_100k:
+    standard_coverage_min: 0.50
+    limited_coverage_min: 0.20
+    limited_requires_plateau: true
+  dataset_200k:
+    standard_coverage_min: 0.60
+    limited_coverage_min: 0.40
+    standard_x_tertile_minimum_coverage: 0.40
+    requires_plateau: true
+
+evaluation_panels:
+  block_size_mm: 40
+  target_rows_each: 858
+  panel_a: seed_domain_common
+  panel_b: expanded_atlas
+  panel_c: frontier_boundary_stress
+  underfill_blocks_student_claim_only: true
+
+student:
+  device: cpu
+  seed: 20260881
+  hidden_units: [128, 128, 64]
+  learning_rate: 0.001
+  max_steps: 300
+  validation_interval: 20
+  patience_intervals: 6
+  from_scratch_each_scale: true
+  beta_loss_only: true
+  raw_fk_p95_max_mm: 30.0
+  dls_two_step_fk_p95_max_mm: 15.0
+  dls_success_fk_max_mm: 5.0
+  multi_seed_evaluated: false
+
+tension:
+  pilot_rows: 2000
+  maximum_concurrent_workers: 12
+  projected_200k_budget_hours: 8.0
+  success_rate_min: 0.99
+  residual_max: 0.06
+  tension_bounds_n: [0.0, 2000.0]
+  replacement_scope: [source_parent_node_id, macroblock_id, sampling_stratum]
+  materialize_targets: [50000, 100000, 200000]
+
+claims:
+  formal_authorized: false
+  deployment_authorized: false
+  full_workspace_authorized: false
+  student_scaling_claim_requires_multi_seed: true

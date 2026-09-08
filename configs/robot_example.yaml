@@ -1,0 +1,66 @@
+robot:
+  k: 3
+  D: 10
+  kD: 30
+
+paths:
+  lengths_csv: data/robot/example/lengths.csv
+  holes_csv: data/robot/example/holes.csv
+  disks_csv: data/robot/example/disks.csv
+  material_csv: data/robot/example/material.csv
+  end_effector_csv: data/robot/example/end_effector.csv
+
+physics:
+  g: 9.81
+
+friction:
+  mu_shaft: 0.05
+  r_shaft_m: 0.004
+  mu_cable: 0.0
+
+tension:
+  bounds_n: [0.0, 2000.0]
+
+cables:
+  end_disk_by_j:
+    "1": 10
+    "2": 10
+    "3": 20
+    "4": 20
+    "5": 30
+    "6": 30
+    "7": 30
+    "8": 30
+    "9": 20
+    "10": 20
+    "11": 10
+    "12": 10
+
+sampling:
+  beta_ranges_rad:
+    beta1: [-0.10, 0.10]
+    beta2: [-0.02, 0.02]
+    beta3: [-0.10, 0.10]
+    beta4: [-0.02, 0.02]
+    beta5: [-0.10, 0.10]
+    beta6: [-0.02, 0.02]
+  rng_seed: 7
+
+pso:
+  n_particles: 48
+  iters: 40
+  inertia: 0.72
+  c1: 1.49
+  c2: 1.49
+  w_resid: 1000000.0
+  lambda_max: 1.0
+  early_stop_mean_rnorm2: 1.0e-10
+  rng_seed: 42
+
+dataset:
+  rms_rnorm_threshold: 2.0e-1
+  shard_rows: 200
+  out_dir: data/example_out
+
+parallel:
+  workers: 2

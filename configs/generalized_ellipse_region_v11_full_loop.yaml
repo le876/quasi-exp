@@ -1,0 +1,197 @@
+protocol_id: generalized-ellipse-region-v11.4-full-loop-feasible-branch
+source_protocol_id: generalized-ellipse-region-v11.3-branch-identity
+source_artifact_root: runs/generalized_ellipse_region_v11_branch_identity
+source_anchor_root: runs/generalized_ellipse_region_v11_relaxed2x/01_anchor
+output_root: runs/generalized_ellipse_region_v11_full_loop_feasible_branch
+robot_config: configs/robot_rods_only_standard_100k.yaml
+v10_evidence_root: runs/trajectory_canonical_teacher_v10/07_large_scale_challenge
+
+candidates:
+  - A4_A2_178_r0_reverse_c0045
+  - A4_A2_143_r1_reverse_c0045
+
+phase_counts:
+  pilot: 180
+  formal: 720
+
+seeds:
+  root: 20260726
+  viability: 20260727
+  graph: 20260728
+  audit: 20260729
+
+root_fiber:
+  nested_seed_counts: [64, 256, 1024]
+  source_quotas:
+    primary: 1
+    atlas: 255
+    sobol: 384
+    nullspace: 192
+    predictor_walk: 192
+  connectivity_eps_deg: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+  mutual_knn_k: 12
+  geodesic_max_edge_deg: 3.0
+  interpolation_fractions: [0.25, 0.5, 0.75]
+  representative_count: 64
+
+viability:
+  arc_lengths_deg: [15, 30, 60, 90, 180, 360]
+  candidate_budget: 16
+  top_lineage_count: 16
+  local_seed_std_deg: 0.5
+  trust_radius_deg: 3.0
+
+hard_feasibility:
+  residual_max_mm: 3.0
+  joint_margin_min_deg: 1.5
+  distinct_threshold_deg: 0.25
+
+candidate_generation:
+  initial_budget_floor: 128
+  initial_budget_multiplier: 4
+  targeted_cumulative_budgets: [128, 256, 512]
+  local_nullspace_step_deg: 2.0
+
+pilot_matrix:
+  experiments: [E0, E1, E2, E3, E4]
+  root_seed_counts: [256, 1024]
+  candidate_caps: [16, 32, 64]
+  edge_limits_deg: [1.0, 2.0, 3.0]
+  shared_method_across_candidates: true
+  parallel_workers: 4
+  max_parallel_workers: 8
+  per_worker_blas_threads: 1
+  monitoring_poll_seconds: 1.0
+
+cycle:
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+  lambda_velocity: 1.0
+  lambda_acceleration: 0.5
+  top_m: 8
+  max_states_per_root: 64
+  fallback_max_states_per_root: 2048
+
+whole_curve:
+  correction_sweeps: 4
+  smoothing_weight: 0.2
+  least_squares_max_nfev: 30
+  residual_penalty_schedule: [1.0, 10.0, 100.0]
+  minimal_slack_diagnostic: true
+
+teacher_policy:
+  variant: T3
+  candidate_budget: 16
+  damping: 0.001
+  nullspace_weight: 0.001
+  safe_joint_margin_deg: 1.5
+  safe_margin_repulsion_step_deg: 0.05
+  surface_neighbor_weight: 0.0
+  surface_neighbor_scale_deg: 1.0
+  max_corrector_iterations: 100
+  tracking_tolerance_mm: 1.0
+  lambda_velocity: 5.0
+  lambda_acceleration: 0.5
+  lambda_posture: 0.1
+  lambda_conditioning: 0.05
+  closure_weight: 5.0
+  solver_seed: 20260727
+
+strict_cycle_gate:
+  residual_p95_mm: 1.0
+  residual_max_mm: 3.0
+  joint_margin_min_deg: 1.5
+  delta_beta_rms_p95_deg: 1.0
+  delta_beta_rms_max_deg: 2.0
+  acceleration_beta_rms_p95_deg: 0.5
+  seam_beta_rms_deg: 1.0
+
+formal_audit:
+  cut_phase_indices: [0, 45, 90, 135]
+  cut_angles_deg: [0, 45, 90, 135]
+  directions: [forward, reverse]
+  repeat: true
+  parallel_workers: 2
+  per_worker_blas_threads: 1
+  monitoring_poll_seconds: 1.0
+  repeat_beta_rms_p95_deg: 0.2
+  variant_beta_rms_p95_deg: 1.0
+  variant_beta_rms_max_deg: 2.0
+  trust_radius_deg: 3.0
+
+diagnostic_relaxed_gate:
+  residual_p95_mm: 2.0
+  residual_max_mm: 6.0
+  joint_margin_min_deg: 0.75
+  delta_beta_rms_p95_deg: 2.0
+  delta_beta_rms_max_deg: 4.0
+  acceleration_beta_rms_p95_deg: 1.0
+  seam_beta_rms_deg: 2.0
+
+downstream:
+  authorized_only_after_formal_outcome: A
+  base_config: configs/generalized_ellipse_region_v11.yaml
+  output_root: runs/generalized_ellipse_region_v11_full_loop_downstream
+  full_branch_audit_parallel_workers: 8
+  tube_frontier_mm: [[0.5, 0.5], [1.0, 1.0]]
+  tube_fallback_widths_mm: [0.5, 1.0]
+  static_mapping_conflict_policy: fail_closed
+  family_catalog_count: 72
+  student_nested_train_sizes: [20000, 50000, 100000, 200000, 252000]
+  student_seed_count: 5
+  student_required_seed_passes: 4
+  student_hidden_units: [128, 128, 64]
+  student_max_epochs: 300
+  student_patience: 30
+  student_batch_size: 256
+
+protocol_constraints:
+  prohibit_gate_relaxation: true
+  prohibit_raw_seed_padding: true
+  prohibit_phase_deletion: true
+  stop_on_static_mapping_conflict: true
+  stop_after_decision_evidence_if_not_A: true
+
+smoke:
+  output_root: runs/generalized_ellipse_region_v11_full_loop_feasible_branch_smoke
+  phase_counts:
+    pilot: 12
+    formal: 24
+  root_fiber:
+    nested_seed_counts: [8, 16]
+    source_quotas:
+      primary: 1
+      atlas: 5
+      sobol: 4
+      nullspace: 3
+      predictor_walk: 3
+    mutual_knn_k: 3
+    representative_count: 4
+  viability:
+    candidate_budget: 3
+    top_lineage_count: 3
+  candidate_generation:
+    initial_budget_floor: 12
+    initial_budget_multiplier: 3
+    targeted_cumulative_budgets: [12, 24]
+  pilot_matrix:
+    root_seed_counts: [16]
+    candidate_caps: [4]
+    edge_limits_deg: [3.0]
+    parallel_workers: 2
+    max_parallel_workers: 2
+  cycle:
+    top_m: 2
+    max_states_per_root: 16
+    fallback_max_states_per_root: 64
+  whole_curve:
+    correction_sweeps: 1
+    least_squares_max_nfev: 3
+    residual_penalty_schedule: [1.0]
+  teacher_policy:
+    candidate_budget: 3
+    max_corrector_iterations: 20
+  formal_audit:
+    cut_phase_indices: [0, 3]
+    cut_angles_deg: [0, 90]
+  downstream:
+    full_branch_audit_parallel_workers: 2

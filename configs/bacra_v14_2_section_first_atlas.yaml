@@ -1,0 +1,108 @@
+protocol_id: bacra-v14.2-section-first-canonical-workspace-atlas
+schema_version: 1
+claim_scope: exploratory_on_frozen_round5_empirical_lower_proxy
+deployment_claim: false
+output_root: runs/bacra_v14_2_section_first_atlas
+robot_config: configs/robot_rods_only_standard_100k.yaml
+
+sources:
+  required_parent_git_sha: 68b44f4272ca8f491e6904887a9fe49a0395bd4c
+  reviewed_plan: docs/18-pro提问-V14.1当前瓶颈与整体实验推进路线.md
+  retry4_root: runs/bacra_v14_1_cross_cell_repair_retry4
+  original_pilot_root: runs/bacra_v14_omega200_workspace_atlas_pilot
+
+diagnostics:
+  patch_ids: [patch_09, patch_03, patch_00, patch_07]
+  methods: [F0, F1, S2, S4, S8, S4C]
+
+flood_baselines:
+  F0: {maximum_waves: 3, maximum_candidates_per_node: 12, maximum_candidates_per_lineage_per_node: 2}
+  F1: {maximum_waves: 6, maximum_candidates_per_node: 24, maximum_candidates_per_lineage_per_node: 4}
+
+section_first:
+  beam_widths: [2, 4, 8]
+  default_beam_width: 4
+  difficult_beam_width: 8
+  root_count: 5
+  maximum_growth_waves: 16
+  minimum_alternative_chart_cells: 8
+  parent_consensus_gold_deg: 0.5
+  parent_consensus_silver_deg: 1.0
+  continuation_residual_max_mm: 3.0
+  reverse_return_max_deg: 0.5
+  beta_weights: [4.0, 4.0, 2.0, 2.0, 1.0, 1.0]
+
+selected_section_audit:
+  path_p95_max_deg: 0.5
+  cycle_p95_max_deg: 0.5
+  repeat_p95_max_deg: 0.2
+  common_max_deg: 1.0
+  continuation_residual_max_mm: 3.0
+
+section_stability:
+  coverage_jaccard_min: 0.95
+  exploratory_beta_p95_max_deg: 1.0
+  exploratory_beta_max_deg: 2.0
+  chart_assignment_change_max: 0.05
+  boundary_change_max: 0.05
+  selected_edge_change_max: 0.05
+
+patch_gate:
+  development_pass_min: 6
+  confirmation_pass_min: 3
+  largest_component_ratio_min: 0.60
+  single_cell_chart_ratio_max: 0.50
+
+exploratory_5k:
+  cell_count: 5000
+  root_count: 32
+  labelable_measure_min: 0.30
+  largest_region_measure_min: 0.20
+  unresolved_abstain_max: 0.70
+  require_all_x_tertiles: true
+
+exploratory_dataset:
+  minimum_rows: 20000
+  target_rows: 50000
+  hard_max_rows: 50000
+  row_padding: false
+  all_supervised_rows_count_toward_budget: true
+
+student:
+  variants: [XYZ_GLOBAL, XYZ_ROUTER_EXPERTS, XYZ_DLS_1, XYZ_DLS_2, STATEFUL_DIAGNOSTIC]
+  hidden_units: [128, 128, 64]
+  router_hidden_units: [128, 64]
+  seeds: [20260871, 20260872, 20260873]
+  learning_rate: 0.001
+  max_steps: 200
+  validation_interval: 20
+  patience_intervals: 5
+  validation_fk_p95_max_mm: 5.0
+  validation_fk_max_mm: 10.0
+
+reach_round6:
+  round: 6
+  power: 19
+  seed_a: 20260859
+  seed_b: 20260860
+  frontier_cells: 128
+  frontier_starts: 8
+  weighted_jaccard_min: 0.95
+  new_volume_ratio_max: 0.01
+  frontier_new_volume_ratio_max: 0.01
+  measure_boundary_change_max: 0.05
+  lower_upper_measure_gap_max: 0.05
+  required_consecutive_rounds: 2
+
+parallel:
+  patch_workers: 12
+  numerical_threads_per_worker: 1
+
+formal_gate:
+  minimum_labelable_measure_ratio: 0.60
+  strong_labelable_measure_ratio: 0.80
+  maximum_unresolved_ratio: 0.20
+  maximum_n_min: 200000
+  exact_rows: 200000
+  row_padding: false
+  deployment_claim: false

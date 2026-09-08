@@ -1,0 +1,147 @@
+extends: bacra_v12_12_1_multiresolution_teacher_retry3.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.14-region-grown-canonical-workspace-dataset
+schema_version: 1
+claim_scope: simulation_exploratory_region_generalization
+deployment_claim_gate_pass: false
+output_root: runs/bacra_v12_14_region_grown_dataset
+
+v12_14:
+  expected_canonical_seed_rows: 84960
+  source_d3: runs/bacra_v12_13_exploratory_expansion/02_datasets/D3_dataset.parquet
+  source_final_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
+  source_capability_pool: runs/branch_aware_canonical_region_atlas_v12_1_capability_bridge_attempt7_direct_w12/01_capability_bridge/01_global_4m/global_capability_light.parquet
+  source_v12_11_root: runs/branch_aware_canonical_region_atlas_v12_11_gold_set_aware_student
+  expected_source_sha256:
+    source_d3: 13ba2c1a72960cff2cb1fd7f31f9483bf3ae5d39a58ffa84b5d12856d3d6b9bc
+    source_final_teacher: 383c1f3e09844188bbeac1e2b875e1678751cdb0654f9a1b5ee141fa6e925b29
+    source_capability_pool: f813d01c1927eeef2e7f9f5afa7ebcb275a16a4618d5a479eaabdda01db03f05
+
+  seeds:
+    seed_fps: 20260780
+    sparse_target: 20260781
+    consistency: 20260782
+    dense_target: 20260783
+    development_random: 20260784
+    final_random: 20260785
+    trajectory: 20260786
+    enrichment: 20260787
+    training: [20260738, 20260739, 20260740]
+
+  region:
+    voxel_size_mm: 5.0
+    adjacency: 26
+    thickness_layers: 6
+    seed_count: 500
+    conditioning_p95_multiplier: 1.5
+    sparse_target_count: 5000
+    sparse_prefix_count: 2000
+    parent_distance_max_mm: 15.0
+    parent_attempt_count: 5
+    successful_parent_minimum: 3
+    continuation_substep_mm: 5.0
+    edge_distance_max_mm: 10.0
+    gold_residual_max_mm: 1.0
+    gold_candidate_gap_max_deg: 0.5
+    silver_residual_max_mm: 3.0
+    silver_candidate_gap_max_deg: 1.0
+    required_sparse_acceptance_rate: 0.80
+    required_component_nodes: 2000
+
+  consistency:
+    triangle_sample_count: 100
+    two_path_sample_count: 100
+    triangle_p95_deg: 0.5
+    triangle_max_deg: 1.0
+    two_path_p95_deg: 0.5
+    multiparent_p95_deg: 0.5
+
+  dense:
+    prefix_accepted_count: 50000
+    formal_accepted_count: 100000
+    anchor_count_without_tetrahedron: 3
+    independent_predictor_minimum: 2
+    attempt_multiplier: 2
+
+  dataset:
+    R0_rows: 84960
+    R1_equal_rows: 84960
+    R1_full_rows: 100000
+    R2_old_rows: 25000
+    R2_region_rows: 100000
+    macro_voxel_mm: 20.0
+    validation_fraction: 0.20
+    split_buffer_mm: 5.0
+    quality_weights:
+      RegionGold: 1.0
+      RegionSilver: 0.5
+      Gold: 1.0
+      Silver: 0.5
+    batch_proportions:
+      R0: {old: 1.0}
+      R1_equal: {interior: 0.75, boundary: 0.25}
+      R1_full: {interior: 0.75, boundary: 0.25}
+      R2: {old: 0.20, interior: 0.60, boundary: 0.20}
+
+  training:
+    batch_size: 256
+    learning_rate: 0.0003
+    max_optimizer_steps: 4500
+    validation_interval_steps: 100
+    patience_intervals: 18
+    row_loss_weight: 1.0
+    dls_steps: 0
+    random_test_rows: 10000
+    active_top_voxel_fraction: 0.10
+    active_rows: 20000
+    required_seed_passes: 2
+    fk_p95_mm: 5.0
+    fk_max_mm: 10.0
+
+  trajectories:
+    phase_count: 360
+    per_type: 4
+    required_pass_count: 16
+    final_ellipse_p95_relative: 0.01
+    final_ellipse_max_relative: 0.02
+
+  parallel:
+    cpu_workers: 12
+    gpu_training_workers: 1
+
+smoke:
+  output_root: runs/bacra_v12_14_region_grown_dataset_smoke
+  v12_14:
+    region:
+      seed_count: 24
+      thickness_layers: 2
+      sparse_target_count: 96
+      sparse_prefix_count: 48
+      required_sparse_acceptance_rate: 0.25
+      required_component_nodes: 8
+      successful_parent_minimum: 2
+    consistency:
+      triangle_sample_count: 8
+      two_path_sample_count: 8
+    dense:
+      prefix_accepted_count: 20
+      formal_accepted_count: 40
+      attempt_multiplier: 3
+    dataset:
+      R0_rows: 1440
+      R1_equal_rows: 24
+      R1_full_rows: 40
+      R2_old_rows: 24
+      R2_region_rows: 40
+    training:
+      max_optimizer_steps: 4
+      validation_interval_steps: 2
+      patience_intervals: 2
+      random_test_rows: 32
+      active_rows: 16
+    trajectories:
+      phase_count: 36
+      per_type: 1
+      required_pass_count: 2
+    parallel:
+      cpu_workers: 4

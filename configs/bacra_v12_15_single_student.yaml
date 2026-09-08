@@ -1,0 +1,98 @@
+extends: bacra_v12_14_region_growth.yaml
+
+protocol_id: branch-aware-canonical-region-atlas-v12.15-single-student-spatial-block-holdout
+schema_version: 1
+claim_scope: simulation_single_chart_spatial_block_generalization
+deployment_claim_gate_pass: false
+output_root: runs/bacra_v12_15_single_student
+
+v12_15:
+  source_v12_14_root: runs/bacra_v12_14_region_grown_dataset_retry6
+  source_final8_teacher: runs/bacra_v12_13_exploratory_expansion/06_final/teacher_reference.parquet
+  source_final8_catalog: runs/bacra_v12_13_exploratory_expansion/06_final/new_family_catalog.parquet
+  expected_source_sha256:
+    v12_14_gate: 881aafccbe22af890a285563b5724239e6d4458544af5e97a4702f0e2d810fab
+    v12_14_model_lock: 26752330bb6dbc590312dcaf6b7fec903dd632bac8c2e1ec54f599efddd70e4f
+    v12_14_R2_dataset: 90f43047a2964149625b16974b4bd13fdc697e059985587efc3504a27995e2ac
+    final8_teacher: 383c1f3e09844188bbeac1e2b875e1678751cdb0654f9a1b5ee141fa6e925b29
+    final8_catalog: 0c40e67f61fe0fa7bc59f8976ac393e520e5fb5fe804df59c9badd75a8becb7a
+
+  seeds:
+    spatial_partition: 20260792
+    sealed_random: 20260793
+    sealed_trajectory: 20260794
+    training: [20260738, 20260739, 20260740]
+
+  spatial_holdout:
+    macro_voxel_mm: 15.0
+    validation_fraction: 0.15
+    sealed_holdout_fraction: 0.15
+    train_buffer_mm: 5.0
+    random_rows: 10000
+    random_jitter_mm: 2.0
+
+  distillation:
+    batch_size: 256
+    validation_interval_steps: 100
+    patience_intervals: 24
+    margin_tail_threshold_deg: 2.2
+    margin_tail_sample_weight_multiplier: 4.0
+    sampling_weights:
+      old: 0.30
+      interior: 0.50
+      boundary: 0.20
+    variants:
+      S0_margin_tail:
+        learning_rate: 0.00005
+        max_optimizer_steps: 9000
+        teacher_beta_weight: 0.10
+        distill_beta_weight: 2.00
+        fk_weight: 0.75
+        margin_weight: 4.00
+        row_loss_weight: 0.50
+      S1_margin_tail_strong:
+        learning_rate: 0.00003
+        max_optimizer_steps: 12000
+        teacher_beta_weight: 0.10
+        distill_beta_weight: 2.50
+        fk_weight: 0.75
+        margin_weight: 8.00
+        row_loss_weight: 0.50
+
+  selection:
+    required_seed_passes: 2
+    fk_p95_mm: 5.0
+    fk_max_mm: 10.0
+    minimum_joint_margin_deg: 1.5
+    final_ellipse_p95_relative: 0.01
+    final_ellipse_max_relative: 0.02
+
+  trajectories:
+    phase_count: 360
+    per_type: 4
+    required_pass_count: 16
+    support_max_mm: 3.5
+
+  parallel:
+    cpu_workers: 12
+    gpu_training_workers: 1
+
+smoke:
+  output_root: runs/bacra_v12_15_single_student_smoke
+  v12_15:
+    spatial_holdout:
+      random_rows: 32
+    distillation:
+      validation_interval_steps: 2
+      patience_intervals: 2
+      variants:
+        S0_margin_tail:
+          max_optimizer_steps: 4
+        S1_margin_tail_strong:
+          max_optimizer_steps: 4
+    trajectories:
+      phase_count: 36
+      per_type: 1
+      required_pass_count: 2
+    parallel:
+      cpu_workers: 4

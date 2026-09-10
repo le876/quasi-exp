@@ -1,0 +1,71 @@
+{
+  "observed_at": "2026-09-10 Asia/Shanghai；封存 attempt 完成后读取",
+  "kind": "retry20-candidate-layout-teacher-student-diagnostic-report",
+  "frozen_attempt_modified": false,
+  "scientific_source_fixed_point": "5444eeba64aa1e41d4a40dd1cb9ff51733250440",
+  "binding_fixed_point": "855051b94c61dc2de045f9e66c45e2c540d3395e",
+  "code_snapshot_sha": "04866720b9bd7ebad758509fa22c605a3c59208d",
+  "artifact_verification": {
+    "completion_manifest_count": 65,
+    "completion_manifest_bad": [],
+    "input_manifest_count": 7,
+    "input_manifest_bad": []
+  },
+  "scientific_gate": "not_passed; diagnostic-only presentation does not alter the failed original geometry Gate",
+  "files": [
+    {
+      "kind": "report_derivative",
+      "path": "build_report.py",
+      "bytes": 37344,
+      "sha256": "9202d47e1a8b8a923d6a1ff3b733b71d3cad1e55a313e53bcf07102d9280df18"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "validate_browser.js",
+      "bytes": 8950,
+      "sha256": "d3b069e03ce9ec7d0f3e5960bf73b851391ab469be0e976caa2c6286442ade1f"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "evidence_map.json",
+      "bytes": 8741,
+      "sha256": "1d2c8049f180686a9023009359029b368a60c43eade0b88d3efc5987ac13cd76"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "retry20_candidate_diagnostic_advisor_dataset_report.html",
+      "bytes": 7470015,
+      "sha256": "8dcee478430ce60568f5d73a90e2fbbaa5101a088a0ad9bb6a455a03e066bdfd"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "browser_validation.json",
+      "bytes": 3298,
+      "sha256": "a13ec56f6bc796d3a38cde8f03cd640e54b5d7fcf752da5b8d6b01732eee6243"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "coverage_validation.png",
+      "bytes": 237339,
+      "sha256": "6d7aa224a89a85abf6b7c38856bb9bebd98931a2a34648ba4ad2ed58de3a6b97"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "tracking_global_validation.png",
+      "bytes": 152703,
+      "sha256": "4cfb8b13102ddbe1c550b5ac9249f1701354839ac73af70fc96cd1b387f76ece"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "tracking_local_validation.png",
+      "bytes": 143254,
+      "sha256": "a32a880449f057eabf00c96231512312ec41e7d4cd90dcc2456c043bb3608537"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "narrow_validation.png",
+      "bytes": 93138,
+      "sha256": "9b54538ba97fd7307ba2d746e2257031dbf1b1d0bc8eb4f1646b36e051a8ed90"
+    }
+  ]
+}

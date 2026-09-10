@@ -1,0 +1,137 @@
+{
+  "observed_at": "2026-09-10T11:24:12.283Z",
+  "passed": true,
+  "report_sha256": "8dcee478430ce60568f5d73a90e2fbbaa5101a088a0ad9bb6a455a03e066bdfd",
+  "checks": {
+    "loaded": true,
+    "static_content": true,
+    "coverage": {
+      "traces": [
+        "L0 · primary（显示抽样）",
+        "L0 · retry18_outer（显示抽样）",
+        "L1 · primary（显示抽样）",
+        "L1 · retry18_outer（显示抽样）",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "canvases": 1,
+      "hasRobot": true,
+      "hasL0": true,
+      "hasL1": true,
+      "symbols": [
+        "circle",
+        "square-open",
+        "diamond",
+        "diamond-open"
+      ]
+    },
+    "coverage_angle": true,
+    "tracking_global": {
+      "id": "fixed_circle_r40_u100",
+      "traces": [
+        "Teacher",
+        "Target",
+        "L1 raw Student",
+        "L1 DLS2",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "canvases": 1,
+      "teacherWidth": 10,
+      "targetDash": "dash",
+      "zero": true
+    },
+    "tracking_local": {
+      "id": "retry19_exact_seam_rectangle_2",
+      "local": true,
+      "projection": "yz",
+      "zero": true,
+      "teacherMax": 29.683727936401354,
+      "betaNames": [
+        "Teacher max |Δβ|",
+        "L1 raw max |Δβ|",
+        "7° reference"
+      ],
+      "betaMax": 29.683727936401358,
+      "rawBetaMax": 0.3857029302049489
+    },
+    "toggles": [
+      "Teacher",
+      "Target",
+      "L0 raw Student",
+      "L0 DLS2",
+      "机器人 beta=0",
+      "零位末端"
+    ],
+    "theme": {
+      "dark": true,
+      "trackingGlobal": true,
+      "overflow": false
+    },
+    "narrow": {
+      "client": 375,
+      "scroll": 375,
+      "title": "BACRA retry20 候选布局：Teacher / Student 诊断报告",
+      "plots": [
+        {
+          "id": "coverage",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "loss",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "tracking",
+          "scroll": 313,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "beta",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        }
+      ],
+      "tables": [
+        {
+          "tableRight": 775,
+          "parentClass": "table-wrap",
+          "parentRight": 330,
+          "parentClient": 283,
+          "parentScroll": 729,
+          "parentOverflow": "auto"
+        },
+        {
+          "tableRight": 882,
+          "parentClass": "table-wrap",
+          "parentRight": 345,
+          "parentClient": 313,
+          "parentScroll": 851,
+          "parentOverflow": "auto"
+        },
+        {
+          "tableRight": 1007,
+          "parentClass": "table-wrap",
+          "parentRight": 345,
+          "parentClient": 313,
+          "parentScroll": 976,
+          "parentOverflow": "auto"
+        }
+      ]
+    }
+  },
+  "exceptions": [],
+  "consoleErrors": [],
+  "engine": "Google Chrome headless with WebGL SwiftShader",
+  "boundary": "HTML rendering and interaction verification only; it is not an artifact rehash or scientific Gate."
+}

@@ -1,0 +1,187 @@
+{
+  "observed_at": "2026-09-10 Asia/Shanghai；封存 attempt 完成后读取",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1",
+  "execution_worktree_read_only": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1",
+  "scientific_source_fixed_point": "5444eeba64aa1e41d4a40dd1cb9ff51733250440",
+  "binding_fixed_point": "855051b94c61dc2de045f9e66c45e2c540d3395e",
+  "completion_manifest_artifacts_verified": 65,
+  "input_manifest_inputs_verified": 7,
+  "data": {
+    "full_rows_per_layer": 74696,
+    "coverage_display_rows_per_layer": 12000,
+    "trajectory_count": 16,
+    "trajectory_waypoints": 2641,
+    "off_grid_test_count": 3000
+  },
+  "claim_boundary": "anchored diagnostic Teacher, paired fixed-step Student, same-model pointwise correction; no canonical-field or closed-loop claim",
+  "references": [
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/run_identity.json",
+      "bytes": 465,
+      "sha256": "154d5c72ec439a9b8433af7485699acb6ef2be704ddf7dee24dbe147d8f00042"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/summary.json",
+      "bytes": 899,
+      "sha256": "0bfa6f6882fa0c228b4c43ff1adde70cde9ee4e96ab3f8d65579047983223103"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/completion_manifest.json",
+      "bytes": 9947,
+      "sha256": "1363b478f8c6278bb6b641456006ee1c7dcfb6ddc2656101c24e80865e22f32f"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/input_manifest.json",
+      "bytes": 1700,
+      "sha256": "f9f46a020eb5b57f3feecef4c5571dae9f3dae278f2ccf4ad341a44aff648bd8"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/00_objective_feasibility/gate.json",
+      "bytes": 976,
+      "sha256": "40f56584d6509ce36e76cb7da36d3c355caa86c70a0f3fe155fcb522cac2d46d"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/00_objective_feasibility/path_registry.parquet",
+      "bytes": 2275,
+      "sha256": "015cc205b08650a2a5e5fc75788a6d7f43438cdb5f19256694cbb3f0ad3a46c6"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/00_objective_feasibility/trajectory_registry.parquet",
+      "bytes": 95513,
+      "sha256": "b14e339cc96739ea077b99273f31856f532efd3a2aceaaa4cdacc29ab2cf9ec4"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/01_relocation_teacher/teacher.parquet",
+      "bytes": 7008710,
+      "sha256": "828bbea618e166d6df8dff95c9d800d4c2428feadcfc03b28fcdac7f515caa78"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/02_dataset/L0_supervision.parquet",
+      "bytes": 5992188,
+      "sha256": "06cc60af4b0104f331c22be751568f2f59f17d3bb3d0de5d6ac59144ee1c7675"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/02_dataset/L1_supervision.parquet",
+      "bytes": 6557026,
+      "sha256": "b5e385b99e8ee257155e8212f1df8aa71abdb4b6383237bf7589790aa7b94f92"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/02_dataset/coverage_audit.json",
+      "bytes": 358,
+      "sha256": "7b1368e704925a6655eaae79c667df992dd6adbddd7302e973e28bcb98dd30e1"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/02_dataset/dataset_summary.json",
+      "bytes": 407,
+      "sha256": "2ded04835e1f5cec7023694bce255268deba15909f3ff7b22e2bb8d692aae13d"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/02_dataset/teacher_edge_audit.parquet",
+      "bytes": 21313321,
+      "sha256": "79aea42b9558a4c97bd29881f839a96711adbae3b364a09b4a6cc6ef0f60dab8"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/03_student/training_history.parquet",
+      "bytes": 5061,
+      "sha256": "fca34a4fbe4ce5d4fc60ba4a432ee68720064c8a858a767c965076789de9e430"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/03_student/training_contract.json",
+      "bytes": 398,
+      "sha256": "bbf5391d5e551ef1b01adbcc9708b82d7d8d33e91a6df1b10435608131e0cfee"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/03_student/model_lock.json",
+      "bytes": 388,
+      "sha256": "4470ec53040cd15b2231a69d3e5d76b7371a7a55fe22255c9b3fbc5524270abb"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/05_evaluation/metrics.parquet",
+      "bytes": 15581,
+      "sha256": "6b2a22f4ae150c5c87b3cc5c277bb30e11503089caf4cf6e4577b7ccfad51d7c"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1/05_evaluation/waypoint_evaluation.parquet",
+      "bytes": 3128344,
+      "sha256": "7c39bc0ba9420c59a035f670207de3592074398dfa3f1453b9f47ac562943984"
+    },
+    {
+      "kind": "evidence_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/docs/protocols/38-BACRA-retry20-候选布局Teacher与Student诊断协议.md",
+      "bytes": 5061,
+      "sha256": "120eb2ed71d95dcaa02c54063ec2a67a6f70c9c6951ed12479821b77909c2fec"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/configs/robot_rods_only_standard_100k.yaml",
+      "bytes": 1619,
+      "sha256": "21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/src/quasi_exp/io/robot_inputs.py",
+      "bytes": 7167,
+      "sha256": "1da705d2deaddc6bb624f23b76894e81763d13876707bd3e7a8bb1e98390360f"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/src/quasi_exp/model/kinematics.py",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/src/quasi_exp/model/sampling.py",
+      "bytes": 18277,
+      "sha256": "e7d2275690160b30e8c1ac7b5943845ea61b33e5f363cd16e50362ec9c41016f"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/data/robot/generated/lengths.csv",
+      "bytes": 285,
+      "sha256": "ad0769805a22389f445e2ba7f2d7a712478c78654c8c75ab8603eda002b30f9c"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/data/robot/generated/holes.csv",
+      "bytes": 40074,
+      "sha256": "ff452ba578e8c9b97e8a40154318b0bf5cbc0d54fea98762223aaec77a0e03be"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/data/robot/generated/disks.csv",
+      "bytes": 1472,
+      "sha256": "f7091c439fb80020def07d737d64c0a4dc7a8f6449c5f486a59108f0cb373f42"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/data/robot/generated/material_rods_only.csv",
+      "bytes": 1211,
+      "sha256": "e758810fdb0124e4bda70c9615feac2d9de40999b4461707539fad0479b3c4a2"
+    },
+    {
+      "kind": "binding_zero_pose_input",
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry20-candidate-diagnostic-attempt1/data/robot/generated/end_effector.csv",
+      "bytes": 47,
+      "sha256": "736b1a23e66e6d3bc36cb30a040155b0c2c3b95da3c8bfb06f21033f6368c4dd"
+    }
+  ]
+}

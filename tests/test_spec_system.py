@@ -990,6 +990,87 @@ def test_skill_validation_allows_missing_openai_metadata(tmp_path: Path) -> None
     assert report.errors == ()
 
 
+def test_skill_resources_are_checked_for_git_persistence(tmp_path: Path) -> None:
+    module = _module()
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.name", "Spec Test")
+    _git(tmp_path, "config", "user.email", "spec-test@example.invalid")
+    skill = _write_skill(tmp_path, "resource-skill", add_reference=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    resources = [
+        skill / "references/example.md",
+        skill / "scripts/check.py",
+        skill / "assets/template.json",
+    ]
+    for path in resources[1:]:
+        path.parent.mkdir()
+        path.write_text("{}\n")
+    resources[0].write_text("# Modified reference\n")
+    cache = skill / "__pycache__/check.pyc"
+    cache.parent.mkdir()
+    cache.write_bytes(b"cache")
+    (tmp_path / ".gitignore").write_text("__pycache__/\n")
+
+    report = module.VerificationReport()
+    module.validate_committed(tmp_path, None, report)
+    for path, code in zip(resources, ["persistence.modified", "persistence.untracked", "persistence.untracked"]):
+        relative = path.relative_to(tmp_path).as_posix()
+        assert any(item.code == code and relative in item.message for item in report.errors)
+    assert cache.relative_to(tmp_path).as_posix() not in module.persistence_paths(tmp_path, None)
+
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "resources")
+    resources[1].unlink()
+    report = module.VerificationReport()
+    module.validate_committed(tmp_path, None, report)
+    assert any(
+        item.code == "persistence.modified" and "scripts/check.py" in item.message
+        for item in report.errors
+    )
+    _git(tmp_path, "rm", "--cached", resources[1].relative_to(tmp_path).as_posix())
+    report = module.VerificationReport()
+    module.validate_committed(tmp_path, None, report)
+    assert any(
+        item.code == "persistence.untracked" and "scripts/check.py" in item.message
+        for item in report.errors
+    )
+
+
+def test_skill_reference_links_are_checked(tmp_path: Path) -> None:
+    module = _module()
+    skill = _write_skill(tmp_path, "resource-skill", add_reference=True)
+    (skill / "references/example.md").write_text("[Missing helper](../scripts/missing.py)\n")
+    report = module.VerificationReport()
+    module.validate_markdown_links(tmp_path, None, report)
+    assert any(
+        item.code == "markdown.link_missing" and "scripts/missing.py" in item.message
+        for item in report.errors
+    )
+
+
+def test_objective_validator_tests_run_in_filtered_public_tree(tmp_path: Path) -> None:
+    module = _module()
+    for relative in (
+        "scripts/spec/validate_objective_feasibility.py",
+        "tests/test_objective_feasibility_contract.py",
+    ):
+        assert relative in module.persistence_paths(ROOT, None)
+        assert module._publication_path_is_included(relative)
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    assert not (tmp_path / ".agents").exists()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_objective_feasibility_contract.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_skill_validation_allows_omitted_policy(tmp_path: Path) -> None:
     module = _module()
     _write_skill(tmp_path, "no-policy", include_policy=False)

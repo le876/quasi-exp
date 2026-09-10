@@ -55,6 +55,31 @@ def test_wait_returns_recorded_failed_exit_code(tmp_path: Path) -> None:
     assert "terminal status=failed rc=23" in result.stdout
 
 
+def test_monitor_timeout_leaves_independent_worker_and_state_intact(tmp_path: Path) -> None:
+    # A detached launcher worker is outside the foreground wait's process group.
+    worker = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        state_dir = tmp_path / "state"
+        _write_state(state_dir, status="running", rc=None, pid=worker.pid)
+        before = {path.name: path.read_bytes() for path in state_dir.iterdir()}
+        env = os.environ.copy()
+        env["TMUX_LONGRUN_STATE_DIR"] = str(state_dir)
+        result = subprocess.run(
+            ["timeout", "--signal=TERM", "--kill-after=1s", "0.2s", "bash", str(LAUNCHER), "wait"],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        assert result.returncode == 124
+        assert worker.poll() is None
+        assert {path.name: path.read_bytes() for path in state_dir.iterdir()} == before
+    finally:
+        worker.terminate()
+        worker.wait(timeout=3)
+
+
 def test_wait_treats_stopped_by_user_as_failure(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_state(state_dir, status="stopped_by_user", rc=130)

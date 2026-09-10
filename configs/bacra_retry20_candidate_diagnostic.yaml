@@ -1,0 +1,24 @@
+schema_version: 1
+experiment_id: bacra_retry20_candidate_teacher_student_diagnostic
+sources:
+  governing_protocol: docs/protocols/38-BACRA-retry20-候选布局Teacher与Student诊断协议.md
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+  implementation: src/quasi_exp/teacher/retry20_diagnostic.py
+project_root: /mnt/ML_projects/quasi_exp
+upstream_root: /mnt/ML_projects/quasi_exp/runs/bacra_v14_3r_retry19_fullspace_direct_student_q31_attempt5
+preflight_root: /mnt/ML_projects/quasi_exp/runs/bacra_retry20_preflight_attempt2
+preflight_manifest_sha256: d93a080d020cf199794dc4ebf5475f490af8978a6eafd21f46962d07ea803e13
+zero_x_m: 1.2154980000000004
+runtime:
+  workers: 12
+  solver_hours: 10
+  deadline_hours: 12
+teacher:
+  batch_size: 1000
+  fallback_seeds: 16
+student:
+  steps: 500
+claims:
+  failed_geometry_diagnostic_authorized: true
+  diagnostic_only: true
+  formal_authorized: false

@@ -1497,6 +1497,7 @@ def maintained_markdown_paths(
     for lifecycle in ("proposed", "implemented", "rejected"):
         values.update((root / ".agents/notes" / lifecycle).glob("*.md"))
     values.update((root / ".agents/skills").glob("*/SKILL.md"))
+    values.update((root / ".agents/skills").glob("*/references/**/*.md"))
     return sorted(values)
 
 
@@ -1555,16 +1556,25 @@ def persistence_paths(
         BUDGET_PATH,
         "scripts/spec/verify_spec_system.py",
         "tests/test_spec_system.py",
+        "scripts/spec/validate_objective_feasibility.py",
+        "tests/test_objective_feasibility_contract.py",
+        "scripts/spec/check_documentation_change.py",
+        "tests/test_documentation_change.py",
+        ".githooks/pre-commit",
+        ".githooks/pre-push",
         *STANDING_MARKDOWN,
     }
     if (root / ARCHIVE_MANIFEST_PATH).is_file():
         paths.add(ARCHIVE_MANIFEST_PATH)
     for path in maintained_markdown_paths(root, registry):
         paths.add(_relative(root, path))
-    paths.update(
-        _relative(root, path)
-        for path in (root / ".agents/skills").glob("*/agents/openai.yaml")
+    # Include supporting resources, including tracked files deleted locally.
+    # Git excludes generated caches while retaining untracked authoring work.
+    skill_files = _git(
+        root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".agents/skills/"]
     )
+    if skill_files is not None and skill_files.returncode == 0:
+        paths.update(filter(None, skill_files.stdout.split("\0")))
     paths.update(
         _relative(root, path)
         for path in (root / ".agents/notes/archived").glob("*.md")
@@ -1599,7 +1609,11 @@ def validate_committed(
     tracked = {value for value in tracked_result.stdout.split("\0") if value}
     in_head = {value for value in head_result.stdout.split("\0") if value}
     changed = {value for value in changed_result.stdout.split("\0") if value}
-    for relative in sorted(persistence_paths(root, registry)):
+    # Staged deletions no longer appear in ls-files or the working tree.
+    required = persistence_paths(root, registry) | {
+        path for path in in_head if path.startswith(".agents/skills/")
+    }
+    for relative in sorted(required):
         if relative not in tracked:
             report.error("persistence.untracked", f"{relative}: not tracked by Git")
         elif relative not in in_head:

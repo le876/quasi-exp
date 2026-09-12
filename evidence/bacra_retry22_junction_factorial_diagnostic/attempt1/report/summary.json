@@ -1,0 +1,49 @@
+{
+  "experiment_id": "bacra_retry22_junction_factorial_diagnostic",
+  "scientific_source_fixed_point": "e63318d68016d8a60f35c832318c03a729d9fdd3",
+  "binding_fixed_point": "f94d8743ee9cf35f25f6c6f26d2c8e9bed1e1190",
+  "config_sha256": "172e3464c885a10cc6be8e9bea3763a0b35ccab24b747ede2d7b20642a1e2582",
+  "diagnostic_only": true,
+  "formal_authorized": false,
+  "candidate_by_seed": {
+    "20260925": {
+      "control": false,
+      "junction": false,
+      "task_only": false,
+      "junction_task_only": false
+    },
+    "20260926": {
+      "control": false,
+      "junction": false,
+      "task_only": false,
+      "junction_task_only": false
+    }
+  },
+  "candidate_both_seeds": {
+    "control": false,
+    "junction": false,
+    "task_only": false,
+    "junction_task_only": false
+  },
+  "control_reproduction": [
+    {
+      "seed": 20260925,
+      "max_beta_difference_rad": 0.0,
+      "max_error_difference_mm": 0.0
+    },
+    {
+      "seed": 20260926,
+      "max_beta_difference_rad": 0.0,
+      "max_error_difference_mm": 0.0
+    }
+  ],
+  "status": "completed",
+  "elapsed_seconds": 1461.5876370950136,
+  "training_updates": 77000,
+  "model_count": 8,
+  "on_grid_test_count": 8272,
+  "off_grid_test_count": 3000,
+  "trajectory_count": 35,
+  "new_supervision": 0,
+  "global_replacement_authorized": false
+}

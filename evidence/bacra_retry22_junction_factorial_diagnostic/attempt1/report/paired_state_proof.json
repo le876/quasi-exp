@@ -1,0 +1,58 @@
+[
+  {
+    "arm": "control",
+    "seed": 20260925,
+    "initial_state_sha256": "9ded4bba93b6ef29c3fc207891f870dbec610d6aa93dc758fe835d4a2da8df39",
+    "batch_sha256": "5ede6b9075ec55d78bbed36a4b851a8e51dae839c671bddfbc59d85efc9c575f",
+    "sampling": "regions"
+  },
+  {
+    "arm": "junction",
+    "seed": 20260925,
+    "initial_state_sha256": "9ded4bba93b6ef29c3fc207891f870dbec610d6aa93dc758fe835d4a2da8df39",
+    "batch_sha256": "db0a7501e8205effb7fe65ab4271c735882eadc99c7c79e17ce93794e3a3fc20",
+    "sampling": "junction"
+  },
+  {
+    "arm": "task_only",
+    "seed": 20260925,
+    "initial_state_sha256": "9ded4bba93b6ef29c3fc207891f870dbec610d6aa93dc758fe835d4a2da8df39",
+    "batch_sha256": "5ede6b9075ec55d78bbed36a4b851a8e51dae839c671bddfbc59d85efc9c575f",
+    "sampling": "regions"
+  },
+  {
+    "arm": "junction_task_only",
+    "seed": 20260925,
+    "initial_state_sha256": "9ded4bba93b6ef29c3fc207891f870dbec610d6aa93dc758fe835d4a2da8df39",
+    "batch_sha256": "db0a7501e8205effb7fe65ab4271c735882eadc99c7c79e17ce93794e3a3fc20",
+    "sampling": "junction"
+  },
+  {
+    "arm": "control",
+    "seed": 20260926,
+    "initial_state_sha256": "aabb659861d309fc4d522ac25c622b06ac6668f389af130ac166d90608ffa0af",
+    "batch_sha256": "b909988d379e66d39d4f8c9b22f86f8c5518208444be25e573c1ebaec484678d",
+    "sampling": "regions"
+  },
+  {
+    "arm": "junction",
+    "seed": 20260926,
+    "initial_state_sha256": "aabb659861d309fc4d522ac25c622b06ac6668f389af130ac166d90608ffa0af",
+    "batch_sha256": "d3d9e2896146bc81f3564b349025fab7abb3cff2442a0be49fb79d377486e255",
+    "sampling": "junction"
+  },
+  {
+    "arm": "task_only",
+    "seed": 20260926,
+    "initial_state_sha256": "aabb659861d309fc4d522ac25c622b06ac6668f389af130ac166d90608ffa0af",
+    "batch_sha256": "b909988d379e66d39d4f8c9b22f86f8c5518208444be25e573c1ebaec484678d",
+    "sampling": "regions"
+  },
+  {
+    "arm": "junction_task_only",
+    "seed": 20260926,
+    "initial_state_sha256": "aabb659861d309fc4d522ac25c622b06ac6668f389af130ac166d90608ffa0af",
+    "batch_sha256": "d3d9e2896146bc81f3564b349025fab7abb3cff2442a0be49fb79d377486e255",
+    "sampling": "junction"
+  }
+]

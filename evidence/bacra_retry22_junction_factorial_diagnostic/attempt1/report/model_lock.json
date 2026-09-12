@@ -1,0 +1,38 @@
+{
+  "selection": "fixed_final_step",
+  "optimizer_updates": 77000,
+  "models": {
+    "control_20260925": {
+      "path": "03_training/control_20260925/model.keras",
+      "sha256": "3be5cb818622225b31da6241d5f8282a020acb2128ae8efa1d7c152b62934fe5"
+    },
+    "junction_20260925": {
+      "path": "03_training/junction_20260925/model.keras",
+      "sha256": "218ba083ecc184ad48575cdca5d9b96b2b23fdb9d8bbcc021ee40606979b88b0"
+    },
+    "task_only_20260925": {
+      "path": "03_training/task_only_20260925/model.keras",
+      "sha256": "4fe710680a015af0d166b798ba462534cdb9f9409f319365f1810dac765663b1"
+    },
+    "junction_task_only_20260925": {
+      "path": "03_training/junction_task_only_20260925/model.keras",
+      "sha256": "c50537b8e70271955fd4fdf7cacfbae5947fad725596affe107d2b1ab5737ea2"
+    },
+    "control_20260926": {
+      "path": "03_training/control_20260926/model.keras",
+      "sha256": "fecae2d1df9a775465264beb415f7a239fe25ce53b9a05b994894e6283fb4ea0"
+    },
+    "junction_20260926": {
+      "path": "03_training/junction_20260926/model.keras",
+      "sha256": "d17cea942ba4d98d7054b5c0836f99b1a834578307248e598aabc79c9c35f593"
+    },
+    "task_only_20260926": {
+      "path": "03_training/task_only_20260926/model.keras",
+      "sha256": "bcbc8e9ec2710b8cdfe73bad4b920d1a69c976814dda149d8441c1efc9cc3fd2"
+    },
+    "junction_task_only_20260926": {
+      "path": "03_training/junction_task_only_20260926/model.keras",
+      "sha256": "9d793756d930a3d746baa1cff1d454e259ccf2e3c38d09e34bdb91c47a1d6d91"
+    }
+  }
+}

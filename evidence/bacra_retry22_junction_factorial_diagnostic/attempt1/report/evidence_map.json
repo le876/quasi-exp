@@ -1,0 +1,97 @@
+{
+  "observed_at": "2026-09-13（Asia/Shanghai；冻结 attempt 完成后读取）",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1",
+  "report_worktree": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction",
+  "scientific_source_fixed_point": "e63318d68016d8a60f35c832318c03a729d9fdd3",
+  "binding_fixed_point": "f94d8743ee9cf35f25f6c6f26d2c8e9bed1e1190",
+  "completion_manifest_artifacts_verified": 84,
+  "claim_boundary": {
+    "diagnostic_only": true,
+    "formal_authorized": false,
+    "global_replacement_authorized": false,
+    "new_supervision_authorized": false
+  },
+  "coverage": {
+    "full_rows": 74696,
+    "display_rows": 12000,
+    "method": "stable target_id sorted, proportional split_role x domain_class allocation, equally-spaced row selection"
+  },
+  "candidate_both_seeds": {
+    "control": false,
+    "junction": false,
+    "task_only": false,
+    "junction_task_only": false
+  },
+  "references": [
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/summary.json",
+      "bytes": 1316,
+      "sha256": "f3f6d90a17e713eb96260904c0cf8b2f869df74cd63a25f8be2fef2e57a4d763"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/model_lock.json",
+      "bytes": 1534,
+      "sha256": "32f93bf290f54b5bff5ae9d853ef66397bbb759125f1537ae197011c7e2b3b29"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/completion_manifest.json",
+      "bytes": 13560,
+      "sha256": "1f01e7e05422bf8655b25fad66b8ca87e59c7df07cf4e5c0352e21dc65edcb1b"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/01_inputs/targets.parquet",
+      "bytes": 4200652,
+      "sha256": "88883a70c31ec8506b7838ef195c2cf5b2ecb37a724270478c069bf978cbd97d"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/01_inputs/junction_train_pool.parquet",
+      "bytes": 421403,
+      "sha256": "f49f1ed86e2969f3ad0ee056a18b5f8cbec4d89d630b9ce89352382b8842a15c"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/03_training/validation_history.csv",
+      "bytes": 105928,
+      "sha256": "2e8f9c959d28da5e0985afca3ed879753bb6dc0ec57511cb31c129fd07089b1e"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/04_evaluation/metrics.csv",
+      "bytes": 107303,
+      "sha256": "dea63e5996e0fe027e4c37b208eab4f604af2206ed21ddfcf6d085e2c41f4c23"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry22_junction_attempt1/05_diagnosis/paired_metrics.csv",
+      "bytes": 8364,
+      "sha256": "7932c58ba04878b7d0e3341a19a678a75f57fc2397ef8f71ffd136854818f4fe"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/diagnostics/retry22_junction_verification/numerical_verification.json",
+      "bytes": 637,
+      "sha256": "d8c1ecf19eca255e5c5bd38a8678f43ca36687550dd1f534000a3c1e5af2eec9"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction/configs/bacra_retry22_junction.yaml",
+      "bytes": 1316,
+      "sha256": "172e3464c885a10cc6be8e9bea3763a0b35ccab24b747ede2d7b20642a1e2582"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction/docs/protocols/41-BACRA-retry22-交界采样与标签牵制对照协议.md",
+      "bytes": 4529,
+      "sha256": "c028d3709260d6ffa65288c6c0ef5a0006fba8be75ad1bbb557f097974ef8a74"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction/.agents/skills/quasi-exp-dataset-visualization-report/assets/report_template.html",
+      "bytes": 10141,
+      "sha256": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction/configs/robot_rods_only_standard_100k.yaml",
+      "bytes": 1619,
+      "sha256": "21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry22-junction/src/quasi_exp/model/kinematics.py",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    }
+  ]
+}

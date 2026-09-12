@@ -1,0 +1,66 @@
+{
+  "observed_at": "2026-09-12T17:46:34.992Z",
+  "report_sha256": "bd74566a26258237ebc0c5945eca92c2e8591f22d26b82eb8073f768e94908b7",
+  "passed": true,
+  "engine": "Google Chrome headless with WebGL SwiftShader",
+  "checks": {
+    "loaded": true,
+    "defaults": {
+      "a": "control_20260925",
+      "b": "junction_20260925",
+      "n": 35
+    },
+    "coverage": {
+      "canvas": 1,
+      "zero": true,
+      "names": [
+        "train / primary",
+        "train / outer",
+        "validation / primary",
+        "validation / outer",
+        "test / primary",
+        "test / outer",
+        "机器人 beta=0",
+        "零位末端"
+      ]
+    },
+    "circle": {
+      "canvas": 1,
+      "zero": true,
+      "teacher": true,
+      "name": "fixed_circle_r40_u100"
+    },
+    "rectangle": {
+      "zero": true,
+      "teacher": true,
+      "name": "retry19_exact_seam_rectangle_0"
+    },
+    "gap": {
+      "gap": true,
+      "zero": true
+    },
+    "nav": {
+      "a": [
+        "1 / 35",
+        true
+      ],
+      "b": [
+        "2 / 35",
+        false
+      ],
+      "last": [
+        "35 / 35",
+        true
+      ]
+    },
+    "dark": true,
+    "narrow": {
+      "client": 375,
+      "scroll": 375,
+      "controls": true
+    }
+  },
+  "exceptions": [],
+  "consoleErrors": [],
+  "boundary": "HTML interaction and rendering validation only; it does not establish scientific Gate status."
+}

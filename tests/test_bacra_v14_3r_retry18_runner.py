@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from quasi_exp.teacher.trajectory_evaluation import path_metrics
 from scripts.analysis.run_bacra_v14_3r_retry18_zero_tip_parity import (
     EXPERIMENT_ID,
     STAGE_DIRS,
-    _path_metrics,
     _prepare_model_output,
     load_config,
     retry17,
@@ -60,7 +60,7 @@ def test_path_metric_blocks_one_sparse_spike_even_when_p99_is_small() -> None:
     xyz = np.column_stack([np.linspace(0, 1, 200), np.zeros(200), np.zeros(200)])
     beta = np.column_stack([xyz, np.zeros((200, 3))])
     beta[100, 1] = 0.02
-    metrics = _path_metrics(xyz, beta, FakeEnvironment(), closed=False)
+    metrics = path_metrics(xyz, beta, FakeEnvironment(), closed=False)
     assert metrics["path_step_excess_maximum_mm"] > 5.0
     assert metrics["path_step_excess_p99_mm"] < metrics["path_step_excess_maximum_mm"]
 

@@ -309,6 +309,10 @@ def test_trajectory_teacher_restores_waypoint_order_on_candidate_rows(
             {
                 "target_id": target_id,
                 "candidate_id": "candidate",
+                "solver_success": True,
+                "bounds_pass": True,
+                "fk_residual_mm": 0.0,
+                "min_margin_deg": 30.0,
                 **{column: 0.0 for column in retry19.BETA_COLUMNS},
             }
         ]
@@ -318,12 +322,15 @@ def test_trajectory_teacher_restores_waypoint_order_on_candidate_rows(
     monkeypatch.setattr(retry19, "_verify_lock", lambda *_args: True)
     monkeypatch.setattr(retry19.retry17, "_solve_candidates", lambda *_args, **_kwargs: candidate.copy())
 
-    def cycle_teacher(candidates, **_kwargs):
+    def cycle_teacher(candidates, *, pairwise_lambda, weights, tau_deg):
         assert candidates["waypoint_index"].tolist() == [0]
         assert candidates["trajectory_id"].tolist() == [trajectory_id]
+        assert pairwise_lambda == config["graph_teacher"]["selected_pairwise_lambda"]
+        assert weights == config["candidate_solver"]["beta_weights"]
+        assert tau_deg == config["graph_teacher"]["huber_delta_deg"]
         return candidates.copy()
 
-    monkeypatch.setattr(retry19.retry17, "_cycle_teacher", cycle_teacher)
+    monkeypatch.setattr(retry19.trajectory_evaluation, "cycle_teacher", cycle_teacher)
 
     gate = retry19.stage_trajectory_teacher(config, tmp_path, smoke=False)
 
@@ -369,12 +376,22 @@ def test_trajectory_teacher_gap_is_diagnostic_for_raw_and_dls_evaluation(
             assert training is False
             return np.zeros((len(xyz), 6))
 
-    metric = {
+    metric: retry19.trajectory_evaluation.PathMetrics = {
         "fk_p95_mm": 0.0,
         "fk_maximum_mm": 0.0,
+        "path_step_excess_p99_mm": 0.0,
         "path_step_excess_maximum_mm": 0.0,
         "raw_step_gt7_rate": 0.0,
+        "raw_step_maximum_deg": 0.0,
     }
+
+    def path_metrics(xyz, beta, environment, *, closed=True):
+        assert xyz.shape == (1, 3)
+        assert beta.shape == (1, 6)
+        assert isinstance(environment, Environment)
+        assert closed is True
+        return metric.copy()
+
     monkeypatch.setattr(retry19, "_gate", lambda *_args: {"status": "teacher_red"})
     monkeypatch.setattr(retry19, "_verify_lock", lambda *_args: True)
     monkeypatch.setattr(retry19, "_environment", lambda *_args: Environment())
@@ -384,11 +401,11 @@ def test_trajectory_teacher_gap_is_diagnostic_for_raw_and_dls_evaluation(
         lambda *_args: {int(config["student"]["primary_seed"]): Model()},
     )
     monkeypatch.setattr(
-        retry19.retry17,
-        "_two_step_dls",
+        retry19.trajectory_evaluation,
+        "two_step_dls",
         lambda _env, raw, _xyz, *, zero_xyz: raw,
     )
-    monkeypatch.setattr(retry19.retry18, "_path_metrics", lambda *_args, **_kwargs: metric.copy())
+    monkeypatch.setattr(retry19.trajectory_evaluation, "path_metrics", path_metrics)
 
     gate = retry19.stage_trajectory_evaluation(config, tmp_path, smoke=False)
 
@@ -398,6 +415,9 @@ def test_trajectory_teacher_gap_is_diagnostic_for_raw_and_dls_evaluation(
     report = pd.read_parquet(tmp_path / STAGE_DIRS["trajectory_evaluation"] / "trajectory_report.parquet")
     assert len(report) == 1
     assert report["dls2_success_rate"].item() == 0.0
+    for prefix in ("raw", "dls2"):
+        for name, value in metric.items():
+            assert report[f"{prefix}_{name}"].item() == value
 
 
 def test_retry19_audit_only_rows_are_never_student_splits() -> None:

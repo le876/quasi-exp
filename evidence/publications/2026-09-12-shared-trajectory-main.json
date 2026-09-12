@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_sha": "042b0f768e67575dff41be95024c63655947c3aa",
+  "public_code_snapshot_sha": "f261fadf42e86ca23fbe4db72b32e668535e0ef3",
+  "previous_public_head": "133c2ac0384903dafc6be6a8fc6d586f2f6fe675",
+  "filter_policy": "scientific_public_snapshot_v1",
+  "inventory_algorithm": "path-mode-type-content-sha256-v1",
+  "file_count": 630,
+  "inventory_sha256": "9a12ac0b3d80a80f0d409ed3f6684454bc6eb756b228e82d90b40b142782a86c",
+  "validation": {
+    "scoped_tests_passed": 99,
+    "warnings": 16,
+    "elapsed_seconds": 4.63,
+    "code_tree_matches_source": true,
+    "previous_public_evidence_unchanged": true
+  },
+  "claim_boundary": "Implementation publication only; no new experiment, model binding, or scientific Gate. Existing Q31 source/binding and report remain unchanged."
+}

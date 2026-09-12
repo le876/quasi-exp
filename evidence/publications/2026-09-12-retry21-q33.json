@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_sha": "7f1defb1458b5fce71c3881006c0e7b9a17863f0",
+  "public_code_snapshot_sha": "5b2861718a62059abe11aa14d315ae36612c4fee",
+  "previous_public_head": "113be2ad2af94da4b37e5d521d3edfcedaeb43e7",
+  "filter_policy": "scientific_public_snapshot_v1",
+  "inventory_algorithm": "path-mode-type-content-sha256-v1",
+  "file_count": 635,
+  "inventory_sha256": "35ae3eb9f306df9a68af5bd15cd1e726c85c775c7065c3958bd5ea21a705b1b5",
+  "validation": {
+    "initial_scoped_tests_passed": 66,
+    "metadata_repair_tests_passed": 10,
+    "code_tree_matches_source": true,
+    "previous_public_evidence_unchanged": true
+  },
+  "claim_boundary": "Q33 raw Student diagnostic only. Near-axis repair reproduced in TensorFlow; outer failures retained. Global replacement and formal claims not authorized. Training source15ead1a/binding1a2ed2c retained in reuse_provenance; metadata source7f1defb/binding048d692."
+}

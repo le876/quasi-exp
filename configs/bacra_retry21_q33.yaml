@@ -1,0 +1,25 @@
+schema_version: 1
+experiment_id: bacra_retry21_q33_raw_student_diagnostic
+sources:
+  governing_protocol: docs/protocols/40-BACRA-retry21-Q33-raw-Student执行协议.md
+  implementation: src/quasi_exp/teacher/retry21_raw_student.py
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+upstream_root: /mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1
+q31_root: /mnt/ML_projects/quasi_exp/runs/diagnostics/retry20_q31_large_tracking_attempt1
+q33_bundle: /mnt/ML_projects/quasi_exp/docs/Q33回复/Q33_raw_student_next_round.zip
+input_hashes:
+  L0: 06cc60af4b0104f331c22be751568f2f59f17d3bb3d0de5d6ac59144ee1c7675
+  L1: b5e385b99e8ee257155e8212f1df8aa71abdb4b6383237bf7589790aa7b94f92
+  L0_model: d8817f95b24fca0bdf897f59141fe2dccc87569bcea4835f9a119971becd1372
+  L1_model: 56816fea02e624d7f2dec325c78d449a5669261c4bf9feadf47bfbacfa9093f7
+  original_waypoints: 7c39bc0ba9420c59a035f670207de3592074398dfa3f1453b9f47ac562943984
+  q31_waypoints: fa0b287c2e68001f34657d94862954398a62b82f1fa9d2f3e1217fcbbb46aff1
+  q33_bundle: ed2827d8fad2956393c1ea8056933408b412358b16679fa3649ab4a73f8c9d9d
+seeds:
+- 20260925
+- 20260926
+deadline_seconds: 7200
+claims:
+  diagnostic_only: true
+  formal_authorized: false
+  global_replacement_authorized: false

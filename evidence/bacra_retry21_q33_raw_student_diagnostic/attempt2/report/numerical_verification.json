@@ -1,0 +1,14 @@
+{
+  "artifact_hashes_checked": 88,
+  "prediction_rows_checked": 755010,
+  "metric_rows_checked": 468,
+  "max_batch_vs_recorded_scalar_fk_delta_m": 7.771561172376096e-16,
+  "max_percentile_recompute_delta_mm": 2.842170943040401e-14,
+  "warmup_vs_original_L1_max_beta_delta_rad": 2.8312206268310547e-07,
+  "optimizer_updates": 30500,
+  "fork_state_identity": true,
+  "verification": "pass",
+  "scientific_source": "7f1defb1458b5fce71c3881006c0e7b9a17863f0",
+  "binding": "048d6925fb56002fc36307f61f7d42281f374436",
+  "claim_boundary": "Numerical and provenance verification; no formal or global replacement authorization."
+}

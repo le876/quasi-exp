@@ -1,0 +1,26 @@
+{
+  "experiment_id": "bacra_retry21_q33_raw_student_diagnostic",
+  "scientific_source_fixed_point": "7f1defb1458b5fce71c3881006c0e7b9a17863f0",
+  "binding_fixed_point": "048d6925fb56002fc36307f61f7d42281f374436",
+  "config_sha256": "48716134f8446315a9dfd773a4a28745bcff4db513250e678bd1807e3f1dc0cd",
+  "diagnostic_only": true,
+  "formal_authorized": false,
+  "status": "completed",
+  "elapsed_seconds": 0.7483996259979904,
+  "model_count": 9,
+  "small_paths_all_points_3mm_by_seed": {
+    "anchored_20260925": true,
+    "anchored_20260926": true
+  },
+  "q33_local_result_reproduced": true,
+  "global_replacement_authorized": false,
+  "outer_cause": "diagnostic evidence only; multiple branches not established as necessary",
+  "on_grid_test_count": 8272,
+  "off_grid_test_count": 3000,
+  "trajectory_count": 35,
+  "training_updates": 30500,
+  "new_optimizer_updates": 0,
+  "reused_training_source_fixed_point": "15ead1a0e8eca87cb8b34c47c998b03ccaa9560d",
+  "reused_training_binding_fixed_point": "1a2ed2c75767bb511ea2b200942e230d3bb79e94",
+  "metadata_repair_only": true
+}

@@ -1,0 +1,114 @@
+{
+  "observed_at": "2026-09-12（Asia/Shanghai；封存产物 observation）",
+  "attempt_root": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2",
+  "report_worktree": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33",
+  "scientific_source_fixed_point": "7f1defb1458b5fce71c3881006c0e7b9a17863f0",
+  "binding_fixed_point": "048d6925fb56002fc36307f61f7d42281f374436",
+  "reused_training_source_fixed_point": "15ead1a0e8eca87cb8b34c47c998b03ccaa9560d",
+  "reused_training_binding_fixed_point": "1a2ed2c75767bb511ea2b200942e230d3bb79e94",
+  "metadata_repair_only": true,
+  "new_optimizer_updates": 0,
+  "reuse_provenance": {
+    "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/reuse_provenance.json",
+    "bytes": 10723,
+    "sha256": "1ced2bf1f2aa4b97314ad6a2f9af5a4f210fab6bf3642c63e568499436fa03c0"
+  },
+  "completion_manifest_artifacts_verified": 88,
+  "claim_boundary": {
+    "diagnostic_only": true,
+    "formal_authorized": false,
+    "global_replacement_authorized": false
+  },
+  "coverage": {
+    "full_rows": 74696,
+    "display_rows": 12000,
+    "method": "stable target_id sorted, proportional split_role x domain_class allocation, equally-spaced row selection"
+  },
+  "references": [
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/summary.json",
+      "bytes": 1073,
+      "sha256": "8242b8ef0b35f259bb58701726185077ed3e653c1e489426f28f8f3b72c58fca"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/model_lock.json",
+      "bytes": 1362,
+      "sha256": "9432bd7219532e52ab06e27af6673516d3b96d98074c83cf50f989ac7aa471f7"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/completion_manifest.json",
+      "bytes": 13791,
+      "sha256": "bb0edff9168e4abeeea83955db24b52642e4fee4865b6c9df174e5f95e5ed078"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/reuse_provenance.json",
+      "bytes": 10723,
+      "sha256": "1ced2bf1f2aa4b97314ad6a2f9af5a4f210fab6bf3642c63e568499436fa03c0"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/01_inputs/targets.parquet",
+      "bytes": 4200652,
+      "sha256": "88883a70c31ec8506b7838ef195c2cf5b2ecb37a724270478c069bf978cbd97d"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/02_audit/axis_counterexample.json",
+      "bytes": 787,
+      "sha256": "49fd25412fe721bbac32c60539c6321034f5395ff09ba5e8c5eb60a4b1d0d488"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/02_audit/primary_outer_edges.parquet",
+      "bytes": 497102,
+      "sha256": "1ec2adbf9d6a0e08cefce4a50f615e5dfcd819144f325ed6dfe3cae04f3e2c23"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/03_training/validation_history.csv",
+      "bytes": 42192,
+      "sha256": "42ba14f28f4d4524b288316c45510d14b31756398c69d6a85e9adac41b1d8950"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/04_evaluation/metrics.csv",
+      "bytes": 117077,
+      "sha256": "21a806a1c6983581e3bed5198478fe5a6258af45a379d57922ec9d4425a8f382"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/05_outer/regression_counts.csv",
+      "bytes": 2014,
+      "sha256": "25ad75ec692fb184d70cb91e3843d05553ba2d6e8d228a4cc1f817c452173ba6"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2/05_outer/selected_model_comparison.csv",
+      "bytes": 248338,
+      "sha256": "9354ca2693b3293be9167746d2d49992c145d388f03d50b3cac59c6e85f8ed72"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33/configs/bacra_retry21_q33.yaml",
+      "bytes": 1264,
+      "sha256": "48716134f8446315a9dfd773a4a28745bcff4db513250e678bd1807e3f1dc0cd"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33/docs/protocols/40-BACRA-retry21-Q33-raw-Student执行协议.md",
+      "bytes": 6196,
+      "sha256": "792caf1477ad45280279e4f96d2a3cf386f92938c799d5c3f076a337d0fd5679"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33/.agents/skills/quasi-exp-dataset-visualization-report/assets/report_template.html",
+      "bytes": 10141,
+      "sha256": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/diagnostics/retry21_q33_verification/attempt2_numerical_verification.json",
+      "bytes": 623,
+      "sha256": "8ff47ae6c3a3ce49eaa1550c20d18968f149fd1f8d39e2746a036b2c21921943"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33/configs/robot_rods_only_standard_100k.yaml",
+      "bytes": 1619,
+      "sha256": "21794d9beb6b841dea1c42e57a44ca91439cfe76be4b04930a66fd57fbbb59bc"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/.worktrees/retry21-q33/src/quasi_exp/model/kinematics.py",
+      "bytes": 2430,
+      "sha256": "1584863879f26d425b70ad840ab07b12e7437726faa839a5df66318429b11f96"
+    }
+  ]
+}

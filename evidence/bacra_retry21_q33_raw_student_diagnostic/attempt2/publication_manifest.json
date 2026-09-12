@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "experiment_id": "bacra_retry21_q33_raw_student_diagnostic",
+  "attempt": "attempt2",
+  "scientific_source_sha": "7f1defb1458b5fce71c3881006c0e7b9a17863f0",
+  "binding_sha": "048d6925fb56002fc36307f61f7d42281f374436",
+  "training_source_sha": "15ead1a0e8eca87cb8b34c47c998b03ccaa9560d",
+  "training_binding_sha": "1a2ed2c75767bb511ea2b200942e230d3bb79e94",
+  "public_code_snapshot_sha": "5b2861718a62059abe11aa14d315ae36612c4fee",
+  "report_files_sha256": {
+    "bacra_retry21_q33_advisor_dataset_report.html": "8ed17911eebe112bb5b5bca489756a134a2cda52ab07d7b195ace6383415b615",
+    "browser_validation.json": "414bab9ddd3c590b84a447675358a5a866c5b9ff5926eb02401ccd061c12f717",
+    "build_retry21_q33_report.py": "9f1c136dca483d95564faeb82d42c9b298eeb4b0f81e41ecaac32662158f3dea",
+    "coverage_desktop.png": "bc67d48067b92d889a126477f1c80279b00f8166ca9e54d369eb346f41a2b094",
+    "evidence_map.json": "dbbf77931f5570fe85d6a9bb90210f2bc30e27f554c2831cbd649d4e3ba35c3c",
+    "experiment_protocol.md": "792caf1477ad45280279e4f96d2a3cf386f92938c799d5c3f076a337d0fd5679",
+    "metrics.csv": "21a806a1c6983581e3bed5198478fe5a6258af45a379d57922ec9d4425a8f382",
+    "narrow_dark.png": "541dd4dabc875bf4b0450211a3b42b3f623f4094065b39b9fac36d1719b32248",
+    "numerical_verification.json": "8ff47ae6c3a3ce49eaa1550c20d18968f149fd1f8d39e2746a036b2c21921943",
+    "regression_counts.csv": "25ad75ec692fb184d70cb91e3843d05553ba2d6e8d228a4cc1f817c452173ba6",
+    "report_manifest.json": "4562a2f6b40ab595caa204d5939289e546c639b978cd8e0a1fd2960eab6e6680",
+    "report_template.html": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7",
+    "reuse_provenance.json": "1ced2bf1f2aa4b97314ad6a2f9af5a4f210fab6bf3642c63e568499436fa03c0",
+    "summary.json": "8242b8ef0b35f259bb58701726185077ed3e653c1e489426f28f8f3b72c58fca",
+    "tracking_exact_seam_rectangle.png": "0b27d67971e460ea3f406d83da7ddf90571da258b839164b9798e792a15e328b",
+    "tracking_planar_fullzero.png": "e7e9e2dcb32e7295d1a1b600b391eeaa949cdd518c3937d239ac5c590d896690",
+    "verify_retry21_q33_evidence.py": "a73c44be3b6ba704d72d59f8751d222081b107538b13eb63f9997503ecb941ec"
+  },
+  "validation": {
+    "numerical_verification": "pass",
+    "objective_feasibility_contract": "valid diagnostic_only",
+    "browser_validation": "pass",
+    "parent_screenshot_review": "pass"
+  },
+  "claim_boundary": "Known-diagnostic near-axis raw Student repair reproduced; outer regressions retained; global replacement and formal claims not authorized.",
+  "unpublished_scope": [
+    "raw supervision datasets",
+    "trained model binaries",
+    "full sealed experiment artifacts",
+    "original Q33 consultation ZIP"
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "observed_at": "2026-09-12T12:45:21.803Z",
+  "report_sha256": "8ed17911eebe112bb5b5bca489756a134a2cda52ab07d7b195ace6383415b615",
+  "passed": true,
+  "engine": "Google Chrome headless with WebGL SwiftShader",
+  "checks": {
+    "loaded": true,
+    "default": {
+      "path": "fixed_circle_r40_u100",
+      "a": "original_L1",
+      "b": "anchored_20260925",
+      "n": 35
+    },
+    "coverage": {
+      "canvas": 1,
+      "names": [
+        "train / primary",
+        "train / outer",
+        "validation / primary",
+        "validation / outer",
+        "test / primary",
+        "test / outer",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "zero": true
+    },
+    "coverageLocal": true,
+    "tracking": {
+      "canvas": 1,
+      "names": [
+        "Target",
+        "Teacher",
+        "旧 L1（默认）",
+        "two-anchored seed 20260925（默认）",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "zero": true,
+      "teacher": true
+    },
+    "representative": {
+      "path": "retry19_exact_seam_rectangle_0",
+      "zero": true,
+      "teacher": true
+    },
+    "gap": {
+      "text": "证据缺口：此 matched-control 路径没有本地可验证 Teacher Cartesian 输出；仍显示 Target 与选中的 raw Student，未用推断值填补。 当前：circle_u150_center350_r5，128 点。",
+      "zero": true,
+      "position": "35 / 35",
+      "next": true
+    },
+    "navigation": {
+      "first": [
+        "1 / 35",
+        true
+      ],
+      "second": [
+        "2 / 35",
+        false
+      ]
+    },
+    "dark": {
+      "dark": true,
+      "coverage": 0,
+      "tracking": 6
+    },
+    "narrow": {
+      "client": 375,
+      "scroll": 375,
+      "controls": true
+    }
+  },
+  "exceptions": [],
+  "consoleErrors": [],
+  "boundary": "HTML interaction/rendering validation only; it does not establish scientific Gate status."
+}

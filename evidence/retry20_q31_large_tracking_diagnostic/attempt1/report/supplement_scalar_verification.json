@@ -1,0 +1,18 @@
+{
+  "scalar_fk_replay_passed": true,
+  "finite_predictions": 7511,
+  "maximum_cartesian_difference_m": 0,
+  "metric_rows_verified": 15,
+  "observed_at": "2026-09-12 Asia/Shanghai",
+  "binding_fixed_point": "4c9568d4222564e73cfb098386792367f25e39dd",
+  "inputs": [
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/diagnostics/retry20_q31_large_tracking_attempt1/05_evaluation/metrics.parquet",
+      "sha256": "02cbd764918db0ae8e3f3b2c3de144c9778780683cdb08db3636994a3336e56a"
+    },
+    {
+      "path": "/mnt/ML_projects/quasi_exp/runs/diagnostics/retry20_q31_large_tracking_attempt1/05_evaluation/waypoint_evaluation.parquet",
+      "sha256": "fa0b287c2e68001f34657d94862954398a62b82f1fa9d2f3e1217fcbbb46aff1"
+    }
+  ]
+}

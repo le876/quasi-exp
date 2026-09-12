@@ -1,0 +1,1004 @@
+{
+  "observed_at": "2026-09-12T05:16:24.028Z",
+  "passed": true,
+  "report_sha256": "e68fc2e5e25a0580b9895b26cd83c112c4aeeae7380cab6fee30356dd8e7c665",
+  "checks": {
+    "loaded": true,
+    "defaultLarge": true,
+    "static_content": true,
+    "coverage": {
+      "traces": [
+        "L0 · primary（显示抽样）",
+        "L0 · retry18_outer（显示抽样）",
+        "L1 · primary（显示抽样）",
+        "L1 · retry18_outer（显示抽样）",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "canvases": 1,
+      "hasRobot": true,
+      "hasL0": true,
+      "hasL1": true,
+      "symbols": [
+        "circle",
+        "square-open",
+        "diamond",
+        "diamond-open"
+      ]
+    },
+    "coverage_angle": true,
+    "tracking_global": {
+      "id": "fixed_circle_r40_u100",
+      "traces": [
+        "Teacher",
+        "Target",
+        "L1 raw Student",
+        "L1 DLS2",
+        "机器人 beta=0",
+        "零位末端"
+      ],
+      "canvases": 1,
+      "teacherWidth": 10,
+      "targetDash": "dash",
+      "zero": true
+    },
+    "tracking_local": {
+      "id": "retry19_exact_seam_rectangle_2",
+      "local": true,
+      "projection": "yz",
+      "zero": true,
+      "teacherMax": 29.683727936401354,
+      "betaNames": [
+        "Teacher max |Δβ|",
+        "L1 raw max |Δβ|",
+        "7° reference"
+      ],
+      "betaMax": 29.683727936401358,
+      "rawBetaMax": 0.3857029302049489
+    },
+    "toggles": [
+      "Teacher",
+      "Target",
+      "L0 raw Student",
+      "L0 DLS2",
+      "机器人 beta=0",
+      "零位末端"
+    ],
+    "theme": {
+      "dark": true,
+      "trackingGlobal": true,
+      "overflow": false
+    },
+    "legends": {
+      "dark_coverage": [
+        {
+          "name": "L0 · primary（显示抽样）",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 · retry18_outer（显示抽样）",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 · primary（显示抽样）",
+          "actual": "rgb(101, 216, 222)",
+          "expected": "rgb(101, 216, 222)",
+          "size": 14,
+          "contrast": 9.038661263388374,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 · retry18_outer（显示抽样）",
+          "actual": "rgb(101, 216, 222)",
+          "expected": "rgb(101, 216, 222)",
+          "size": 14,
+          "contrast": 9.038661263388374,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "机器人 beta=0",
+          "actual": "rgb(176, 188, 205)",
+          "expected": "rgb(176, 188, 205)",
+          "size": 14,
+          "contrast": 7.940969157330358,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "零位末端",
+          "actual": "rgb(255, 135, 153)",
+          "expected": "rgb(255, 135, 153)",
+          "size": 14,
+          "contrast": 6.673354871488812,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "dark_loss": [
+        {
+          "name": "L0 train beta loss",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 on-grid P95",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 off-grid P95",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 train beta loss",
+          "actual": "rgb(89, 213, 163)",
+          "expected": "rgb(89, 213, 163)",
+          "size": 14,
+          "contrast": 8.341238874704267,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 on-grid P95",
+          "actual": "rgb(89, 213, 163)",
+          "expected": "rgb(89, 213, 163)",
+          "size": 14,
+          "contrast": 8.341238874704267,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 off-grid P95",
+          "actual": "rgb(89, 213, 163)",
+          "expected": "rgb(89, 213, 163)",
+          "size": 14,
+          "contrast": 8.341238874704267,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "dark_tracking": [
+        {
+          "name": "Teacher",
+          "actual": "rgb(255, 176, 92)",
+          "expected": "rgb(255, 176, 92)",
+          "size": 14,
+          "contrast": 8.44691878224493,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "Target",
+          "actual": "rgb(237, 243, 251)",
+          "expected": "rgb(237, 243, 251)",
+          "size": 14,
+          "contrast": 13.680471120119668,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 raw Student",
+          "actual": "rgb(197, 169, 255)",
+          "expected": "rgb(197, 169, 255)",
+          "size": 14,
+          "contrast": 7.630034588008307,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 DLS2",
+          "actual": "rgb(228, 165, 239)",
+          "expected": "rgb(228, 165, 239)",
+          "size": 14,
+          "contrast": 7.94561100963703,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "机器人 beta=0",
+          "actual": "rgb(176, 188, 205)",
+          "expected": "rgb(176, 188, 205)",
+          "size": 14,
+          "contrast": 7.940969157330358,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "零位末端",
+          "actual": "rgb(255, 135, 153)",
+          "expected": "rgb(255, 135, 153)",
+          "size": 14,
+          "contrast": 6.673354871488812,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "dark_beta": [
+        {
+          "name": "Teacher max |Δβ|",
+          "actual": "rgb(255, 176, 92)",
+          "expected": "rgb(255, 176, 92)",
+          "size": 14,
+          "contrast": 8.44691878224493,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 raw max |Δβ|",
+          "actual": "rgb(107, 183, 255)",
+          "expected": "rgb(107, 183, 255)",
+          "size": 14,
+          "contrast": 7.156889412285338,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "7° reference",
+          "actual": "rgb(255, 156, 134)",
+          "expected": "rgb(255, 156, 134)",
+          "size": 14,
+          "contrast": 7.527059364587736,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "light_coverage": [
+        {
+          "name": "L0 · primary（显示抽样）",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 · retry18_outer（显示抽样）",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 · primary（显示抽样）",
+          "actual": "rgb(8, 122, 130)",
+          "expected": "rgb(8, 122, 130)",
+          "size": 14,
+          "contrast": 5.101446650396195,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 · retry18_outer（显示抽样）",
+          "actual": "rgb(8, 122, 130)",
+          "expected": "rgb(8, 122, 130)",
+          "size": 14,
+          "contrast": 5.101446650396195,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "机器人 beta=0",
+          "actual": "rgb(89, 103, 121)",
+          "expected": "rgb(89, 103, 121)",
+          "size": 14,
+          "contrast": 5.767703643288984,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "零位末端",
+          "actual": "rgb(183, 46, 70)",
+          "expected": "rgb(183, 46, 70)",
+          "size": 14,
+          "contrast": 6.012552047700627,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "light_loss": [
+        {
+          "name": "L0 train beta loss",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 on-grid P95",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 off-grid P95",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 train beta loss",
+          "actual": "rgb(8, 115, 78)",
+          "expected": "rgb(8, 115, 78)",
+          "size": 14,
+          "contrast": 5.87802268318056,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 on-grid P95",
+          "actual": "rgb(8, 115, 78)",
+          "expected": "rgb(8, 115, 78)",
+          "size": 14,
+          "contrast": 5.87802268318056,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 off-grid P95",
+          "actual": "rgb(8, 115, 78)",
+          "expected": "rgb(8, 115, 78)",
+          "size": 14,
+          "contrast": 5.87802268318056,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "light_tracking": [
+        {
+          "name": "Teacher",
+          "actual": "rgb(169, 79, 0)",
+          "expected": "rgb(169, 79, 0)",
+          "size": 14,
+          "contrast": 5.518479370800907,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "Target",
+          "actual": "rgb(23, 34, 53)",
+          "expected": "rgb(23, 34, 53)",
+          "size": 14,
+          "contrast": 15.94955748463937,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 raw Student",
+          "actual": "rgb(114, 81, 170)",
+          "expected": "rgb(114, 81, 170)",
+          "size": 14,
+          "contrast": 6.046803561409068,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L0 DLS2",
+          "actual": "rgb(139, 82, 155)",
+          "expected": "rgb(139, 82, 155)",
+          "size": 14,
+          "contrast": 5.558463611161121,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "机器人 beta=0",
+          "actual": "rgb(89, 103, 121)",
+          "expected": "rgb(89, 103, 121)",
+          "size": 14,
+          "contrast": 5.767703643288984,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "零位末端",
+          "actual": "rgb(183, 46, 70)",
+          "expected": "rgb(183, 46, 70)",
+          "size": 14,
+          "contrast": 6.012552047700627,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ],
+      "light_beta": [
+        {
+          "name": "Teacher max |Δβ|",
+          "actual": "rgb(169, 79, 0)",
+          "expected": "rgb(169, 79, 0)",
+          "size": 14,
+          "contrast": 5.518479370800907,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "L1 raw max |Δβ|",
+          "actual": "rgb(18, 104, 179)",
+          "expected": "rgb(18, 104, 179)",
+          "size": 14,
+          "contrast": 5.742757085268963,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        },
+        {
+          "name": "7° reference",
+          "actual": "rgb(174, 66, 45)",
+          "expected": "rgb(174, 66, 45)",
+          "size": 14,
+          "contrast": 5.806057232163948,
+          "withinViewport": true,
+          "textFits": true,
+          "pressed": "true",
+          "pass": true
+        }
+      ]
+    },
+    "navigation": {
+      "first": {
+        "index": 0,
+        "position": "1 / 16",
+        "previousDisabled": true,
+        "nextDisabled": false,
+        "title": "全局视图（零位 + 全部输出；手动显示比例） · fixed_circle_r40_u100",
+        "metrics": true,
+        "teacherMatches": true,
+        "betaMatches": true,
+        "id": "fixed_circle_r40_u100"
+      },
+      "next": {
+        "index": 1,
+        "position": "2 / 16",
+        "previousDisabled": false,
+        "nextDisabled": false,
+        "title": "全局视图（零位 + 全部输出；手动显示比例） · retry17_rounded_rectangle_0",
+        "metrics": true,
+        "teacherMatches": true,
+        "betaMatches": true,
+        "id": "retry17_rounded_rectangle_0"
+      },
+      "previous": {
+        "index": 0,
+        "position": "1 / 16",
+        "previousDisabled": true,
+        "nextDisabled": false,
+        "title": "全局视图（零位 + 全部输出；手动显示比例） · fixed_circle_r40_u100",
+        "metrics": true,
+        "teacherMatches": true,
+        "betaMatches": true,
+        "id": "fixed_circle_r40_u100"
+      },
+      "last": {
+        "index": 15,
+        "position": "16 / 16",
+        "previousDisabled": false,
+        "nextDisabled": true,
+        "title": "全局视图（零位 + 全部输出；手动显示比例） · retry19_zero_to_boundary_2",
+        "metrics": true,
+        "teacherMatches": true,
+        "betaMatches": true,
+        "id": "retry19_zero_to_boundary_2"
+      },
+      "fromLast": {
+        "index": 14,
+        "position": "15 / 16",
+        "previousDisabled": false,
+        "nextDisabled": false,
+        "title": "全局视图（零位 + 全部输出；手动显示比例） · retry19_zero_to_boundary_1",
+        "metrics": true,
+        "teacherMatches": true,
+        "betaMatches": true,
+        "id": "retry19_zero_to_boundary_1"
+      }
+    },
+    "navigationPassed": true,
+    "legendToggle": true,
+    "inlineLegend": [
+      {
+        "series": "l0",
+        "pass": true
+      },
+      {
+        "series": "l1",
+        "pass": true
+      },
+      {
+        "series": "l0raw",
+        "pass": true
+      },
+      {
+        "series": "l0dls",
+        "pass": true
+      },
+      {
+        "series": "l1raw",
+        "pass": true
+      },
+      {
+        "series": "l1dls",
+        "pass": true
+      },
+      {
+        "series": "target",
+        "pass": true
+      },
+      {
+        "series": "teacher",
+        "pass": true
+      },
+      {
+        "series": "l1raw",
+        "pass": true
+      },
+      {
+        "series": "l0raw",
+        "pass": true
+      },
+      {
+        "series": "l1dls",
+        "pass": true
+      },
+      {
+        "series": "l0dls",
+        "pass": true
+      }
+    ],
+    "narrow": {
+      "client": 375,
+      "scroll": 375,
+      "title": "BACRA retry20 候选布局：Teacher / Student 诊断报告",
+      "plots": [
+        {
+          "id": "coverage",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "loss",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "tracking",
+          "scroll": 313,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        },
+        {
+          "id": "beta",
+          "scroll": 315,
+          "client": 313,
+          "left": 30,
+          "right": 345
+        }
+      ],
+      "tables": [
+        {
+          "tableRight": 775,
+          "parentClass": "table-wrap",
+          "parentRight": 330,
+          "parentClient": 283,
+          "parentScroll": 729,
+          "parentOverflow": "auto"
+        },
+        {
+          "tableRight": 959,
+          "parentClass": "table-wrap",
+          "parentRight": 345,
+          "parentClient": 313,
+          "parentScroll": 928,
+          "parentOverflow": "auto"
+        },
+        {
+          "tableRight": 1085,
+          "parentClass": "table-wrap",
+          "parentRight": 345,
+          "parentClient": 313,
+          "parentScroll": 1054,
+          "parentOverflow": "auto"
+        }
+      ]
+    },
+    "narrowLegends": [
+      {
+        "name": "L0 · primary（显示抽样）",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 · retry18_outer（显示抽样）",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 · primary（显示抽样）",
+        "actual": "rgb(8, 122, 130)",
+        "expected": "rgb(8, 122, 130)",
+        "size": 14,
+        "contrast": 5.101446650396195,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 · retry18_outer（显示抽样）",
+        "actual": "rgb(8, 122, 130)",
+        "expected": "rgb(8, 122, 130)",
+        "size": 14,
+        "contrast": 5.101446650396195,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "机器人 beta=0",
+        "actual": "rgb(89, 103, 121)",
+        "expected": "rgb(89, 103, 121)",
+        "size": 14,
+        "contrast": 5.767703643288984,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "零位末端",
+        "actual": "rgb(183, 46, 70)",
+        "expected": "rgb(183, 46, 70)",
+        "size": 14,
+        "contrast": 6.012552047700627,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 train beta loss",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 on-grid P95",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 off-grid P95",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 train beta loss",
+        "actual": "rgb(8, 115, 78)",
+        "expected": "rgb(8, 115, 78)",
+        "size": 14,
+        "contrast": 5.87802268318056,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 on-grid P95",
+        "actual": "rgb(8, 115, 78)",
+        "expected": "rgb(8, 115, 78)",
+        "size": 14,
+        "contrast": 5.87802268318056,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 off-grid P95",
+        "actual": "rgb(8, 115, 78)",
+        "expected": "rgb(8, 115, 78)",
+        "size": 14,
+        "contrast": 5.87802268318056,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "Teacher",
+        "actual": "rgb(169, 79, 0)",
+        "expected": "rgb(169, 79, 0)",
+        "size": 14,
+        "contrast": 5.518479370800907,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "Target",
+        "actual": "rgb(23, 34, 53)",
+        "expected": "rgb(23, 34, 53)",
+        "size": 14,
+        "contrast": 15.94955748463937,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 raw Student",
+        "actual": "rgb(114, 81, 170)",
+        "expected": "rgb(114, 81, 170)",
+        "size": 14,
+        "contrast": 6.046803561409068,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L0 DLS2",
+        "actual": "rgb(139, 82, 155)",
+        "expected": "rgb(139, 82, 155)",
+        "size": 14,
+        "contrast": 5.558463611161121,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "机器人 beta=0",
+        "actual": "rgb(89, 103, 121)",
+        "expected": "rgb(89, 103, 121)",
+        "size": 14,
+        "contrast": 5.767703643288984,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "零位末端",
+        "actual": "rgb(183, 46, 70)",
+        "expected": "rgb(183, 46, 70)",
+        "size": 14,
+        "contrast": 6.012552047700627,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "Teacher max |Δβ|",
+        "actual": "rgb(169, 79, 0)",
+        "expected": "rgb(169, 79, 0)",
+        "size": 14,
+        "contrast": 5.518479370800907,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "L1 raw max |Δβ|",
+        "actual": "rgb(18, 104, 179)",
+        "expected": "rgb(18, 104, 179)",
+        "size": 14,
+        "contrast": 5.742757085268963,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      },
+      {
+        "name": "7° reference",
+        "actual": "rgb(174, 66, 45)",
+        "expected": "rgb(174, 66, 45)",
+        "size": 14,
+        "contrast": 5.806057232163948,
+        "withinViewport": true,
+        "textFits": true,
+        "pressed": "true",
+        "pass": true
+      }
+    ],
+    "legendPassed": true,
+    "narrowControls": {
+      "scrollX": 0,
+      "pass": true
+    },
+    "largePaths": [
+      {
+        "id": "large_star",
+        "count": 407,
+        "closed": true,
+        "position": "1 / 3",
+        "coordinates": true,
+        "drawnPoints": 408,
+        "expectedDrawnPoints": 408,
+        "zero": true,
+        "metrics": true,
+        "teacherMissing": 0
+      },
+      {
+        "id": "large_helix",
+        "count": 523,
+        "closed": false,
+        "position": "2 / 3",
+        "coordinates": true,
+        "drawnPoints": 523,
+        "expectedDrawnPoints": 523,
+        "zero": true,
+        "metrics": true,
+        "teacherMissing": 0
+      },
+      {
+        "id": "large_tapered_helix",
+        "count": 574,
+        "closed": false,
+        "position": "3 / 3",
+        "coordinates": true,
+        "drawnPoints": 574,
+        "expectedDrawnPoints": 574,
+        "zero": true,
+        "metrics": true,
+        "teacherMissing": 9
+      }
+    ],
+    "largePathsPassed": true
+  },
+  "exceptions": [],
+  "consoleErrors": [],
+  "engine": "Google Chrome headless with WebGL SwiftShader",
+  "boundary": "HTML rendering and interaction verification only; it is not an artifact rehash or scientific Gate."
+}

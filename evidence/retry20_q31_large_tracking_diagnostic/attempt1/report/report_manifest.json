@@ -1,0 +1,171 @@
+{
+  "observed_at": "原attempt：2026-09-10；Q31补充评估：2026-09-12（Asia/Shanghai）",
+  "kind": "retry20-candidate-layout-teacher-student-diagnostic-report",
+  "frozen_attempt_modified": false,
+  "scientific_source_fixed_point": "5444eeba64aa1e41d4a40dd1cb9ff51733250440",
+  "binding_fixed_point": "855051b94c61dc2de045f9e66c45e2c540d3395e",
+  "code_snapshot_sha": "04866720b9bd7ebad758509fa22c605a3c59208d",
+  "presentation_updated_at": "2026-09-12 Asia/Shanghai",
+  "template": {
+    "kind": "presentation_template",
+    "path": "/mnt/ML_projects/quasi_exp/.agents/skills/quasi-exp-dataset-visualization-report/assets/report_template.html",
+    "bytes": 10141,
+    "sha256": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7"
+  },
+  "fixed_trajectory_suite": {
+    "kind": "fixed_target_geometry",
+    "path": "/mnt/ML_projects/quasi_exp/.agents/skills/quasi-exp-dataset-visualization-report/assets/q31_large_shapes_v1.json",
+    "bytes": 170716,
+    "sha256": "ef706f3d9b594ae6c53f70da63d682304a1317c67d1e8b6a7b4a3f875e10d606"
+  },
+  "supplement_evaluation": {
+    "experiment_id": "retry20_q31_large_tracking_diagnostic",
+    "scientific_source_fixed_point": "7fc143fda43b8bb6d46f19d55965646961303cf0",
+    "binding_fixed_point": "4c9568d4222564e73cfb098386792367f25e39dd",
+    "upstream_binding": "855051b94c61dc2de045f9e66c45e2c540d3395e",
+    "config_sha256": "b38c1d3ffb468f9a378daaf1acd249d13232c332df5b977d56e4bcbe41ccd695",
+    "suite_sha256": "ef706f3d9b594ae6c53f70da63d682304a1317c67d1e8b6a7b4a3f875e10d606",
+    "model_lock": {
+      "selection": "fixed_final_step",
+      "models": {
+        "L0": "d8817f95b24fca0bdf897f59141fe2dccc87569bcea4835f9a119971becd1372",
+        "L1": "56816fea02e624d7f2dec325c78d449a5669261c4bf9feadf47bfbacfa9093f7"
+      },
+      "datasets": {
+        "L0": "06cc60af4b0104f331c22be751568f2f59f17d3bb3d0de5d6ac59144ee1c7675",
+        "L1": "b5e385b99e8ee257155e8212f1df8aa71abdb4b6383237bf7589790aa7b94f92"
+      }
+    },
+    "locked_model_replay_max_abs_rad": {
+      "L0": 2.2351741790771484e-08,
+      "L1": 2.60770320892334e-08
+    },
+    "diagnostic_only": true,
+    "formal_authorized": false
+  },
+  "supplement_code_snapshot_sha": "cd86bdaa9ba9d233dee336240247a2497ea3bb5a",
+  "plotly": {
+    "kind": "rendering_dependency",
+    "path": "/mnt/ML_projects/conda_envs/rdagent4qlib/lib/python3.10/site-packages/plotly/package_data/plotly.min.js",
+    "bytes": 4838938,
+    "sha256": "e2b0f77ee8156ff9d525852fe4acb7bfe7d85e8a2e1da0523f6d16209b848968"
+  },
+  "browser_validation": "passed",
+  "artifact_verification": {
+    "completion_manifest_count": 65,
+    "completion_manifest_bad": [],
+    "input_manifest_count": 7,
+    "input_manifest_bad": []
+  },
+  "scientific_gate": "not_passed; diagnostic-only presentation does not alter the failed original geometry Gate",
+  "files": [
+    {
+      "kind": "report_derivative",
+      "path": "supplement_scalar_verification.json",
+      "bytes": 727,
+      "sha256": "315e8da558f01e91d3f654377460da2dacac3ce087f03ea691ee25cd11d29b6a"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "report_template.html",
+      "bytes": 10141,
+      "sha256": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "build_report.py",
+      "bytes": 39942,
+      "sha256": "7319168d9fd6b97730e156be019756763b4a6d8dfd8ad284e5779462167a42d1"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "validate_browser.js",
+      "bytes": 16919,
+      "sha256": "e47c60a0b2a00af5e2a8df2913ad718fa2df5b786f5b45b34697d929099eafb8"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "evidence_map.json",
+      "bytes": 10500,
+      "sha256": "f7dc78f3808c313858ce66a082d5ca30429df7b9517268416882ec64b4e8fbc0"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "retry20_candidate_diagnostic_advisor_dataset_report.html",
+      "bytes": 8500399,
+      "sha256": "e68fc2e5e25a0580b9895b26cd83c112c4aeeae7380cab6fee30356dd8e7c665"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "template/assets/report_template.html",
+      "bytes": 10141,
+      "sha256": "024dbfc036ad7e50c5b94c9a7c8ddc8a9a6e7d6102e136fe0eba999d22e628e7"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "template/assets/q31_large_shapes_v1.json",
+      "bytes": 170716,
+      "sha256": "ef706f3d9b594ae6c53f70da63d682304a1317c67d1e8b6a7b4a3f875e10d606"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "template/references/template-guide.md",
+      "bytes": 11468,
+      "sha256": "2c49a289e32334d03944aa21b062b9f690be3b38f4244323f228da310c9b7e72"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "browser_validation.json",
+      "bytes": 27191,
+      "sha256": "f68fd2bd9dd124250937c9d37428941698f4befd52bbf05184c7d716cff48abb"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "coverage_validation.png",
+      "bytes": 259512,
+      "sha256": "2686e0c3f059c153361bd94316ea138002c75f1dd8df4de58dc60707a7f2f104"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "tracking_global_validation.png",
+      "bytes": 153820,
+      "sha256": "3a15ec7a289e28f508ad135b8d6cbf1debbd87dd7458dd9116036ce21949a36a"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "tracking_local_validation.png",
+      "bytes": 143759,
+      "sha256": "d8534078bf28c0963494a70415521cd668627380b0f6bfcd7cd3cd783f82dc2c"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "narrow_validation.png",
+      "bytes": 112441,
+      "sha256": "8d6221357e6a97d84f653b1785ff3a04b2255b26c4401dae696c66b2f5705cf8"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "legend_navigation_validation.png",
+      "bytes": 141857,
+      "sha256": "fa53a2d7bdf7a7863a81e2abe2a8a9db050b500808a2debe7e700f4d72d4be6a"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "q31_large_0_validation.png",
+      "bytes": 168558,
+      "sha256": "1b0d1bc5a89a3a8ca9cb0b93c08cc2cfd18c5d1d250f6e00bc7a00cfce29fb7d"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "q31_large_1_validation.png",
+      "bytes": 184238,
+      "sha256": "16be9cb3d104168a7f2ecd0fa866f78629a34a0e60c8bb0137957e2aad3c1747"
+    },
+    {
+      "kind": "report_derivative",
+      "path": "q31_large_2_validation.png",
+      "bytes": 187438,
+      "sha256": "946aaeeb204013c33f8b320c8087143e0abeeae663d534c50da2f87c02c25537"
+    }
+  ]
+}

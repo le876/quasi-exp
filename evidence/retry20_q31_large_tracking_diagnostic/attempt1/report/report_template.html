@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>@@TITLE@@</title><style>
+:root{--ink:#172235;--muted:#566275;--paper:#f5f7fa;--card:#fff;--line:#d6dde7;--accent:#1167b1;--warn:#a44718;--teacher:#e57f22;--raw:#1677d2;--dls:#14835f;--l0:#8768bd}
+[data-theme=dark]{--ink:#edf3fb;--muted:#b0bccd;--paper:#121a26;--card:#1b2635;--line:#38495d;--accent:#77baff;--warn:#ffad82;--teacher:#ffb05c;--raw:#6bb7ff;--dls:#59d5a3;--l0:#c5a9ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.62 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:1440px;margin:auto;padding:24px}
+header{padding:28px 32px;background:linear-gradient(125deg,#123a62,#196da8);color:white;border-radius:18px}
+h1{margin:0 0 8px;font-size:clamp(25px,4vw,42px);line-height:1.2}
+h2{margin:0 0 12px;font-size:25px}
+h3{margin:14px 0 8px;font-size:18px}
+p{margin:8px 0}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin:20px 0;box-shadow:0 4px 14px #0015}
+.sub{color:#ddecff;max-width:1040px}
+.meta,.grid{display:grid;gap:14px}
+.meta{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:18px}
+.grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px;background:color-mix(in srgb,var(--card) 92%,var(--accent))}
+.k{font-size:12px;color:var(--muted)}
+.v{font-size:22px;font-weight:700}
+.notice{border-left:5px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,var(--card));padding:13px 16px;border-radius:7px}
+.good{border-left-color:var(--dls)}
+.toolbar{display:flex;flex-wrap:wrap;gap:9px;align-items:end;margin:10px 0 12px}
+label{display:grid;gap:3px;font-size:13px;font-weight:650}
+select,button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
+button{cursor:pointer;font-weight:700}
+button:focus,select:focus,input:focus{outline:3px solid color-mix(in srgb,var(--accent) 45%,transparent)}
+.checks{display:flex;gap:9px;flex-wrap:wrap;padding:7px 0}
+.checks label{display:flex;gap:5px;align-items:center;font-size:14px;font-weight:650}
+.plot{width:100%;height:620px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.plot.small{height:450px}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:9px}
+table{border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap}
+th{background:color-mix(in srgb,var(--card) 80%,var(--accent));position:sticky;top:0}
+td,th{padding:7px 9px;text-align:left;border-bottom:1px solid var(--line)}
+caption{caption-side:bottom;text-align:left;padding:8px;color:var(--muted)}
+code{font-size:12px;word-break:break-all}
+details{border-top:1px solid var(--line);padding-top:10px;margin-top:12px}
+summary{cursor:pointer;font-weight:700}
+.legend{color:var(--ink);font-size:14px}
+.path-table{max-height:430px}
+@media(max-width:760px){main{padding:12px}
+header,section{padding:17px}
+.meta,.grid{grid-template-columns:1fr}
+.plot{height:480px}
+.plot.small{height:380px}
+.toolbar{align-items:stretch}
+select,button{max-width:100%}
+}
+@media print{body{background:white}
+main{max-width:none;padding:0}
+header{border-radius:0;background:white;color:#111;border:1px solid #aaa}
+section{break-inside:avoid;box-shadow:none}
+.toolbar,.checks{display:none}
+.plot{height:430px}
+}
+</style><style>
+html,body,main,section,header,.grid,.card,.plot{min-width:0;max-width:100%}
+html,body{max-width:100%;overflow-x:hidden}
+.table-wrap{width:100%;max-width:100%;min-width:0;overflow-x:auto;contain:layout paint}
+.path-table{width:100%;max-width:100%;min-width:0}
+</style>
+<style>
+.series-legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0 18px}
+
+.series-legend button{display:inline-flex;align-items:center;gap:8px;max-width:100%;text-align:left;white-space:normal;overflow-wrap:anywhere;font-size:14px;font-weight:650;line-height:1.5;padding:6px 9px}
+
+.series-legend button[aria-pressed="false"]{text-decoration:line-through;border-style:dashed}
+
+.series-swatch{flex:none;width:28px;height:16px;overflow:visible}
+
+[data-series]{font-size:14px;font-weight:650}
+
+.path-navigation{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.path-navigation output{font-variant-numeric:tabular-nums;min-width:4em}
+button:disabled{opacity:.45;cursor:default}
+.toolbar>label{min-width:0;max-width:100%}
+.toolbar select{min-width:0;max-width:100%;text-overflow:ellipsis}
+@media(max-width:760px){.toolbar>label{width:100%}}
+</style>
+</head><body><main>@@BODY@@</main>
+<script>@@PLOTLY@@</script>
+<script>const D=@@DATA@@;</script>
+<script>
+// The same resolved palette feeds traces, legend labels and layer controls.
+const ReportPlot = (() => {
+  const palettes = {
+    light: {teacher:'#a94f00',l1raw:'#1268b3',l1dls:'#08734e',l0raw:'#7251aa',l0dls:'#8b529b',l0:'#7251aa',l1:'#087a82',target:'#172235',robot:'#596779',tip:'#b72e46',reference:'#ae422d'},
+    dark: {teacher:'#ffb05c',l1raw:'#6bb7ff',l1dls:'#59d5a3',l0raw:'#c5a9ff',l0dls:'#e4a5ef',l0:'#c5a9ff',l1:'#65d8de',target:'#edf3fb',robot:'#b0bccd',tip:'#ff8799',reference:'#ff9c86'}
+  };
+  const palette = () => palettes[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'];
+  function syncLabels() {
+    document.querySelectorAll('[data-series]').forEach(el => {
+      const c = palette()[el.dataset.series];
+      if (!c) throw new Error('Unknown report series: ' + el.dataset.series);
+      el.style.color = c;
+      el.style.accentColor = c;
+    });
+  }
+  function legend(plot) {
+    const container = document.getElementById(plot.id + '-legend');
+    const focused = container.contains(document.activeElement) ? document.activeElement.dataset.index : null;
+    container.replaceChildren();
+    (plot.data || []).forEach((trace, index) => {
+      if (trace.showlegend === false) return;
+      const c = trace.line?.color || trace.marker?.color;
+      if (typeof c !== 'string') throw new Error('Categorical legend requires a scalar series color: ' + trace.name);
+      const button = document.createElement('button');
+      button.type = 'button'; button.dataset.index = index;
+      button.style.color = c;
+      button.setAttribute('aria-pressed', String(trace.visible !== 'legendonly' && trace.visible !== false));
+      button.setAttribute('aria-controls', plot.id);
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 28 16'); svg.classList.add('series-swatch'); svg.setAttribute('aria-hidden', 'true');
+      const lines = trace.mode?.includes('lines');
+      const symbol = trace.marker?.symbol || 'circle';
+      const mark = document.createElementNS(svg.namespaceURI, lines ? 'line' : symbol.includes('diamond') ? 'polygon' : symbol.includes('square') ? 'rect' : 'circle');
+      const attrs = lines ? {x1:0,y1:8,x2:28,y2:8,'stroke-width':3,'stroke-dasharray':trace.line?.dash === 'dash' ? '7 4' : trace.line?.dash === 'dot' ? '2 3' : ''} : symbol.includes('diamond') ? {points:'14,2 20,8 14,14 8,8'} : symbol.includes('square') ? {x:8,y:2,width:12,height:12} : {cx:14,cy:8,r:5};
+      Object.entries(attrs).forEach(([key,value]) => mark.setAttribute(key,value));
+      mark.setAttribute('stroke','currentColor'); mark.setAttribute('fill',lines || symbol.includes('open') ? 'none' : 'currentColor');
+      svg.append(mark); button.append(svg, document.createTextNode(trace.name));
+      button.onclick = () => Plotly.restyle(plot, {visible:trace.visible === 'legendonly' || trace.visible === false ? true : 'legendonly'}, [index]);
+      container.append(button);
+    });
+    if (focused !== null) container.querySelector('[data-index="' + focused + '"]')?.focus({preventScroll:true});
+  }
+  async function react(id, traces, layout, config) {
+    const plot = document.getElementById(id);
+    if (!document.getElementById(id + '-legend')) {
+      const container = document.createElement('div'); container.id = id + '-legend'; container.className = 'series-legend';
+      container.setAttribute('role','group'); container.setAttribute('aria-label',plot.getAttribute('aria-label') + '：图例（点击显示或隐藏）');
+      plot.after(container);
+    }
+    await Plotly.react(plot, traces, {...layout, showlegend:false}, config);
+    if (plot._reportLegend) plot.removeListener('plotly_afterplot', plot._reportLegend);
+    plot._reportLegend = () => legend(plot);
+    plot.on('plotly_afterplot', plot._reportLegend);
+    legend(plot); syncLabels();
+  }
+  function pathNavigation(id) {
+    const select = document.getElementById(id);
+    const nav = document.createElement('div'); nav.className = 'path-navigation';
+    nav.setAttribute('role','group'); nav.setAttribute('aria-label','按顺序切换路径');
+    const previous = document.createElement('button'), next = document.createElement('button'), position = document.createElement('output');
+    previous.type = next.type = 'button'; previous.id = id + '-previous'; next.id = id + '-next';
+    previous.textContent = '↑ 上一条'; next.textContent = '↓ 下一条'; position.id = id + '-position';
+    position.setAttribute('aria-live','polite');
+    previous.setAttribute('aria-controls',id); next.setAttribute('aria-controls',id);
+    const sync = () => {
+      previous.disabled = select.selectedIndex <= 0;
+      next.disabled = select.selectedIndex < 0 || select.selectedIndex >= select.options.length - 1;
+      position.textContent = (select.selectedIndex + 1) + ' / ' + select.options.length;
+    };
+    function move(delta) {
+      const index = select.selectedIndex + delta;
+      if (index < 0 || index >= select.options.length) return;
+      select.selectedIndex = index;
+      select.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    previous.onclick = () => move(-1); next.onclick = () => move(1);
+    select.addEventListener('change',sync);
+    nav.append(previous,position,next); select.closest('label').after(nav); sync();
+  }
+  return {palette, syncLabels, react, pathNavigation};
+})();
+
+@@SCRIPT@@
+</script></body></html>

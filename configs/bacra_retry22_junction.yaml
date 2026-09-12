@@ -1,0 +1,32 @@
+schema_version: 1
+experiment_id: bacra_retry22_junction_factorial_diagnostic
+sources:
+  governing_protocol: docs/protocols/41-BACRA-retry22-交界采样与标签牵制对照协议.md
+  implementation: src/quasi_exp/teacher/retry22_junction.py
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+project_root: /mnt/ML_projects/quasi_exp
+upstream_root: /mnt/ML_projects/quasi_exp/runs/bacra_retry21_q33_attempt2
+dataset_root: /mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1
+input_hashes:
+  L0: 06cc60af4b0104f331c22be751568f2f59f17d3bb3d0de5d6ac59144ee1c7675
+  L1: b5e385b99e8ee257155e8212f1df8aa71abdb4b6383237bf7589790aa7b94f92
+seeds: [20260925, 20260926]
+warmup_steps: 500
+final_step: 10000
+optimizer_updates: 77000
+deadline_seconds: 7200
+junction:
+  center_x_mm: 1015.498
+  halfwidth_mm: 60.0
+  batch_count: 128
+arms:
+  control: {sampling: regions, beta_coefficient: 0.01}
+  junction: {sampling: junction, beta_coefficient: 0.01}
+  task_only: {sampling: regions, beta_coefficient: 0.0}
+  junction_task_only: {sampling: junction, beta_coefficient: 0.0}
+claims:
+  diagnostic_only: true
+  formal_authorized: false
+  global_replacement_authorized: false
+  new_supervision_authorized: false
+upstream_completion_sha256: bb0edff9168e4abeeea83955db24b52642e4fee4865b6c9df174e5f95e5ed078

@@ -1,0 +1,17 @@
+schema_version: 1
+experiment_id: retry20_q31_large_tracking_diagnostic
+sources:
+  governing_protocol: docs/protocols/39-retry20-Q31大尺度轨迹锁定模型补充评估.md
+  implementation: scripts/analysis/run_retry20_q31_large_tracking.py
+  robot_config: configs/robot_rods_only_standard_100k.yaml
+upstream_root: /mnt/ML_projects/quasi_exp/runs/bacra_retry20_candidate_diagnostic_attempt1
+upstream_binding: 855051b94c61dc2de045f9e66c45e2c540d3395e
+suite: .agents/skills/quasi-exp-dataset-visualization-report/assets/q31_large_shapes_v1.json
+suite_sha256: ef706f3d9b594ae6c53f70da63d682304a1317c67d1e8b6a7b4a3f875e10d606
+workers: 12
+teacher_batch_size: 128
+teacher_seconds: 3600
+deadline_seconds: 7200
+claims:
+  diagnostic_only: true
+  formal_authorized: false

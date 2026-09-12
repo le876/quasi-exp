@@ -31,7 +31,7 @@ from quasi_exp.teacher.experiment import sha256_file
 from quasi_exp.teacher.exploration_qualification import percentile, weighted_beta_rms_deg
 from quasi_exp.teacher.optimized_forward import optimized_forward
 from quasi_exp.teacher.region_growth import JACOBIAN_COLUMNS
-from quasi_exp.teacher.retry12_symmetry import BETA_COLUMNS, THETA_COLUMNS, XYZ_COLUMNS, transform_beta
+from quasi_exp.teacher.retry12_symmetry import BETA_COLUMNS, THETA_COLUMNS, XYZ_COLUMNS
 from quasi_exp.teacher.retry15_canonical_graph import legal_candidate_clusters
 from quasi_exp.teacher.retry16_annular_tube import expand_annular_labels
 from quasi_exp.teacher.retry17_continuity_fill import (
@@ -52,6 +52,7 @@ from quasi_exp.teacher.retry17_trajectories import (
     generate_maximal_shape_registry,
 )
 from quasi_exp.teacher.student_tracking_tf import StudentGeometry
+from quasi_exp.teacher import trajectory_evaluation
 from quasi_exp.teacher.workspace_atlas import RepresentationMode
 from quasi_exp.teacher.workspace_student import (
     WorkspaceStudentTrainingConfig,
@@ -516,29 +517,6 @@ def _student_geometry(environment: Any) -> StudentGeometry:
     return StudentGeometry(lengths_m=np.asarray(environment.lengths_m, dtype=np.float32), p_end_local_m=np.asarray(environment.p_end_local_m, dtype=np.float32), theta_sign=float(environment.theta_sign), beta_bounds_rad=np.asarray(environment.bounds, dtype=np.float32))
 
 
-def _two_step_dls(environment: Any, beta: np.ndarray, xyz: np.ndarray, *, zero_xyz: np.ndarray) -> np.ndarray:
-    corrected = np.asarray(beta, dtype=float).copy(); points = np.asarray(xyz, dtype=float); bounds = np.asarray(environment.bounds, dtype=float); weights = np.asarray([4, 4, 2, 2, 1, 1], dtype=float)
-    for _ in range(2):
-        for index, point in enumerate(points):
-            if np.linalg.norm(point - zero_xyz) <= 1e-12: corrected[index] = 0.0; continue
-            freeze = {0, 2, 4} if abs(point[1]) <= 1e-12 else {1, 3, 5} if abs(point[2]) <= 1e-12 else set(); free = np.asarray([axis for axis in range(6) if axis not in freeze], dtype=int)
-            current = np.asarray(environment.fk(corrected[index])).reshape(-1, 3)[0]; jacobian = np.asarray(environment.jacobian(corrected[index])).reshape(3, 6)[:, free]; winv = np.diag(1.0 / weights[free]); task = jacobian @ winv @ jacobian.T + 1e-6 * np.eye(3); pseudo = winv @ jacobian.T @ np.linalg.pinv(task, rcond=1e-12)
-            corrected[index, free] = np.clip(corrected[index, free] + pseudo @ (point - current), bounds[free, 0], bounds[free, 1])
-            if freeze: corrected[index, sorted(freeze)] = 0.0
-    return corrected
-
-
-def _symmetry_prediction(model: Any, xyz: np.ndarray, zero_xyz: np.ndarray) -> np.ndarray:
-    points = np.asarray(xyz, dtype=float).reshape(-1, 3); canonical = points.copy(); canonical[:, 1:] = np.abs(canonical[:, 1:]); beta = np.asarray(model(canonical.astype(np.float32), training=False), dtype=float)
-    for index, point in enumerate(points):
-        if point[1] < 0: beta[index] = transform_beta(beta[index], "mirror_y")
-        if point[2] < 0: beta[index] = transform_beta(beta[index], "mirror_z")
-        if abs(point[1]) <= 1e-12: beta[index, [0, 2, 4]] = 0
-        if abs(point[2]) <= 1e-12: beta[index, [1, 3, 5]] = 0
-        if np.linalg.norm(point - zero_xyz) <= 1e-12: beta[index] = 0
-    return beta
-
-
 def stage_student(config: Mapping[str, Any], output_root: Path, *, smoke: bool) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["student"]; if_hard = bool(_gate(output_root, "phase_a_freeze_audit")["data_hard_gates_pass"])
     if not if_hard:
@@ -553,7 +531,7 @@ def stage_student(config: Mapping[str, Any], output_root: Path, *, smoke: bool) 
     train = supervision[supervision["split_role"].eq("train")].copy(); validation = supervision[supervision["split_role"].eq("validation")].copy()
     if train.empty or validation.empty: raise RuntimeError("retry17 macroblock split produced empty train or validation")
     student = config["student"]; result = train_workspace_student(train, validation, mode=RepresentationMode.XYZ_GLOBAL, geometry=_student_geometry(environment), config=WorkspaceStudentTrainingConfig(hidden_units=tuple(map(int, student["hidden_units"])), learning_rate=float(student["learning_rate"]), max_steps=50 if smoke else int(student["maximum_steps"]), validation_interval=10 if smoke else int(student["validation_interval"]), patience_intervals=2 if smoke else int(student["patience_intervals"]), seed=int(config["sampling"]["student_seed"]), beta_coordinate_weights=(4, 4, 2, 2, 1, 1), beta_loss_only=True))
-    save_workspace_student_models(result.models, stage / "models"); model = result.models.global_model; xyz = validation.loc[:, XYZ_COLUMNS].to_numpy(float); raw = np.asarray(model(xyz.astype(np.float32), training=False), dtype=float); zero = np.asarray(environment.fk(np.zeros(6))).reshape(3); corrected = _two_step_dls(environment, raw, xyz, zero_xyz=zero); raw_fk = np.linalg.norm(np.asarray(environment.fk(raw)).reshape(-1, 3) - xyz, axis=1) * 1000; corrected_fk = np.linalg.norm(np.asarray(environment.fk(corrected)).reshape(-1, 3) - xyz, axis=1) * 1000
+    save_workspace_student_models(result.models, stage / "models"); model = result.models.global_model; xyz = validation.loc[:, XYZ_COLUMNS].to_numpy(float); raw = np.asarray(model(xyz.astype(np.float32), training=False), dtype=float); zero = np.asarray(environment.fk(np.zeros(6))).reshape(3); corrected = trajectory_evaluation.two_step_dls(environment, raw, xyz, zero_xyz=zero); raw_fk = np.linalg.norm(np.asarray(environment.fk(raw)).reshape(-1, 3) - xyz, axis=1) * 1000; corrected_fk = np.linalg.norm(np.asarray(environment.fk(corrected)).reshape(-1, 3) - xyz, axis=1) * 1000
     predictions = validation[["target_id", *XYZ_COLUMNS, *BETA_COLUMNS]].copy()
     for axis, name in enumerate(BETA_COLUMNS): predictions[f"raw_{name}"] = raw[:, axis]; predictions[f"dls2_{name}"] = corrected[:, axis]
     predictions["raw_fk_residual_mm"] = raw_fk; predictions["dls2_fk_residual_mm"] = corrected_fk
@@ -588,28 +566,6 @@ def stage_heldout_shapes(config: Mapping[str, Any], output_root: Path, *, smoke:
     return _seal_gate(output_root, config, "heldout_shapes", {"status": "complete" if selected_count == 9 else "slot_failure", "dataset_student_lock_verified_before_and_after": lock_after, "required_slot_count": 9, "selected_slot_count": selected_count, "shape_selection_used_teacher_or_student_error": False, "largest_found_not_global_optimum": True, "sharp_rectangle_diagnostic_registered": bool(len(waypoints) and waypoints["trajectory_id"].eq("retry17_sharp_rectangle_diagnostic").any())})
 
 
-def _cycle_teacher(candidates: pd.DataFrame, *, pairwise_lambda: float, weights: Sequence[float], tau_deg: float) -> pd.DataFrame:
-    legal = legal_candidate_clusters(candidates, weights=weights); order = list(dict.fromkeys(legal.sort_values("waypoint_index", kind="stable")["target_id"].astype(str)))
-    grouped = {target: legal[legal["target_id"].astype(str).eq(target)].sort_values("candidate_id", kind="stable").reset_index(drop=True) for target in order}
-    if len(grouped) != len(order) or not order: return pd.DataFrame()
-    beta = {target: grouped[target].loc[:, BETA_COLUMNS].to_numpy(float) for target in order}; unary = {target: np.square(np.asarray(weighted_beta_rms_deg(beta[target], np.zeros_like(beta[target]), weights), dtype=float)) for target in order}
-    def cost(left: str, right: str) -> np.ndarray:
-        a, b = beta[left], beta[right]; matrix = np.empty((len(a), len(b)))
-        for i in range(len(a)):
-            gaps = np.asarray(weighted_beta_rms_deg(np.broadcast_to(a[i], b.shape), b, weights), dtype=float); matrix[i] = np.minimum(np.square(gaps), tau_deg * tau_deg)
-        return matrix
-    transitions = [cost(order[i], order[i + 1]) for i in range(len(order) - 1)]; closing = cost(order[-1], order[0])
-    solutions = []
-    for first_state in range(len(grouped[order[0]])):
-        values = np.full(len(grouped[order[0]]), math.inf); values[first_state] = unary[order[0]][first_state]; backs = []
-        for index, matrix in enumerate(transitions):
-            total = values[:, None] + pairwise_lambda * matrix; back = np.argmin(total, axis=0); values = unary[order[index + 1]] + total[back, np.arange(total.shape[1])]; backs.append(back)
-        values = values + pairwise_lambda * closing[:, first_state]; last = int(np.argmin(values)); selection = [last]
-        for back in reversed(backs): selection.append(int(back[selection[-1]]))
-        selection.reverse(); signature = tuple(grouped[target].iloc[state]["candidate_id"] for target, state in zip(order, selection, strict=True)); solutions.append((float(values[last]), signature, selection))
-    _value, _signature, selection = min(solutions, key=lambda item: (item[0], item[1])); result = pd.concat([grouped[target].iloc[[state]] for target, state in zip(order, selection, strict=True)], ignore_index=True, sort=False); result["teacher"] = "retry17_cycle_dp"; result["pairwise_lambda"] = pairwise_lambda; return result
-
-
 def _trajectory_metrics(beta: np.ndarray, xyz: np.ndarray, environment: Any, *, threshold_deg: float = 7.0) -> dict[str, float]:
     achieved = np.asarray(environment.fk(beta)).reshape(-1, 3); residual = np.linalg.norm(achieved - xyz, axis=1) * 1000.0; closed = np.vstack([beta, beta[:1]]); delta = np.abs(np.rad2deg(np.diff(closed, axis=0))); raw_step = np.max(delta, axis=1); weighted_step = np.asarray(weighted_beta_rms_deg(closed[1:], closed[:-1], (4, 4, 2, 2, 1, 1)), dtype=float)
     return {"success_rate": float(np.mean(residual <= 10.0)), "fk_p95_mm": percentile(residual, 95), "fk_maximum_mm": float(np.max(residual)), "raw_step_gt7_rate": float(np.mean(raw_step > threshold_deg)), "raw_step_maximum_deg": float(np.max(raw_step)), "weighted_step_p95_deg": percentile(weighted_step, 95), "closing_unique_edge_raw_deg": float(raw_step[-1]), "closing_unique_edge_weighted_deg": float(weighted_step[-1]), "repeated_endpoint_return_deg": 0.0}
@@ -621,7 +577,24 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
     registry = pd.read_parquet(output_root / STAGE_DIRS["heldout_shapes"] / "heldout_shape_registry.parquet"); waypoints = pd.read_parquet(output_root / STAGE_DIRS["heldout_shapes"] / "heldout_shape_waypoints.parquet"); gating = waypoints[~waypoints["shape_class"].eq("sharp_rectangle_diagnostic")].copy()
     if gating.empty:
         _write_parquet(pd.DataFrame(), stage / "trajectory_report.parquet"); _write_parquet(pd.DataFrame(), stage / "trajectory_waypoint_evaluation.parquet"); return _seal_gate(output_root, config, "trajectory_evaluation", {"status": "not_available", "trajectory_green": False})
-    gating["target_id"] = [f"{trajectory}:{int(index):05d}" for trajectory, index in zip(gating["trajectory_id"], gating["waypoint_index"], strict=True)]; candidates = _solve_candidates(config, gating, stage, seed_budget=int(config["candidate_solver"]["ordinary_seed_budget"]), smoke=smoke); candidates = candidates.merge(gating[["target_id", "trajectory_id", "waypoint_index"]], on="target_id", how="left", validate="many_to_one")
+    gating["target_id"] = [
+        f"{trajectory}:{int(index):05d}"
+        for trajectory, index in zip(gating["trajectory_id"], gating["waypoint_index"], strict=True)
+    ]
+    candidates = _solve_candidates(
+        config,
+        gating,
+        stage,
+        seed_budget=int(config["candidate_solver"]["ordinary_seed_budget"]),
+        smoke=smoke,
+    )
+    # The solver owns candidate fields; the frozen waypoint registry owns trajectory metadata.
+    candidates = candidates.merge(
+        gating[["target_id", "trajectory_id", "waypoint_index"]],
+        on="target_id",
+        how="left",
+        validate="many_to_one",
+    )
     environment = _environment(config); zero = np.asarray(environment.fk(np.zeros(6))).reshape(3); model = None
     if _gate(output_root, "student").get("student_training_complete", False):
         import tensorflow as tf
@@ -629,11 +602,11 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
     report_rows, waypoint_rows = [], []
     selected_lambda = float(pd.read_parquet(output_root / STAGE_DIRS["phase_a_graph_teacher"] / "phase_a_selected_teacher_labels.parquet")["pairwise_lambda"].iloc[0])
     for trajectory_id, points in gating.groupby("trajectory_id", sort=True):
-        ordered = points.sort_values("waypoint_index", kind="stable"); local = candidates[candidates["trajectory_id"].astype(str).eq(str(trajectory_id))]; teacher = _cycle_teacher(local, pairwise_lambda=selected_lambda, weights=config["candidate_solver"]["beta_weights"], tau_deg=float(config["graph_teacher"]["robust_pairwise_cap_deg"])); complete = len(teacher) == len(ordered)
+        ordered = points.sort_values("waypoint_index", kind="stable"); local = candidates[candidates["trajectory_id"].astype(str).eq(str(trajectory_id))]; teacher = trajectory_evaluation.cycle_teacher(local, pairwise_lambda=selected_lambda, weights=config["candidate_solver"]["beta_weights"], tau_deg=float(config["graph_teacher"]["robust_pairwise_cap_deg"])); complete = len(teacher) == len(ordered)
         xyz = ordered.loc[:, XYZ_COLUMNS].to_numpy(float); teacher_beta = teacher.sort_values("waypoint_index").loc[:, BETA_COLUMNS].to_numpy(float) if complete else np.full((len(xyz), 6), np.nan)
         teacher_metric = _trajectory_metrics(teacher_beta, xyz, environment) if complete else {"success_rate": 0.0, "fk_p95_mm": math.inf, "raw_step_gt7_rate": 1.0, "repeated_endpoint_return_deg": math.inf}
         if model is not None:
-            raw = _symmetry_prediction(model, xyz, zero); corrected = _two_step_dls(environment, raw, xyz, zero_xyz=zero); raw_metric = _trajectory_metrics(raw, xyz, environment); dls_metric = _trajectory_metrics(corrected, xyz, environment)
+            raw = trajectory_evaluation.symmetry_prediction(model, xyz, zero); corrected = trajectory_evaluation.two_step_dls(environment, raw, xyz, zero_xyz=zero); raw_metric = _trajectory_metrics(raw, xyz, environment); dls_metric = _trajectory_metrics(corrected, xyz, environment)
         else:
             raw = corrected = np.full((len(xyz), 6), np.nan); raw_metric = dls_metric = {"success_rate": 0.0, "fk_p95_mm": math.inf, "raw_step_gt7_rate": 1.0, "repeated_endpoint_return_deg": math.inf}
         registry_row = registry[registry["trajectory_id"].astype(str).eq(str(trajectory_id))].iloc[0]; green = bool(complete and dls_metric["success_rate"] >= float(config["trajectories"]["dls2_success_minimum"]) and dls_metric["fk_p95_mm"] <= float(config["trajectories"]["dls2_fk_p95_maximum_mm"]) and dls_metric["raw_step_gt7_rate"] <= float(config["trajectories"]["corrected_raw_step_gt7_rate_maximum"]) and dls_metric["repeated_endpoint_return_deg"] <= float(config["trajectories"]["loop_return_maximum_deg"]) and float(registry_row["support_maximum_mm"]) <= float(config["trajectories"]["support_maximum_mm"]) and float(registry_row["axial_span_mm"]) >= (20.0 if smoke else float(config["trajectories"]["minimum_axial_span_mm"])))

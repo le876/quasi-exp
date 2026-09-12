@@ -30,8 +30,9 @@ import pandas as pd
 from scipy.spatial import cKDTree
 import yaml
 
+# retry17 still owns the shared environment and Candidate Bank; trajectory calculations live in src.
 import run_bacra_v14_3r_retry17_continuity as retry17
-import run_bacra_v14_3r_retry18_zero_tip_parity as retry18
+from quasi_exp.teacher import trajectory_evaluation
 from quasi_exp.teacher.exploration_qualification import weighted_beta_rms_deg
 from quasi_exp.teacher.experiment import sha256_file
 from quasi_exp.teacher.region_growth import JACOBIAN_COLUMNS
@@ -730,8 +731,8 @@ def _model_metrics(model: Any, waypoints: pd.DataFrame, environment: Any, *, dir
     for _trajectory, part in waypoints[waypoints["shape_class"].eq("rounded_rectangle")].groupby("trajectory_id", sort=True):
         ordered = part.sort_values("waypoint_index", kind="stable")
         xyz = ordered.loc[:, XYZ_COLUMNS].to_numpy(float)
-        beta = np.asarray(model(np.asarray(xyz, np.float32), training=False), float) if direct else retry17._symmetry_prediction(model, xyz, zero)
-        records.append(retry18._path_metrics(xyz, beta, environment, closed=True))
+        beta = np.asarray(model(np.asarray(xyz, np.float32), training=False), float) if direct else trajectory_evaluation.symmetry_prediction(model, xyz, zero)
+        records.append(trajectory_evaluation.path_metrics(xyz, beta, environment, closed=True))
     if not records:
         return {"rectangle_fk_p95_mm": math.inf, "rectangle_fk_maximum_mm": math.inf, "rectangle_path_step_excess_maximum_mm": math.inf, "raw_max_spike_mm": math.inf}
     return {
@@ -831,7 +832,7 @@ def stage_causal_controls(config: Mapping[str, Any], output_root: Path, *, smoke
         xyz = valid.loc[:, XYZ_COLUMNS].to_numpy(float)
         prediction = np.asarray(model(np.asarray(xyz, np.float32), training=False), float)
         if not direct_prediction:
-            prediction = retry17._symmetry_prediction(model, xyz, zero)
+            prediction = trajectory_evaluation.symmetry_prediction(model, xyz, zero)
         residual = np.linalg.norm(np.asarray(environment.fk(prediction)).reshape(-1, 3) - xyz, axis=1) * 1000.0
         rows.append({"model_id": model_id, "seed": seed, **metrics, "validation_fk_p95_mm": float(np.percentile(residual, 95)), "validation_fk_maximum_mm": float(np.max(residual))})
     metrics = pd.DataFrame(rows)
@@ -1449,6 +1450,7 @@ def stage_trajectory_teacher(config: Mapping[str, Any], output_root: Path, *, sm
         config, waypoints, stage, seed_budget=int(config["candidate_solver"]["ordinary_seed_budget"]), smoke=smoke,
         maximum_workers=int(config["runtime"]["trajectory_candidate_workers"]), work_namespace="trajectory_candidate_bank",
     )
+    # The solver owns candidate fields; the frozen waypoint registry owns trajectory metadata.
     candidates = candidates.merge(
         waypoints[["target_id", "trajectory_id", "waypoint_index"]],
         on="target_id",
@@ -1458,7 +1460,7 @@ def stage_trajectory_teacher(config: Mapping[str, Any], output_root: Path, *, sm
     labels = []
     for trajectory_id, part in waypoints.groupby("trajectory_id", sort=True):
         local = candidates[candidates["target_id"].isin(part["target_id"])]
-        selected = retry17._cycle_teacher(local, pairwise_lambda=float(config["graph_teacher"]["selected_pairwise_lambda"]), weights=config["candidate_solver"]["beta_weights"], tau_deg=float(config["graph_teacher"]["huber_delta_deg"]))
+        selected = trajectory_evaluation.cycle_teacher(local, pairwise_lambda=float(config["graph_teacher"]["selected_pairwise_lambda"]), weights=config["candidate_solver"]["beta_weights"], tau_deg=float(config["graph_teacher"]["huber_delta_deg"]))
         selected["trajectory_id"] = trajectory_id
         labels.append(selected)
     teacher = pd.concat(labels, ignore_index=True, sort=False) if labels else pd.DataFrame()
@@ -1507,10 +1509,10 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
             ordered = part.sort_values("waypoint_index", kind="stable")
             xyz = ordered.loc[:, XYZ_COLUMNS].to_numpy(float)
             raw = np.asarray(model(np.asarray(xyz, np.float32), training=False), float)
-            dls2 = retry17._two_step_dls(environment, raw, xyz, zero_xyz=zero)
-            raw_metric = retry18._path_metrics(xyz, raw, environment, closed=not ordered["shape_class"].eq("zero_to_boundary").all())
-            dls_metric = retry18._path_metrics(xyz, dls2, environment, closed=not ordered["shape_class"].eq("zero_to_boundary").all())
-            dls_metric["success_rate"] = (
+            dls2 = trajectory_evaluation.two_step_dls(environment, raw, xyz, zero_xyz=zero)
+            raw_metric = trajectory_evaluation.path_metrics(xyz, raw, environment, closed=not ordered["shape_class"].eq("zero_to_boundary").all())
+            dls_metric = trajectory_evaluation.path_metrics(xyz, dls2, environment, closed=not ordered["shape_class"].eq("zero_to_boundary").all())
+            dls_success_rate = (
                 float(
                     np.mean(
                         np.linalg.norm(np.asarray(environment.fk(dls2)).reshape(-1, 3) - xyz, axis=1) * 1000.0
@@ -1527,7 +1529,7 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
                 and raw_metric["fk_maximum_mm"] <= float(config["student"]["old_rectangle_fk_maximum_mm"])
                 if old else raw_metric["path_step_excess_maximum_mm"] <= float(config["student"]["new_rectangle_raw_spike_maximum_mm"]) if shape == "new_rectangle" else raw_metric["fk_p95_mm"] <= 10.0
             )
-            dls_green = bool(dls_metric["success_rate"] >= float(config["trajectories"]["dls2_success_minimum"]) and dls_metric["fk_p95_mm"] <= float(config["trajectories"]["dls2_fk_p95_maximum_mm"]))
+            dls_green = bool(dls_success_rate >= float(config["trajectories"]["dls2_success_minimum"]) and dls_metric["fk_p95_mm"] <= float(config["trajectories"]["dls2_fk_p95_maximum_mm"]))
             row = {
                 "seed": seed, "trajectory_id": trajectory_id, "shape_class": shape,
                 "trajectory_role": str(ordered["trajectory_role"].iloc[0]),
@@ -1537,6 +1539,7 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
             }
             for prefix, metric in (("raw", raw_metric), ("dls2", dls_metric)):
                 row.update({f"{prefix}_{key}": value for key, value in metric.items()})
+            row["dls2_success_rate"] = dls_success_rate
             reports.append(row)
             frame = ordered.copy(); frame["seed"] = seed
             for axis, name in enumerate(BETA_COLUMNS): frame[f"raw_{name}"] = raw[:, axis]; frame[f"dls2_{name}"] = dls2[:, axis]

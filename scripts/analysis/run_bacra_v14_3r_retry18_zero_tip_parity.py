@@ -25,8 +25,10 @@ import pandas as pd
 from scipy.spatial import cKDTree
 import yaml
 
+# retry17 still owns environment, Candidate Bank, Graph Teacher, and StudentGeometry composition.
 import run_bacra_v14_3r_retry17_continuity as retry17
 from quasi_exp.model.sampling import beta_to_theta
+from quasi_exp.teacher import trajectory_evaluation
 from quasi_exp.teacher.experiment import sha256_file
 from quasi_exp.teacher.exploration_qualification import percentile, weighted_beta_rms_deg
 from quasi_exp.teacher.region_growth import JACOBIAN_COLUMNS
@@ -201,21 +203,6 @@ def _input_integrity(config: Mapping[str, Any]) -> tuple[pd.DataFrame, bool]:
     frame = pd.DataFrame(rows); return frame, bool(len(frame) and frame["match"].all())
 
 
-def _path_metrics(xyz: np.ndarray, beta: np.ndarray, environment: Any, *, closed: bool = True) -> dict[str, float]:
-    target = np.asarray(xyz, float); beta = np.asarray(beta, float)
-    if not np.isfinite(beta).all():
-        return {"fk_p95_mm": math.inf, "fk_maximum_mm": math.inf, "path_step_excess_p99_mm": math.inf, "path_step_excess_maximum_mm": math.inf, "raw_step_gt7_rate": 1.0, "raw_step_maximum_deg": math.inf}
-    achieved = np.asarray(environment.fk(beta)).reshape(-1, 3)
-    residual = np.linalg.norm(achieved - target, axis=1) * 1000.0
-    if closed:
-        target = np.vstack([target, target[:1]]); achieved = np.vstack([achieved, achieved[:1]]); beta = np.vstack([beta, beta[:1]])
-    target_step = np.linalg.norm(np.diff(target, axis=0), axis=1) * 1000.0
-    achieved_step = np.linalg.norm(np.diff(achieved, axis=0), axis=1) * 1000.0
-    excess = np.maximum(0.0, achieved_step - target_step)
-    raw_step = np.max(np.abs(np.rad2deg(np.diff(beta, axis=0))), axis=1)
-    return {"fk_p95_mm": percentile(residual, 95), "fk_maximum_mm": float(np.max(residual)), "path_step_excess_p99_mm": percentile(excess, 99), "path_step_excess_maximum_mm": float(np.max(excess)), "raw_step_gt7_rate": float(np.mean(raw_step > 7.0)), "raw_step_maximum_deg": float(np.max(raw_step))}
-
-
 def stage_objective_baseline(config: Mapping[str, Any], output_root: Path, *, smoke: bool) -> dict[str, Any]:
     stage = output_root / STAGE_DIRS["objective_baseline"]
     integrity, passed = _input_integrity(config); _write_parquet(integrity, stage / "upstream_verification.parquet")
@@ -227,7 +214,7 @@ def stage_objective_baseline(config: Mapping[str, Any], output_root: Path, *, sm
     old_eval = pd.read_parquet(_upstream_path(config, "old_trajectory_evaluation")); rows = []
     for trajectory_id, frame in old_eval[old_eval["shape_class"].eq("rounded_rectangle")].groupby("trajectory_id", sort=True):
         frame = frame.sort_values("waypoint_index"); beta = frame[[f"raw_student_{name}" for name in BETA_COLUMNS]].to_numpy(float)
-        rows.append({"trajectory_id": trajectory_id, **_path_metrics(frame.loc[:, XYZ_COLUMNS].to_numpy(float), beta, environment)})
+        rows.append({"trajectory_id": trajectory_id, **trajectory_evaluation.path_metrics(frame.loc[:, XYZ_COLUMNS].to_numpy(float), beta, environment)})
     rectangle = pd.DataFrame(rows); _write_parquet(rectangle, stage / "rectangle_raw_spike_report.parquet")
     objective = {"schema_version": 1, "experiment_id": EXPERIMENT_ID, "diagnostic_pilot_allowed": True, "objectives": ["zero_tip_geometric_and_teacher_connection", "teacher_student_seam_causality", "raw_student_spike_removal"], "data_student_dls_axes_separate": True}
     denominator = {"schema_version": 1, "tip_target_cap": int(config["root_tip"]["target_cap"]), "seam_anchor_count_per_axis": int(config["seam_audit"]["anchor_count_per_seam"]), "old_rectangle_count": len(rectangle), "resource_feasibility_refrozen_after_profile": True}
@@ -445,7 +432,7 @@ def stage_seam_causal_audit(config: Mapping[str, Any], output_root: Path, *, smo
         if len(selected): selected=selected.merge(part[["target_id","sweep_id","seam","normal_offset_mm","waypoint_index",*XYZ_COLUMNS]],on="target_id",how="left"); teacher_parts.append(selected)
     teacher=pd.concat(teacher_parts,ignore_index=True,sort=False) if teacher_parts else pd.DataFrame(); _write_parquet(bank,stage/"teacher_seam_candidate_bank.parquet"); _write_parquet(teacher,stage/"teacher_seam_sweeps.parquet")
     import tensorflow as tf
-    old_model=tf.keras.models.load_model(_upstream_path(config,"frozen_student"),compile=False); environment=_environment(config); zero=np.asarray(environment.fk(np.zeros(6))).reshape(3); xyz=panel.loc[:,XYZ_COLUMNS].to_numpy(float); raw=retry17._symmetry_prediction(old_model,xyz,zero); achieved=np.asarray(environment.fk(raw)).reshape(-1,3); audit=panel.copy(); audit["student_fk_residual_mm"]=np.linalg.norm(achieved-xyz,axis=1)*1000
+    old_model=tf.keras.models.load_model(_upstream_path(config,"frozen_student"),compile=False); environment=_environment(config); zero=np.asarray(environment.fk(np.zeros(6))).reshape(3); xyz=panel.loc[:,XYZ_COLUMNS].to_numpy(float); raw=trajectory_evaluation.symmetry_prediction(old_model,xyz,zero); achieved=np.asarray(environment.fk(raw)).reshape(-1,3); audit=panel.copy(); audit["student_fk_residual_mm"]=np.linalg.norm(achieved-xyz,axis=1)*1000
     for i,name in enumerate(BETA_COLUMNS): audit[f"student_{name}"]=raw[:,i]
     teacher_lookup=teacher.set_index("target_id") if len(teacher) else pd.DataFrame(); teacher_beta=np.full_like(raw,np.nan)
     if len(teacher):
@@ -488,7 +475,7 @@ def _region_weights(frame:pd.DataFrame,config:Mapping[str,Any],enhanced:bool)->p
     result["region_weight"]=region; lo,hi=map(float,config["data_gate"]["density_weight_clip"]); final=np.clip(result["density_weight"].to_numpy(float)*region,lo,hi); final/=np.mean(final); result["final_weight"]=final; result["sample_weight"]=final; return result
 
 
-def _predict_model(kind:str,model:Any,xyz:np.ndarray,zero:np.ndarray)->np.ndarray: return np.asarray(model(np.asarray(xyz,np.float32),training=False),float) if kind=="parity" else retry17._symmetry_prediction(model,xyz,zero)
+def _predict_model(kind:str,model:Any,xyz:np.ndarray,zero:np.ndarray)->np.ndarray: return np.asarray(model(np.asarray(xyz,np.float32),training=False),float) if kind=="parity" else trajectory_evaluation.symmetry_prediction(model,xyz,zero)
 
 
 def _prepare_model_output(model_dir: Path, kind: str) -> None:
@@ -502,7 +489,7 @@ def _evaluate_model(model_id:str,kind:str,model:Any,validation:pd.DataFrame,old_
     record={"model_id":model_id,"model_kind":kind}; xyz=validation.loc[:,XYZ_COLUMNS].to_numpy(float); beta=_predict_model(kind,model,xyz,zero); residual=np.linalg.norm(np.asarray(environment.fk(beta)).reshape(-1,3)-xyz,axis=1)*1000; record.update({"validation_fk_p95_mm":percentile(residual,95),"validation_fk_maximum_mm":float(np.max(residual))})
     rect=[]
     for _,part in old_shapes[old_shapes["shape_class"].eq("rounded_rectangle")].groupby("trajectory_id",sort=True):
-        pxyz=part.sort_values("waypoint_index").loc[:,XYZ_COLUMNS].to_numpy(float); pred=_predict_model(kind,model,pxyz,zero); rect.append(_path_metrics(pxyz,pred,environment))
+        pxyz=part.sort_values("waypoint_index").loc[:,XYZ_COLUMNS].to_numpy(float); pred=_predict_model(kind,model,pxyz,zero); rect.append(trajectory_evaluation.path_metrics(pxyz,pred,environment))
     for key in ("fk_p95_mm","fk_maximum_mm","path_step_excess_p99_mm","path_step_excess_maximum_mm","raw_step_gt7_rate"): record[f"rectangle_{key}"]=max(item[key] for item in rect) if rect else math.inf
     sxyz=seam_panel.loc[:,XYZ_COLUMNS].to_numpy(float); sbeta=_predict_model(kind,model,sxyz,zero); sres=np.linalg.norm(np.asarray(environment.fk(sbeta)).reshape(-1,3)-sxyz,axis=1)*1000; record["seam_fk_p95_mm"]=percentile(sres,95); record["seam_fk_maximum_mm"]=float(np.max(sres)); return record
 
@@ -588,10 +575,10 @@ def stage_trajectory_evaluation(config: Mapping[str, Any], output_root: Path, *,
     if not _verify_lock(output_root): raise RuntimeError("retry18 lock mutated before evaluation")
     points=pd.read_parquet(output_root/STAGE_DIRS["heldout_trajectories"]/"heldout_waypoints.parquet"); bank=retry17._solve_candidates(config,points,stage,seed_budget=int(config["candidate_solver"]["ordinary_seed_budget"]),smoke=smoke,maximum_workers=int(config["runtime"]["trajectory_candidate_workers"]),work_namespace="trajectory_k16"); kind,model=_load_selected_model(output_root); environment=_environment(config); zero=np.asarray(environment.fk(np.zeros(6))).reshape(3); reports=[]; rows=[]
     for trajectory_id,part in points.groupby("trajectory_id",sort=True):
-        ordered=part.sort_values("waypoint_index"); ids=list(ordered["target_id"].astype(str)); teacher=_ordered_teacher(bank[bank["target_id"].isin(ids)],ids,config); xyz=ordered.loc[:,XYZ_COLUMNS].to_numpy(float); complete=len(teacher)==len(ordered); teacher_beta=teacher.loc[:,BETA_COLUMNS].to_numpy(float) if complete else np.full((len(xyz),6),np.nan); raw=_predict_model(kind,model,xyz,zero); dls=retry17._two_step_dls(environment,raw,xyz,zero_xyz=zero)
+        ordered=part.sort_values("waypoint_index"); ids=list(ordered["target_id"].astype(str)); teacher=_ordered_teacher(bank[bank["target_id"].isin(ids)],ids,config); xyz=ordered.loc[:,XYZ_COLUMNS].to_numpy(float); complete=len(teacher)==len(ordered); teacher_beta=teacher.loc[:,BETA_COLUMNS].to_numpy(float) if complete else np.full((len(xyz),6),np.nan); raw=_predict_model(kind,model,xyz,zero); dls=trajectory_evaluation.two_step_dls(environment,raw,xyz,zero_xyz=zero)
         record={"trajectory_id":trajectory_id,"shape_class":ordered["shape_class"].iloc[0],"waypoint_count":len(ordered),"teacher_complete":complete}
         for prefix,beta in (("teacher",teacher_beta),("raw_student",raw),("dls2",dls)):
-            metric=_path_metrics(xyz,beta,environment,closed=ordered["shape_class"].iloc[0] not in ("profile_ray",)); record.update({f"{prefix}_{k}":v for k,v in metric.items()})
+            metric=trajectory_evaluation.path_metrics(xyz,beta,environment,closed=ordered["shape_class"].iloc[0] not in ("profile_ray",)); record.update({f"{prefix}_{k}":v for k,v in metric.items()})
         raw_green=bool(record["raw_student_fk_p95_mm"]<=10 and record["raw_student_fk_maximum_mm"]<=15 and record["raw_student_path_step_excess_p99_mm"]<=5 and record["raw_student_path_step_excess_maximum_mm"]<=5 and record["raw_student_raw_step_gt7_rate"]<=.02); dls_green=bool(record["dls2_fk_p95_mm"]<=float(config["trajectories"]["dls2_fk_p95_maximum_mm"])); record["raw_student_green"]=raw_green; record["dls2_green"]=dls_green; reports.append(record)
         evaluated=ordered.copy()
         for i,name in enumerate(BETA_COLUMNS): evaluated[f"teacher_{name}"]=teacher_beta[:,i]; evaluated[f"raw_student_{name}"]=raw[:,i]; evaluated[f"dls2_{name}"]=dls[:,i]

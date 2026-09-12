@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_sha": "e63318d68016d8a60f35c832318c03a729d9fdd3",
+  "public_code_snapshot_sha": "696f3f70e16e897f036da921ab391166aa24d85c",
+  "previous_public_head": "3371de5383a362b219865599a13aed638934807a",
+  "filter_policy": "scientific_public_snapshot_v1",
+  "inventory_algorithm": "path-mode-type-content-sha256-v1",
+  "file_count": 642,
+  "inventory_sha256": "db9a9f55e9e4042d82dda6fb77931ea0e7ece1b96788d6afc463fa88ec3cc5f7",
+  "validation": {
+    "initial_scoped_tests_passed": 52,
+    "focused_tests_passed": 6,
+    "code_tree_matches_source": true,
+    "previous_public_evidence_unchanged": true
+  },
+  "claim_boundary": "Fixed-data paired factorial diagnostic only. Junction sampling reduces severe tails with precision tradeoffs. No arm passed the registered joint candidate criterion. No dataset expansion or global replacement."
+}
